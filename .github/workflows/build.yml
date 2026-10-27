@@ -302,14 +302,18 @@ jobs:
 
   sources:
     name: Sources
-    # The source of everything in the app, archived on the machine itself (git, curl and xz
-    # are all it needs) while the app is put together.
-    needs: [keys, radv]
-    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.radv.result != 'failure' }}
+    # The source of everything in the app, archived while the app is put together. In the
+    # build image as the pieces are: GitHub's cache keeps a path outside the checkout relative
+    # to the checkout, which is elsewhere on the machine itself.
+    needs: [keys, image, radv]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.image.result != 'failure' && needs.radv.result != 'failure' }}
     runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
     steps:
       - uses: actions/checkout@v5
-      - run: sudo mkdir -p /mnt/pc5 && sudo chown "$USER" /mnt/pc5
       - name: RADV
         uses: actions/cache/restore@v5
         with: { path: "${{ needs.keys.outputs.radv_paths }}", key: "${{ needs.keys.outputs.radv }}", fail-on-cache-miss: true }
