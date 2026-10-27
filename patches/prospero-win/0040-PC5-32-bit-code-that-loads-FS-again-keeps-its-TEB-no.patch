@@ -1,0 +1,354 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 12:00:00 +0000
+Subject: [PATCH] PC5: 32-bit code that loads FS again keeps its TEB; no 16-bit
+ kernel without an LDT (Wine patches 0928, 0929)
+
+A 32-bit game on the native WoW64 CPU that loaded FS again got the
+low half of the host thread pointer as its base instead of its TEB, and
+its next %fs: access faulted (Fallout 1 and 2 in GetStdHandle, at
+FF81C098). Such a fault now gets the TEB's base back and the
+instruction runs again.
+
+A game that looked up kernel32's UTRegister loaded Wine's 16-bit kernel,
+whose first LDT entry ended the game, since the console has no LDT
+(Brian Lara International Cricket 2007). NtSetLdtEntries now fails on
+the console, krnl386.exe16 doesn't load, and the lookup fails as on a
+system without 16-bit support.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   2 +
+ docs/WINE_PS5_BUILD.md                        |   2 +
+ ...-the-fs-base-a-32-bit-program-loaded.patch | 236 ++++++++++++++++++
+ ...tdll-ps5-no-ldt-and-no-16-bit-kernel.patch |  51 ++++
+ 4 files changed, 291 insertions(+)
+ create mode 100644 wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
+ create mode 100644 wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index b569eb6..61572ab 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -573,6 +573,8 @@ wine/patches/0924-kernelbase-crash-report-before-the-program-s-own-handler.patch
+ wine/patches/0925-musl-compute-in-sse2-on-i386-whatever-the-x87-precision.patch
+ wine/patches/0926-xinput-windows-gaming-input-up-to-four-ps5-title-controllers.patch
+ wine/patches/0927-dinput-the-ps5-title-s-controllers-as-directinput-joysticks.patch
++wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
++wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index dafaa1b..5cff186 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -131,6 +131,8 @@ before evaluating a candidate built from that cache.
+ | 0899 | `include`: list the PS5 sync headers (0810, 0820, 0885, 0887) in `include/Makefile.in`, which makedep needs to resolve them; configure failed without it |
+ | 0902 | `win32u`: the PS5 driver sends the arrows, Insert, Delete, Home, End, Page Up, Page Down, right Ctrl and Alt, the Windows and menu keys and keypad `/` with `KEYEVENTF_EXTENDEDKEY`; their scan codes are the keypad's without it, so DirectInput reported the keypad's 8 for the up arrow and a game's arrow-key bindings never fired |
+ | 0903 | `ntdll`: a signal frame keeps the FS base it was taken with when the thread resumes where it was; the host's is set only where the handler sends a context to Wine's 64-bit code (the exception dispatcher, a different 64-bit context). The native WoW64 CPU sets the guest FS just before it switches to 32-bit code, and a signal in that window used to send the thread into its 32-bit code with the host FS (GTA San Andreas' DXVK workers crashing at startup in `RtlEnterCriticalSection`) |
++| 0928 | `ntdll`: a page fault in 32-bit code on the native WoW64 CPU whose `%fs:` operand missed the 32-bit TEB gets the TEB's base back in the signal frame and runs again. sysarch(AMD64_SET_FSBASE) sets the base the CPU uses but not the GDT descriptor of the kernel's user FS selector, which the kernel writes from the thread's saved base when it switches the thread in, often while it is on its 64-bit side with the host's FS; a program that loads FS again got the low half of the host thread pointer (Fallout 1 and 2 in `GetStdHandle`, reading `%fs:0x18` at FF81C098). The first repair, and every hundredfold after, is logged; 64 repairs in a row in one state give the fault to the program |
++| 0929 | `ntdll`, `krnl386`: `NtSetLdtEntries` returns `STATUS_NOT_IMPLEMENTED`, as for a 64-bit process: the console refuses I386_SET_LDT (EINVAL), and `ldt_set_entry` ended the process on that. krnl386.exe16 doesn't load without LDT entries, so a lookup of a forwarded 16-bit export (`kernel32.UTRegister`, Brian Lara International Cricket 2007) fails instead of ending the game |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch b/wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
+new file mode 100644
+index 0000000..073c500
+--- /dev/null
++++ b/wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
+@@ -0,0 +1,236 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Tue, 27 Oct 2026 12:00:00 +0000
++Subject: [PATCH] ntdll: Repair the FS base of 32-bit code that loaded FS again
++ on PS5.
++
++32-bit code on the native WoW64 CPU runs with the kernel's user FS
++selector, its base set to the 32-bit TEB with sysarch(AMD64_SET_FSBASE).
++That sets the base the CPU uses but not the selector's GDT descriptor,
++which the kernel writes from the thread's saved base when it switches the
++thread in, often while the thread is on its 64-bit side with the host's
++FS. A program that loads FS again gets the descriptor's base, the low half
++of the host thread pointer, and its next %fs: access faults: Fallout 1
++and 2 in GetStdHandle, reading %fs:0x18 at FF81C098.
++
++The kernel sets the base saved in the signal frame on sigreturn (0903).
++A page fault in 32-bit code whose %fs: operand missed the TEB now gets the
++TEB's base and the kernel's selector in the frame and runs again; the
++first repair and every hundredfold after are logged. A repair that does
++not take faults again in the same state, and after 64 of those the fault
++goes to the program as before.
++---
++ dlls/ntdll/unix/signal_x86_64.c | 184 +++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 183 insertions(+), 1 deletion(-)
++
++diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
++--- a/dlls/ntdll/unix/signal_x86_64.c
+++++ b/dlls/ntdll/unix/signal_x86_64.c
++@@ -639,6 +639,10 @@
++     DWORD                 fs;            /* 0338 WOW TEB selector */
++     DWORD                 mxcsr;         /* 033c Unix-side mxcsr register */
++     char                  syscall_dispatch; /* 0340 */
+++#ifdef __PROSPERO__
+++    DWORD                 fs_repair_state; /* 0344 the guest state of the last FS base repair */
+++    DWORD                 fs_repair_count; /* 0348 repairs in a row in that same state */
+++#endif
++ };
++ 
++ C_ASSERT( sizeof(struct amd64_thread_data) <= sizeof(((struct teb_data *)0)->cpu_data) );
++@@ -2603,6 +2607,180 @@
++ {
++     segv_unresolved_hook = hook;
++ }
+++
+++/* 32-bit code on the native WoW64 CPU runs with the kernel's user FS
+++ * selector, its base set to the 32-bit TEB with sysarch(AMD64_SET_FSBASE).
+++ * That sets the base the CPU uses but not the selector's GDT descriptor,
+++ * which the kernel writes from the thread's saved base when it switches the
+++ * thread in, often while the thread is on its 64-bit side with the host's FS.
+++ * A program that loads FS again gets the descriptor's base instead of its
+++ * TEB, and its next %fs: access faults (Fallout 1 and 2: GetStdHandle
+++ * reading %fs:0x18 at FF81C098). The kernel sets the base saved in the
+++ * signal frame on sigreturn (patch 0903), so a page fault of a %fs: operand
+++ * in 32-bit code that missed the TEB gets the TEB's base and the selector
+++ * back and runs again. */
+++static BOOL pw_has_modrm( BYTE op, BOOL two_byte )
+++{
+++    if (two_byte)
+++        return (op >= 0x10 && op <= 0x1f) || (op >= 0x28 && op <= 0x2f) ||
+++               (op >= 0x40 && op <= 0x76) || (op >= 0x78 && op <= 0x7f) ||
+++               (op >= 0x90 && op <= 0x9f) || (op >= 0xa3 && op <= 0xa5) ||
+++               (op >= 0xab && op <= 0xc7) || op >= 0xd0;
+++    if (op < 0x40) return (op & 7) < 4;
+++    return op == 0x62 || op == 0x63 || op == 0x69 || op == 0x6b || (op >= 0x80 && op <= 0x8f) ||
+++           op == 0xc0 || op == 0xc1 || (op >= 0xc4 && op <= 0xc7) || (op >= 0xd0 && op <= 0xd3) ||
+++           (op >= 0xd8 && op <= 0xdf) || op == 0xf6 || op == 0xf7 || op == 0xfe || op == 0xff;
+++}
+++
+++static DWORD pw_reg32( const ucontext_t *sigcontext, unsigned int reg )
+++{
+++    switch (reg)
+++    {
+++    case 0: return RAX_sig(sigcontext);
+++    case 1: return RCX_sig(sigcontext);
+++    case 2: return RDX_sig(sigcontext);
+++    case 3: return RBX_sig(sigcontext);
+++    case 4: return RSP_sig(sigcontext);
+++    case 5: return RBP_sig(sigcontext);
+++    case 6: return RSI_sig(sigcontext);
+++    default: return RDI_sig(sigcontext);
+++    }
+++}
+++
+++/* The offset in FS of the memory operand of the 32-bit instruction in
+++ * code[len], when it has one through a %fs: prefix. */
+++static BOOL pw_fs_offset( const BYTE *code, unsigned int len, const ucontext_t *sigcontext, DWORD *offset )
+++{
+++    unsigned int i;
+++    BOOL fs = FALSE, two_byte = FALSE;
+++    BYTE op, modrm, mod, rm, sib;
+++    DWORD off = 0, d32;
+++
+++    for (i = 0;; i++)
+++    {
+++        if (i >= len) return FALSE;
+++        switch (code[i])
+++        {
+++        case 0x64: fs = TRUE; continue;
+++        case 0x66: case 0xf0: case 0xf2: case 0xf3: continue;
+++        case 0x26: case 0x2e: case 0x36: case 0x3e: case 0x65: case 0x67: return FALSE;
+++        }
+++        break;
+++    }
+++    if (!fs) return FALSE;
+++    op = code[i++];
+++    if (op >= 0xa0 && op <= 0xa3)  /* mov between the accumulator and moffs32 */
+++    {
+++        if (i + sizeof(d32) > len) return FALSE;
+++        memcpy( offset, code + i, sizeof(*offset) );
+++        return TRUE;
+++    }
+++    if (op == 0x0f)
+++    {
+++        if (i >= len) return FALSE;
+++        two_byte = TRUE;
+++        op = code[i++];
+++    }
+++    if (!pw_has_modrm( op, two_byte ) || i >= len) return FALSE;
+++    modrm = code[i++];
+++    mod = modrm >> 6;
+++    rm = modrm & 7;
+++    if (mod == 3) return FALSE;
+++    if (rm == 4)
+++    {
+++        if (i >= len) return FALSE;
+++        sib = code[i++];
+++        if (((sib >> 3) & 7) != 4) off += pw_reg32( sigcontext, (sib >> 3) & 7 ) << (sib >> 6);
+++        if ((sib & 7) == 5 && !mod)
+++        {
+++            if (i + sizeof(d32) > len) return FALSE;
+++            memcpy( &d32, code + i, sizeof(d32) );
+++            i += sizeof(d32);
+++            off += d32;
+++        }
+++        else off += pw_reg32( sigcontext, sib & 7 );
+++    }
+++    else if (rm == 5 && !mod)
+++    {
+++        if (i + sizeof(d32) > len) return FALSE;
+++        memcpy( &d32, code + i, sizeof(d32) );
+++        i += sizeof(d32);
+++        off += d32;
+++    }
+++    else off += pw_reg32( sigcontext, rm );
+++    if (mod == 1)
+++    {
+++        if (i >= len) return FALSE;
+++        off += (DWORD)(int)(signed char)code[i];
+++    }
+++    else if (mod == 2)
+++    {
+++        if (i + sizeof(d32) > len) return FALSE;
+++        memcpy( &d32, code + i, sizeof(d32) );
+++        off += d32;
+++    }
+++    *offset = off;
+++    return TRUE;
+++}
+++
+++static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext, siginfo_t *siginfo )
+++{
+++    static LONG repairs;
+++    struct amd64_thread_data *amd64_data = amd64_thread_data( data );
+++    DWORD teb32, offset, fault, state;
+++    BYTE code[16];
+++    unsigned int len;
+++    USHORT sel;
+++    LONG count;
+++
+++    if (!amd64_data || !cs32_sel || CS_sig(sigcontext) != cs32_sel) return FALSE;
+++    if (!data->teb || !data->teb->WowTebOffset) return FALSE;
+++    len = virtual_uninterrupted_read_memory( (const void *)RIP_sig(sigcontext), code, sizeof(code) );
+++    if (!pw_fs_offset( code, len, sigcontext, &offset )) return FALSE;
+++    teb32 = PtrToUlong( get_wow_teb( data->teb ) );
+++    fault = (DWORD)(ULONG_PTR)siginfo->si_addr;
+++    /* With the TEB's base the operand lies at teb32 + offset: a fault there
+++     * (give or take a stack adjustment) is the program's own. */
+++    if ((DWORD)(fault - (teb32 + offset)) < 16 || (DWORD)(teb32 + offset - fault) < 16) return FALSE;
+++    __asm__( "movw %%fs,%0" : "=r" (sel) );
+++    if (!sel) return FALSE;
+++
+++    /* A repair the kernel did not apply would fault again in the same state:
+++     * after 64 of those in a row the fault goes to the program as before. */
+++    state = (DWORD)RIP_sig(sigcontext);
+++    state = state * 31 + (DWORD)RAX_sig(sigcontext);
+++    state = state * 31 + (DWORD)RCX_sig(sigcontext);
+++    state = state * 31 + (DWORD)RDX_sig(sigcontext);
+++    state = state * 31 + (DWORD)RBX_sig(sigcontext);
+++    state = state * 31 + (DWORD)RSP_sig(sigcontext);
+++    state = state * 31 + (DWORD)RBP_sig(sigcontext);
+++    state = state * 31 + (DWORD)RSI_sig(sigcontext);
+++    state = state * 31 + (DWORD)RDI_sig(sigcontext);
+++    state = state * 31 + (DWORD)EFL_sig(sigcontext);
+++    state = state * 31 + fault;
+++    if (state != amd64_data->fs_repair_state)
+++    {
+++        amd64_data->fs_repair_state = state;
+++        amd64_data->fs_repair_count = 0;
+++    }
+++    if (++amd64_data->fs_repair_count > 64)
+++    {
+++        if (amd64_data->fs_repair_count == 65)
+++            MESSAGE( "wine-ps5: the 32-bit FS base was not repaired at %08x (fault at %08x)\n",
+++                     (DWORD)RIP_sig(sigcontext), fault );
+++        return FALSE;
+++    }
+++
+++    count = InterlockedIncrement( &repairs );
+++    if (count == 1 || count == 100 || count == 10000 || count == 1000000)
+++        MESSAGE( "wine-ps5: 32-bit FS base repaired (%d): %08x faulted at %08x for %%fs:%x, fs %04x base %llx, "
+++                 "teb %08x, host fs %p\n", count, (DWORD)RIP_sig(sigcontext), fault, offset,
+++                 (unsigned int)FS_sig(sigcontext), (unsigned long long)FSBASE_sig(sigcontext), teb32,
+++                 amd64_data->pthread_teb );
+++    FSBASE_sig(sigcontext) = teb32;
+++    FS_sig(sigcontext) = sel;
+++    return TRUE;
+++}
++ #endif
++ 
++ /**********************************************************************
++@@ -2656,7 +2834,11 @@
++         rec.ExceptionInformation[0] = (ERROR_sig(sigcontext) >> 1) & 0x09;
++         rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
++         if (!virtual_handle_fault( data, &rec, (void *)RSP_sig(sigcontext) ) ||
++-            check_invalid_gsbase( data, sigcontext ))
+++            check_invalid_gsbase( data, sigcontext )
+++#ifdef __PROSPERO__
+++            || pw_repair_guest_fs( data, sigcontext, siginfo )
+++#endif
+++            )
++         {
++             leave_handler( data, sigcontext );
++             return;
++-- 
++2.43.0
++
+diff --git a/wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch b/wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+new file mode 100644
+index 0000000..86ca24d
+--- /dev/null
++++ b/wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+@@ -0,0 +1,51 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Tue, 27 Oct 2026 12:10:00 +0000
++Subject: [PATCH] ntdll, krnl386: No LDT on PS5, so no 16-bit kernel.
++
++The console's kernel refuses I386_SET_LDT (EINVAL), and ldt_set_entry
++ended the process on that. A 32-bit game that looked up kernel32's
++UTRegister, forwarded to krnl386.exe16, loaded the 16-bit kernel, whose
++first selector ended the game before it showed anything (Brian Lara
++International Cricket 2007).
++
++NtSetLdtEntries returns STATUS_NOT_IMPLEMENTED on PS5, as for a 64-bit
++process, and krnl386.exe16 doesn't load when it can't set LDT entries, so
++a lookup of a forwarded 16-bit export fails as on a system without 16-bit
++support.
++---
++ dlls/krnl386.exe16/kernel.c | 3 +++
++ dlls/ntdll/unix/virtual.c   | 5 +++++
++ 2 files changed, 8 insertions(+)
++
++diff --git a/dlls/krnl386.exe16/kernel.c b/dlls/krnl386.exe16/kernel.c
++--- a/dlls/krnl386.exe16/kernel.c
+++++ b/dlls/krnl386.exe16/kernel.c
++@@ -72,6 +72,9 @@
++     switch(reason)
++     {
++     case DLL_PROCESS_ATTACH:
+++        /* 16-bit code needs selectors in the LDT: without one (the PS5),
+++         * the module doesn't load and a lookup of its exports fails. */
+++        if (NtSetLdtEntries( 0, 0, 0, 0, 0, 0 )) return FALSE;
++         init_selectors();
++         if (LoadLibrary16( "krnl386.exe" ) < 32) return FALSE;
++         /* fall through */
++diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
++--- a/dlls/ntdll/unix/virtual.c
+++++ b/dlls/ntdll/unix/virtual.c
++@@ -4835,6 +4835,11 @@
++     union { LDT_ENTRY entry; ULONG ul[2]; } entry;
++ 
++     if (is_win64 && !is_wow64()) return STATUS_NOT_IMPLEMENTED;
+++#ifdef __PROSPERO__
+++    /* The console has no LDT: the kernel refuses I386_SET_LDT (EINVAL), and
+++     * ldt_set_entry ended the process on that. */
+++    return STATUS_NOT_IMPLEMENTED;
+++#endif
++     if (sel1 >> 16 || sel2 >> 16) return STATUS_INVALID_LDT_DESCRIPTOR;
++ 
++     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++-- 
++2.43.0
++
+-- 
+2.43.0
+

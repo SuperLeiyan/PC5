@@ -6,12 +6,14 @@
  * keyboard (libSceImeDialog), and the console's firmware for the log. */
 #include "pc5_game.h"
 #include "pc5_console.h"
+#include "pc5_logs.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include <x86intrin.h>
 
@@ -310,21 +312,31 @@ typedef struct SwVersion {
 } SwVersion;
 int sceKernelGetSystemSwVersion(SwVersion *version);
 
+/* The firmware, from the kernel's version text (kern.version names the release it was built
+ * from): sceKernelGetSystemSwVersion answers what a payload that changes the version makes it
+ * say (13.59 on a 13.60 console). Its answer is kept beside it, and is the firmware when the
+ * kernel's text names none. */
 void pc5_system_text(char *out, size_t size)
 {
     union { SwVersion sw; uint8_t room[256]; } answer;
-    char firmware[16] = "unknown", space[32] = "unknown";
+    char firmware[16] = "unknown", reported[16] = "", space[32] = "unknown", kernel[1024];
+    int mib[2] = { CTL_KERN, KERN_VERSION };
+    size_t length = sizeof(kernel) - 1;
     uint64_t free_bytes;
 
     memset(&answer, 0, sizeof(answer));
     answer.sw.size = sizeof(answer.sw);
     if (!sceKernelGetSystemSwVersion(&answer.sw) && answer.sw.version >> 24)
-        snprintf(firmware, sizeof(firmware), "%x.%02x", (unsigned)(answer.sw.version >> 24),
+        snprintf(reported, sizeof(reported), "%x.%02x", (unsigned)(answer.sw.version >> 24),
                  (unsigned)((answer.sw.version >> 16) & 0xff));
+    memset(kernel, 0, sizeof(kernel));
+    if (sysctl(mib, 2, kernel, &length, NULL, 0) || pc5_firmware_from_kernel(kernel, firmware, sizeof(firmware)))
+        pc5_copy(firmware, sizeof(firmware), reported[0] ? reported : "unknown");
     if (!pc5_free_bytes("/data", &free_bytes))
         snprintf(space, sizeof(space), "%.1fGB", (double)free_bytes / 1e9);
-    snprintf(out, size, "PC5 system firmware=%s firmware_version=0x%08x data_free=%s version=%s", firmware,
-             (unsigned)answer.sw.version, space, PC5_VERSION);
+    snprintf(out, size, "PC5 system firmware=%s firmware_version=0x%08x%s%s data_free=%s version=%s", firmware,
+             (unsigned)answer.sw.version, reported[0] && strcmp(reported, firmware) ? " reported=" : "",
+             reported[0] && strcmp(reported, firmware) ? reported : "", space, PC5_VERSION);
 }
 
 /* The same keyboard over PC5's own screens (pc5_console.c), with a title of their own. */

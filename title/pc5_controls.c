@@ -108,6 +108,9 @@ int pc5_controls_load(const char *root, const char *id, Pc5Controls *controls)
         } else if (!strcmp(name, "memory_32bit")) {
             if (!strcmp(value, "2gb")) controls->memory_2gb = 1;
             else if (!strcmp(value, "4gb")) controls->memory_2gb = 0;
+        } else if (!strcmp(name, "cpu_sharing")) {
+            if (!strcmp(value, "on")) controls->cpu_sharing = 1;
+            else if (!strcmp(value, "off")) controls->cpu_sharing = 0;
         } else if (!strcmp(name, "pointer_speed")) {
             int speed = 0, digits = 0;
             for (const char *p = value; *p >= '0' && *p <= '9' && digits < 3; p++, digits++) speed = speed * 10 + *p - '0';
@@ -142,12 +145,13 @@ int pc5_controls_save(const char *root, const char *id, const Pc5Controls *contr
                                    "# Triangle on the game, then Frame generation\nframe_generation = %s\n"
                                    "# Triangle on a 32-bit game, then Memory\nmemory_32bit = %s\n"
                                    "# Triangle on the game, then Resolution\nresolution = %s\n"
-                                   "# Triangle on the game, then Aspect ratio\naspect_ratio = %s\n",
+                                   "# Triangle on the game, then Aspect ratio\naspect_ratio = %s\n"
+                                   "# Triangle on the game, then CPU sharing\ncpu_sharing = %s\n",
                             mode_keys[controls->mode % PC5_PAD_MODES], stick_keys[controls->stick[0] % PC5_STICK_USES],
                             stick_keys[controls->stick[1] % PC5_STICK_USES], controls->speed,
                             controls->frame_generation ? "on" : "off", controls->memory_2gb ? "2gb" : "4gb",
                             controls->resolution == 2 ? "2160p" : controls->resolution == 1 ? "1440p" : "1080p",
-                            controls->stretch ? "stretch" : "keep");
+                            controls->stretch ? "stretch" : "keep", controls->cpu_sharing ? "on" : "off");
     for (int i = 0; i < PC5_CONTROLS && !status; i++)
         status = pc5_buf_printf(&text, "%s = %s\n", control_keys[i], pc5_keys[controls->key[i] % pc5_key_count].name);
     if (!status) status = pc5_write_file(path, text.data, text.len);
@@ -162,15 +166,21 @@ int pc5_controls_input(const Pc5Controls *controls, char *out, size_t size)
     const char *mouse = controls->stick[1] == PC5_STICK_POINTER ? "right_stick"
                         : controls->stick[0] == PC5_STICK_POINTER ? "left_stick" : "none";
 
-    if (controls->mode != PC5_PAD_KEYBOARD)
-        return pc5_format(out, size, "[input]\nmode = %s\n", controls->mode == PC5_PAD_DUALSENSE ? "dualsense" : "xinput");
-    status = pc5_buf_printf(&text, "[input]\nmode = keyboard\nmouse = %s\nmouse_speed = %d\n", mouse,
-                            pc5_controls_pixels(controls));
-    for (int i = 0; i < PC5_CONTROLS && !status; i++) {
-        /* A stick's directions only while it sends keys. */
-        if (i >= PC5_STICK_FIRST && controls->stick[(i - PC5_STICK_FIRST) / 4] != PC5_STICK_KEYS) continue;
-        status = pc5_buf_printf(&text, "%s = %s\n", control_keys[i], pc5_keys[controls->key[i] % pc5_key_count].name);
+    if (controls->mode != PC5_PAD_KEYBOARD) {
+        status = pc5_buf_printf(&text, "[input]\nmode = %s\n", controls->mode == PC5_PAD_DUALSENSE ? "dualsense" : "xinput");
+    } else {
+        status = pc5_buf_printf(&text, "[input]\nmode = keyboard\nmouse = %s\nmouse_speed = %d\n", mouse,
+                                pc5_controls_pixels(controls));
+        for (int i = 0; i < PC5_CONTROLS && !status; i++) {
+            /* A stick's directions only while it sends keys. */
+            if (i >= PC5_STICK_FIRST && controls->stick[(i - PC5_STICK_FIRST) / 4] != PC5_STICK_KEYS) continue;
+            status = pc5_buf_printf(&text, "%s = %s\n", control_keys[i], pc5_keys[controls->key[i] % pc5_key_count].name);
+        }
     }
+    /* The console runs threads of one priority each on a CPU of its own until it waits, where Windows
+     * gives them turns: a game with more busy threads than its 13 CPUs can stop for seconds. prospero-win's
+     * thread scheduling (Wine patch 0882) gives them turns. */
+    if (!status && controls->cpu_sharing) status = pc5_buf_printf(&text, "\n[runtime]\nthread_scheduling = true\n");
     if (!status) status = pc5_format(out, size, "%.*s", (int)text.len, text.data ? (char *)text.data : "");
     pc5_buf_free(&text);
     return status;

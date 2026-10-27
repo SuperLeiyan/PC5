@@ -255,6 +255,16 @@ With ShadowMountPlus and elfldr running.
 | 117 | A Java game that carries its own runtime (`runtime/bin/server/jvm.dll`), made with jpackage | it shows as OpenGL; it starts in one program (no "process creation is not supported" for its own program) | `PC5 Java launcher: C:\Games\…\app in PATH`, `Loaded … jvm.dll` |
 | 118 | A game that starts from a .bat file whose program is 64-bit, installed with an earlier PC5 as 32-bit | it starts as 64-bit | `zink provider=… architecture=pe64` |
 
+## Scrolling, 32-bit FS, no 16-bit kernel, CPU sharing, firmware (1.8.3)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 119 | Open PC5 with 20 or more games, some with backgrounds; hold left, then right | the covers move smoothly, at the console's frame rate; a game's background shows a moment after it is chosen | |
+| 120 | Fallout or Fallout 2 (falloutw.exe, fallout2.exe) | it gets past startup to its own screens | `wine-ps5: 32-bit FS base repaired (1): … for %fs:18, fs 0013 base …`: send the line |
+| 121 | A game that looks up kernel32's UTRegister (Brian Lara International Cricket 2007), without a krnl386 override | it doesn't close at once; no `i386_set_ldt: Invalid argument` | `module not found for forward 'krnl386.exe16.UTRegister'` |
+| 122 | △ › Graphics › CPU sharing On on a game; start it | it plays; for a game that stopped for seconds at a time (Ori and the Blind Forest in Xbox mode), it no longer stops | `PW_WINE64 runtime thread_scheduling=1` |
+| 123 | Open PC5 | the log names the firmware the console's Settings › System › System Software shows | `PC5 system firmware=13.60 …` (with `reported=…` when libkernel answers another): send the line |
+
 A non-zero `rc=` on the light bar or triggers lines means the console refused that call; send
 that log. On the startup sound line, a negative `port=` means the console refused the
 controller's speaker.

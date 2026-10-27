@@ -46,6 +46,8 @@ typedef struct Pc5Controls {
     int memory_2gb;               /* 1: a 32-bit game keeps 2 GB of address space, not the 4 GB it gets */
     int resolution;               /* 0: 1920x1080, 1: 2560x1440, 2: 3840x2160 (games drawn through Vulkan) */
     int stretch;                  /* 1: the picture stretched to fill the 16:9 screen, 0: its own shape */
+    int cpu_sharing;              /* 1: the game's threads take turns on the CPUs, as on a PC (prospero-win's
+                                   * [runtime] thread_scheduling); 0: each keeps its CPU until it waits */
 } Pc5Controls;
 
 /* A key, mouse button or nothing, as prospero-win names it in a profile, and as
@@ -65,8 +67,8 @@ void pc5_controls_default(Pc5Controls *controls);
  * file was read, -1 when there was none. */
 int pc5_controls_load(const char *root, const char *id, Pc5Controls *controls);
 int pc5_controls_save(const char *root, const char *id, const Pc5Controls *controls);
-/* The profile's [input] section, from its header on. 0, or -1 when out is too
- * small. */
+/* The profile's [input] section, from its header on, and its [runtime] section
+ * when CPU sharing is on. 0, or -1 when out is too small. */
 int pc5_controls_input(const Pc5Controls *controls, char *out, size_t size);
 
 /* "Cross", "Left stick up": a control's name in PC5. */

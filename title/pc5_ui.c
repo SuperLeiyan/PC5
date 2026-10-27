@@ -131,7 +131,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
  * and mouse) and the three groups on the first; each group's rows on a page of its own. */
 typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
-    GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY,
+    GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_CPU_SHARING,
     GR_COVER, GR_BACKGROUND, GR_HOME,
     GR_PROGRAM, GR_UPDATE, GR_UNINSTALL
 } GameRow;
@@ -152,6 +152,7 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         if (kind & GAME_VULKAN) rows[n++] = GR_RESOLUTION;
         rows[n++] = GR_ASPECT;
         if (kind & GAME_32BIT) rows[n++] = GR_MEMORY;
+        rows[n++] = GR_CPU_SHARING;
         break;
     case GP_APPEARANCE:
         rows[n++] = GR_COVER;
@@ -1952,9 +1953,10 @@ static void controls_changed(Pc5Ui *ui)
     const Pc5Controls *k = &ui->controls;
     if (pc5_controls_save(ui->root, ui->launch_id, k)) say(ui, "PC5 problem controls %s: can't write them", ui->launch_id);
     say(ui, "PC5 controls id=%s mode=%s left=%s right=%s speed=%d frame_generation=%d memory_32bit=%s resolution=%s "
-        "aspect_ratio=%s", ui->launch_id, pc5_pad_mode_name(k->mode), pc5_stick_use_name(k->stick[0]),
+        "aspect_ratio=%s cpu_sharing=%d", ui->launch_id, pc5_pad_mode_name(k->mode), pc5_stick_use_name(k->stick[0]),
         pc5_stick_use_name(k->stick[1]), k->speed, k->frame_generation, k->memory_2gb ? "2gb" : "4gb",
-        k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p", k->stretch ? "stretch" : "keep");
+        k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p", k->stretch ? "stretch" : "keep",
+        k->cpu_sharing);
 }
 
 /* A Button mapping row moves to its next (step 1) or previous (-1) value: 1 when it changed. */
@@ -2628,6 +2630,10 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->dirty = 1;
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_MEMORY) {
             ui->controls.memory_2gb = !ui->controls.memory_2gb;
+            controls_changed(ui);
+            ui->dirty = 1;
+        } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_CPU_SHARING) {
+            ui->controls.cpu_sharing = !ui->controls.cpu_sharing;
             controls_changed(ui);
             ui->dirty = 1;
         } else if ((k & accept) && row == GR_HOME) {
@@ -3536,10 +3542,10 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
             break;
         case GR_GRAPHICS:
             drawer_row(ui, c, x, y, ROW_PITCH, on, "Graphics",
-                       kind & GAME_VULKAN ? (kind & GAME_32BIT ? "Frame generation, resolution, aspect ratio and memory"
-                                                               : "Frame generation, resolution and aspect ratio")
-                                          : (kind & GAME_32BIT ? "Frame generation, aspect ratio and memory"
-                                                               : "Frame generation and aspect ratio"),
+                       kind & GAME_VULKAN ? (kind & GAME_32BIT ? "Frames, resolution, aspect ratio, memory and CPU"
+                                                               : "Frame generation, resolution, aspect ratio and CPU")
+                                          : (kind & GAME_32BIT ? "Frame generation, aspect ratio, memory and CPU"
+                                                               : "Frame generation, aspect ratio and CPU"),
                        more);
             break;
         case GR_APPEARANCE:
@@ -3575,6 +3581,12 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
                                                : "Room for big textures and mods; 2 GB if the game misbehaves",
                        ui->controls.memory_2gb ? "2 GB" : "4 GB");
             break;
+        case GR_CPU_SHARING:
+            drawer_row(ui, c, x, y, ROW_PITCH, on, "CPU sharing",
+                       ui->controls.cpu_sharing ? "Its threads take turns on the CPUs, as on a PC"
+                                                : "Each thread keeps its CPU; On if the game stalls",
+                       ui->controls.cpu_sharing ? "On" : "Off");
+            break;
         case GR_COVER:
             drawer_row(ui, c, x, y, ROW_PITCH, on, "Cover", "Another of those found, or search by another name", more);
             break;
@@ -3603,7 +3615,7 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
     }
     GameRow row = chosen >= 0 && chosen < count ? rows[chosen] : GR_PLAY;
     int changes = row == GR_CONTROLLER || row == GR_FRAMEGEN || row == GR_RESOLUTION || row == GR_ASPECT ||
-                  row == GR_MEMORY || row == GR_HOME;
+                  row == GR_MEMORY || row == GR_CPU_SHARING || row == GR_HOME;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);
 }

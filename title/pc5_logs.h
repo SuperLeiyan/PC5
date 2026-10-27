@@ -53,4 +53,9 @@ int pc5_logs_tidy(const char *root, int keep_all, int64_t now, int offset_s, Pc5
 /* The newest kept log of a game (issue-... or log-...), its path in out. 0, or -1 when there is none. */
 int pc5_logs_newest(const char *root, const char *profile, char *out, size_t size);
 
+/* The console's firmware ("13.60") from the kernel's version text (kern.version, which
+ * names the release branch it was built from: "... r229358/releases/13.60: ..."). 0, or -1
+ * when the text names none. */
+int pc5_firmware_from_kernel(const char *version, char *out, size_t size);
+
 #endif

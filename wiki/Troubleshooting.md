@@ -42,6 +42,7 @@ When something doesn't work, PC5 usually says why in a message. This page lists 
 | The game doesn't react to the controller | Change its controller mode: **△ › Controller**. Try **DualSense** if **Xbox controller** doesn't work, or **Keyboard & mouse** for a game without controller support. See [Controllers](Controllers). |
 | A Windows box appears before the game starts | With Xbox controller or DualSense, press **✕** to press its highlighted button, and use the D-pad to move between buttons. See [Controllers](Controllers#a-games-windows-pop-ups). |
 | A setting I changed did nothing | Settings and a game's controller, frame generation and launch options take effect the next time the game starts. Leave the game and start it again. |
+| The game stops for seconds at a time, then carries on (or carries on after the PS button) | Turn on **△ › Graphics › CPU sharing**: the game's threads then take turns on the console's CPUs, as on a PC. See [Graphics](Playing-games#graphics). |
 | The game runs below 30 fps with frame generation on | Frame generation only makes frames in between while the game keeps 30 fps. Below that, frames are shown as they come. See [Frame generation](Playing-games#frame-generation). |
 | The overlay is missing a line | A line the console can't read is left out. |
 | The light bar or triggers don't follow PC5's settings | In **DualSense** mode, a game that sets its own light bar or trigger effects gets them instead. |

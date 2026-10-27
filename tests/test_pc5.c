@@ -839,6 +839,22 @@ static void test_install(void)
         profile = pw_wine_library_find(pw, "neondrift");
         CHECK(profile && profile->display.scaling == PW_GAME_SCALING_STRETCH, "Aspect ratio Stretch: stretched");
         controls.stretch = 0;
+        CHECK(profile && !profile->runtime.thread_scheduling, "CPU sharing off: the console's own scheduling");
+        controls.cpu_sharing = 1;
+        pc5_controls_save(root, "neondrift", &controls);
+        pc5_profile_refresh(root, "neondrift", error, sizeof(error));
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->runtime.thread_scheduling, "CPU sharing on: prospero-win's thread scheduling");
+        controls.mode = PC5_PAD_KEYBOARD;   /* after the keyboard's [input] lines too */
+        pc5_controls_save(root, "neondrift", &controls);
+        pc5_profile_refresh(root, "neondrift", error, sizeof(error));
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->runtime.thread_scheduling && profile->input.mode == PW_GAME_INPUT_KEYBOARD,
+              "CPU sharing with the keyboard and mouse");
+        controls.mode = PC5_PAD_XBOX;
+        controls.cpu_sharing = 0;
         pc5_controls_save(root, "neondrift", &controls);
         pc5_profile_refresh(root, "neondrift", error, sizeof(error));
     }
@@ -2509,7 +2525,25 @@ static void test_logs(void)
     CHECK(CLASSIFY("launcher", pc5_problem) == PC5_LOG_PC5_PROBLEM && !strcmp(issue.detail, "install Blur: Not enough space"),
           "PC5's problem: %s", issue.detail);
     CHECK(!strcmp(pc5_log_problem_text(PC5_LOG_GAME_CRASHED), "stopped with an error"), "a problem in words");
+    /* The firmware a report names: the kernel's own, with the number libkernel answered beside it. */
+    CHECK(CLASSIFY("gtaiv", "REC seq=1 t=1.0 PC5 system firmware=13.60 firmware_version=0x13590001 reported=13.59 "
+                            "data_free=1.0GB version=1.8.3\n") != PC5_LOG_PC5_PROBLEM && !strcmp(issue.firmware, "13.60"),
+          "the kernel's firmware: %s", issue.firmware);
 #undef CLASSIFY
+    {
+        char firmware[16];
+        CHECK(!pc5_firmware_from_kernel("FreeBSD 11.0-RELEASE #1 r229358/releases/13.60: Thu Sep 10 2026\n"
+                                        "    builder@ps5:/build\n", firmware, sizeof(firmware)) &&
+              !strcmp(firmware, "13.60"), "kern.version's release: %s", firmware);
+        CHECK(!pc5_firmware_from_kernel("r1/releases/9.00", firmware, sizeof(firmware)) && !strcmp(firmware, "9.00"),
+              "at the end of the text, one digit before the point: %s", firmware);
+        CHECK(!pc5_firmware_from_kernel("releases/ releases/x releases/12.4000 releases/12.40", firmware, sizeof(firmware)) &&
+              !strcmp(firmware, "12.40"), "the first one that is a version: %s", firmware);
+        CHECK(pc5_firmware_from_kernel("FreeBSD 11.0 r1/head", firmware, sizeof(firmware)) &&
+              pc5_firmware_from_kernel("releases/13", firmware, sizeof(firmware)) &&
+              pc5_firmware_from_kernel("releases/13.60.1", firmware, sizeof(firmware)) &&
+              pc5_firmware_from_kernel("", firmware, sizeof(firmware)), "no release named");
+    }
 
     path(root_dir, sizeof(root_dir), "%s/logs-root", work);
     path(logs, sizeof(logs), "%s/logs", root_dir);
@@ -4251,7 +4285,16 @@ static void test_screens(const char *fonts)
     CHECK(controls_has("orbital-nine", "aspect_ratio = stretch\n"), "Aspect ratio: Stretch");
     press(ui, PC5_KEY_LEFT, &canvas);
     CHECK(controls_has("orbital-nine", "aspect_ratio = keep\n"), "then Keep");
-    press(ui, PC5_KEY_DOWN, &canvas);       /* the last row of Graphics: still Aspect ratio (a 64-bit game: no Memory) */
+    press(ui, PC5_KEY_DOWN, &canvas);       /* CPU sharing (a 64-bit game: no Memory): on, then off again */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(controls_has("orbital-nine", "cpu_sharing = on\n"), "CPU sharing on");
+    press(ui, PC5_KEY_RIGHT, &canvas);
+    CHECK(controls_has("orbital-nine", "cpu_sharing = off\n"), "then off");
+    press(ui, PC5_KEY_DOWN, &canvas);       /* the last row of Graphics: still CPU sharing */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(controls_has("orbital-nine", "cpu_sharing = on\n"), "the last row: CPU sharing");
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(controls_has("orbital-nine", "cpu_sharing = off\n"), "and off");
     press(ui, PC5_KEY_BACK, &canvas);       /* the first page again, on Graphics */
     CHECK(!strcmp(pc5_ui_screen(ui), "game-menu"), "Back: the first page: %s", pc5_ui_screen(ui));
     press(ui, PC5_KEY_DOWN, &canvas);
