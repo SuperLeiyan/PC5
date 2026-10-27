@@ -177,9 +177,9 @@ static int sound_started, sound_user = -1;
 static atomic_int sound_stop;
 
 /* The console's Controller Speaker Volume for the player, which libSceUserService holds. Its
- * arguments aren't published: asked first with a pointer where a player would go (as a call
- * taking only the pointer reads it, and one taking the player first refuses), then, refused,
- * with the player and the pointer. */
+ * arguments aren't published: asked first with a pointer where a player would go (a call
+ * taking only the pointer reads it there; one taking the player first refuses it as no
+ * player), then, refused and with nothing written there, with the player and a pointer. */
 int sceUserServiceGetPadSpeakerVolume(intptr_t first, int32_t *second);
 
 /* The sound's level (sceAudioOut's, AUDIO_VOLUME_0DB the most) from that setting: 0 to 10, 0
@@ -188,14 +188,14 @@ int sceUserServiceGetPadSpeakerVolume(intptr_t first, int32_t *second);
 static int pad_speaker_level(int32_t user, char *raw, size_t size)
 {
     enum { UNSET = -0x5a5a };
-    int32_t a = UNSET, b = UNSET, value;
+    int32_t a = UNSET, b = UNSET, c = UNSET, value = UNSET;
     int first, second = 0;
 
     first = sceUserServiceGetPadSpeakerVolume((intptr_t)&a, &b);
-    value = a != UNSET ? a : b;
-    if (value == UNSET && first < 0) {
-        second = sceUserServiceGetPadSpeakerVolume((intptr_t)user, &b);
-        if (second >= 0) value = b;
+    if (first >= 0) value = a != UNSET ? a : b;
+    else if (a == UNSET && user >= 0) {
+        second = sceUserServiceGetPadSpeakerVolume((intptr_t)user, &c);
+        if (second >= 0) value = c;
     }
     snprintf(raw, size, "rc=%#x/%#x value=%d", (unsigned)first, (unsigned)second, value == UNSET ? -1 : value);
     if (value == UNSET || value < 0) return -1;

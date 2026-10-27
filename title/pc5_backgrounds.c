@@ -142,7 +142,9 @@ static void one(Pc5Backgrounds *b, const Pc5BackgroundGame *game)
             return;
         }
     }
-    /* A search as for covers, the player's own cover left aside. */
+    /* A search as for covers, the player's own cover left aside; none while every source is
+     * turned off (looked for again once one is on). */
+    if ((game->hint.off & ((1u << PC5_PICTURE_SOURCES) - 1)) == (1u << PC5_PICTURE_SOURCES) - 1) return;
     Pc5CoverSearch *search = pc5_alloc(sizeof(*search));
     if (!search) return;
     Pc5CoverHint hint = game->hint;
@@ -167,10 +169,12 @@ static void one(Pc5Backgrounds *b, const Pc5BackgroundGame *game)
         }
     }
     /* None to have: kept as it is, and asked again only once there is a picture of the player's.
-     * Steam or GOG answered without one; or there were some and they couldn't be fetched three
-     * starts running (the network, or a store without the picture). */
+     * Steam or GOG answered without one (with both turned off, the other sources did); or there
+     * were some and they couldn't be fetched three starts running (the network, or a store
+     * without the picture). */
     if (!saved && !atomic_load(&b->stop)) {
-        int none = !offered && search->answered_stores;
+        uint32_t stores = PC5_PICTURES_STEAM | PC5_PICTURES_GOG;
+        int none = !offered && (search->answered_stores || ((hint.off & stores) == stores && search->answered));
         if (offered && !note_path(b->root, game->prefix, "background-tries.txt", path, sizeof(path))) {
             char text[16];
             Pc5Buf tries = { 0 };

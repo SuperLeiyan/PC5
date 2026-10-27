@@ -503,15 +503,16 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
         }
     }
     /* A Java game installed before 1.8.2 as drawing with Windows itself (or what its runtime's
-     * libraries import): its program draws with nothing it imports and a Java runtime is
-     * beside it, so it draws with OpenGL (pc5_folder_api), kept in its notes. */
+     * libraries import): neither its program nor the libraries beside it import anything to
+     * draw with, and a Java runtime is beside it, so it draws with OpenGL (pc5_folder_api),
+     * kept in its notes. */
     if (info.api != PC5_API_OPENGL) {
         char dir[PC5_PATH];
         Pc5PeInfo pe;
         program_folder(root, id, &program, dir, sizeof(dir));
         if (dir[0] && pc5_java_beside(dir) &&
             !pc5_format(path, sizeof(path), "%s/prefixes/%s/drive_c/Games/%s/%s", root, id, info.folder, program.exe) &&
-            !pc5_pe_read(path, &pe) && !(pe.imports & PC5_IMPORT_DRAWING)) {
+            !pc5_pe_read(path, &pe) && !(pe.imports & PC5_IMPORT_DRAWING) && !(pc5_dll_imports_in(dir) & PC5_IMPORT_DRAWING)) {
             info.api = program.api = PC5_API_OPENGL;
             if (!pc5_info_text(&info, text, sizeof(text)) &&
                 !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/info.txt", root, id))
@@ -580,6 +581,7 @@ int pc5_game_winepath(const char *root, const char *id, char *out, size_t size)
         resolve_ci(dir, cfg, found, sizeof(found)) || !pc5_is_file(found))
         return -1;
     windows_path(info.folder, program.exe, 0, windows, sizeof(windows));
+    if (strchr(windows, ';')) return -1;   /* PATH's separator: it can't be in PATH */
     return pc5_format(out, size, "%s\\app", windows);
 }
 

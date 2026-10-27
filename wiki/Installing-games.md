@@ -199,7 +199,7 @@ PC5 handles every game the same way. It reads the game's program to see whether 
 | Plain Windows drawing | Wine itself |
 | .NET Framework | Wine Mono 11.3.0 |
 
-A Java game is one that carries its own Java runtime beside its program (a `runtime` or `jre` folder with `bin/server/jvm.dll` or `bin/client/jvm.dll`): its libraries (LWJGL, libGDX, JOGL) draw with OpenGL. A Java game made with jpackage (its program beside an `app` folder with the program's `.cfg`) runs in one program, as the console needs.
+A Java game is one that carries its own Java runtime beside its program (a folder such as `runtime`, `jre` or `jre64` with `bin/server/jvm.dll` or `bin/client/jvm.dll`) and whose program and the libraries beside it draw with nothing of their own: its Java libraries (LWJGL, libGDX, JOGL) draw with OpenGL. A Java game made with jpackage (its program beside an `app` folder with the program's `.cfg`) runs in one program, as the console needs.
 
 Games that write text with Windows' fonts get Liberation for Arial, Times New Roman and Courier New (made to take the same space), and Droid Sans Fallback for Windows' Chinese, Japanese and Korean fonts.
 

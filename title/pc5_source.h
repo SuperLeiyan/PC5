@@ -25,6 +25,7 @@ typedef struct Pc5Exe {
     int score;                /* how likely it is the game itself */
     Pc5PeInfo pe;
     uint32_t beside;          /* the imports of the libraries in its folder */
+    int java;                 /* a Java runtime beside it (pc5_java_beside) */
 } Pc5Exe;
 
 typedef struct Pc5Folder {
@@ -37,7 +38,6 @@ typedef struct Pc5Folder {
     uint32_t imports;         /* every program and library in the game's folders */
     uint32_t steam_appid;     /* a steam_appid.txt at the top, or 0 */
     char picture[PC5_PATH];   /* the player's cover: cover.jpg, .jpeg or .png at the top, or "" */
-    int java;                 /* a Java runtime inside it (bin/server or bin/client jvm.dll) */
     char problem[PC5_ERROR];  /* why it can't be installed, or "" */
 } Pc5Folder;
 
@@ -46,12 +46,15 @@ typedef struct Pc5Folder {
  * is in problem. -1 only when the folder can't be read at all. */
 int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder);
 /* The API of the chosen program, with the libraries beside it. A Java game (a program that
- * draws with nothing it imports, in a folder with a Java runtime) draws with OpenGL: Java
- * games' libraries (LWJGL, JOGL, libGDX) load it at run time. */
+ * draws with nothing it or the libraries beside it import, with a Java runtime beside it)
+ * draws with OpenGL: Java games' libraries (LWJGL, JOGL, libGDX) load it at run time. */
 Pc5Api pc5_folder_api(const Pc5Folder *folder, int exe);
-/* 1 when the folder dir (on disk) has a Java runtime in it, as a Java game carries one:
- * runtime/ or jre/ with bin/server/jvm.dll or bin/client/jvm.dll, names in any case. */
+/* 1 when the folder dir (on disk) has a Java runtime in it, as a Java game carries one beside
+ * its program: a folder (runtime, jre, jre64...) with bin/server/jvm.dll or
+ * bin/client/jvm.dll, names in any case. */
 int pc5_java_beside(const char *dir);
+/* What the libraries (.dll) in the folder dir import, together (PC5_IMPORT_*); not below it. */
+uint32_t pc5_dll_imports_in(const char *dir);
 
 /* ---- batch files ---------------------------------------------------------------------
  * A game that starts from a batch file (.bat or .cmd): the console runs one program, so

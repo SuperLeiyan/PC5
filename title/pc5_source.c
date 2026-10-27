@@ -330,9 +330,6 @@ int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder)
                 folder->files++;
                 folder->bytes += (uint64_t)st.st_size;
                 int is_exe = pc5_ends_with_ci(entry->d_name, ".exe"), is_dll = pc5_ends_with_ci(entry->d_name, ".dll");
-                if (is_dll && !pc5_casecmp(entry->d_name, "jvm.dll") &&
-                    (pc5_ends_with_ci(relative, "bin/server") || pc5_ends_with_ci(relative, "bin/client")))
-                    folder->java = 1;
                 if ((is_exe || is_dll) && !helper_folder(child)) {
                     Pc5PeInfo pe;
                     if (pc5_pe_read(entry_path, &pe)) continue;
@@ -412,6 +409,9 @@ int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder)
         if (slash) *slash = 0; else dir[0] = 0;
         for (int k = 0; k < walk.dll_count; k++)
             if (!strcmp(walk.dlls[k].dir, dir)) folder->exes[i].beside |= walk.dlls[k].imports;
+        char on_disk[PC5_PATH];
+        if (dir[0] ? !pc5_join(on_disk, sizeof(on_disk), path, dir) : !pc5_format(on_disk, sizeof(on_disk), "%s", path))
+            folder->exes[i].java = pc5_java_beside(on_disk);
     }
     /* A game whose programs and libraries import nothing they draw with loads it at run
      * time: what its likeliest programs name (pc5_pe_named_libraries), read only then. */
@@ -446,7 +446,7 @@ Pc5Api pc5_folder_api(const Pc5Folder *folder, int index)
     beside = folder->exes[index].beside;
     if (own & drawing) return pc5_api_from_imports(own);
     if (beside & drawing) return pc5_api_from_imports(beside);
-    if (folder->java) return PC5_API_OPENGL;
+    if (folder->exes[index].java) return PC5_API_OPENGL;
     return pc5_api_from_imports(folder->imports);
 }
 
@@ -468,17 +468,41 @@ static int join_ci(const char *dir, const char *name, char *out, size_t size)
 
 int pc5_java_beside(const char *dir)
 {
-    static const char *const tops[] = { "runtime", "jre" }, *const kinds[] = { "server", "client" };
+    static const char *const kinds[] = { "server", "client" };
     char top[PC5_PATH], bin[PC5_PATH], kind[PC5_PATH], jvm[PC5_PATH];
+    DIR *folder = opendir(dir);
+    struct dirent *entry;
+    int found = 0;
 
-    for (size_t t = 0; t < sizeof(tops) / sizeof(tops[0]); t++) {
-        if (join_ci(dir, tops[t], top, sizeof(top)) || join_ci(top, "bin", bin, sizeof(bin))) continue;
-        for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++)
-            if (!join_ci(bin, kinds[k], kind, sizeof(kind)) && !join_ci(kind, "jvm.dll", jvm, sizeof(jvm)) &&
-                pc5_is_file(jvm))
-                return 1;
+    if (!folder) return 0;
+    while (!found && (entry = readdir(folder))) {
+        if (entry->d_name[0] == '.' || pc5_join(top, sizeof(top), dir, entry->d_name) || !pc5_is_dir(top) ||
+            join_ci(top, "bin", bin, sizeof(bin)))
+            continue;
+        for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]) && !found; k++)
+            found = !join_ci(bin, kinds[k], kind, sizeof(kind)) && !join_ci(kind, "jvm.dll", jvm, sizeof(jvm)) &&
+                    pc5_is_file(jvm);
     }
-    return 0;
+    closedir(folder);
+    return found;
+}
+
+uint32_t pc5_dll_imports_in(const char *dir)
+{
+    char file[PC5_PATH];
+    DIR *folder = opendir(dir);
+    struct dirent *entry;
+    uint32_t imports = 0;
+
+    if (!folder) return 0;
+    while ((entry = readdir(folder))) {
+        Pc5PeInfo pe;
+        if (pc5_ends_with_ci(entry->d_name, ".dll") && !pc5_join(file, sizeof(file), dir, entry->d_name) &&
+            pc5_is_file(file) && !pc5_pe_read(file, &pe))
+            imports |= pe.imports;
+    }
+    closedir(folder);
+    return imports;
 }
 
 /* ---- batch files ------------------------------------------------------------------- */

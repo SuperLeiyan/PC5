@@ -294,6 +294,8 @@ void pc5_cover_search_start(Pc5CoverSearch *search, const Pc5CoverHint *hint)
     memset(search, 0, sizeof(*search));
     search->hint = *hint;
     search->query_count = pc5_cover_queries(hint, search->queries);
+    /* Every source turned off: nothing to wait for, as when they answered without a picture. */
+    if ((hint->off & ((1u << PC5_PICTURE_SOURCES) - 1)) == (1u << PC5_PICTURE_SOURCES) - 1) search->answered = 1;
     /* The player's own picture comes before anything found online. */
     if (hint->picture[0]) {
         Pc5CoverChoice *own = &search->choices[search->count++];

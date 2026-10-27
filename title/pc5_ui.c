@@ -1125,6 +1125,7 @@ static void pick_search(Pc5Ui *ui, const Pc5Game *game)
     if (ui->pick_query[0]) {
         memset(&hint, 0, sizeof(hint));
         pc5_copy(hint.folder, sizeof(hint.folder), ui->pick_query);
+        hint.off = ui->settings.pictures_off;
     } else {
         hint_for_game(ui, game, &hint);
         hint.picture_only = 0;
@@ -3216,7 +3217,7 @@ static int spaced_caps(Pc5Ui *ui, Pc5Canvas *c, Pc5Face face, int x, int y, uint
     caps[n] = 0;
     for (size_t at = 0; caps[at];) {
         size_t len = 1;
-        while (caps[at + len] && ((unsigned char)caps[at + len] & 0xc0) == 0x80) len++;
+        while (len < 4 && caps[at + len] && ((unsigned char)caps[at + len] & 0xc0) == 0x80) len++;
         memcpy(one, caps + at, len);
         one[len] = 0;
         width += pc5_text_width(&ui->fonts, face, one) + (count++ ? spacing : 0);
@@ -3226,7 +3227,7 @@ static int spaced_caps(Pc5Ui *ui, Pc5Canvas *c, Pc5Face face, int x, int y, uint
     int px = x - width / 2;
     for (size_t at = 0; caps[at];) {
         size_t len = 1;
-        while (caps[at + len] && ((unsigned char)caps[at + len] & 0xc0) == 0x80) len++;
+        while (len < 4 && caps[at + len] && ((unsigned char)caps[at + len] & 0xc0) == 0x80) len++;
         memcpy(one, caps + at, len);
         one[len] = 0;
         px += pc5_text(c, &ui->fonts, face, px, y, color, one, 0, 0) + spacing;

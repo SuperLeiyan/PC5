@@ -394,7 +394,7 @@ static void test_cover_search(void)
         net.requests = 0;
         pc5_cover_search_start(&search, &some);
         while (pc5_cover_search_step(&search, &http)) {}
-        CHECK(net.requests == 0 && search.count == 0, "all off: nothing asked, nothing found");
+        CHECK(net.requests == 0 && search.count == 0 && search.answered, "all off: nothing asked, nothing found, done");
         CHECK(!strcmp(pc5_picture_source_name(2), "PCGamingWiki") && !strcmp(pc5_picture_source_key(4), "wikidata") &&
               !pc5_picture_source_name(5)[0], "the sources' names");
     }
@@ -2283,6 +2283,28 @@ static void test_backgrounds(void)
     path(own, sizeof(own), "%s/backgrounds/game2.jpg", base);
     write_png(own, 32, 18, 0xff3344ffu);   /* a PNG named .jpg: read for what it is */
     CHECK(pc5_background_needed(base, &games[2]), "the player's picture is looked at");
+    /* Every source turned off: nothing asked and no note (looked for again once one is on). */
+    {
+        Pc5Backgrounds quiet;
+        Pc5BackgroundGame *off = pc5_alloc(sizeof(*off));
+        pc5_copy(off->id, sizeof(off->id), "game9");
+        pc5_copy(off->prefix, sizeof(off->prefix), "game9");
+        pc5_copy(off->title, sizeof(off->title), "Neon Drift");
+        pc5_copy(off->hint.folder, sizeof(off->hint.folder), "Neon Drift");
+        off->hint.off = (1u << PC5_PICTURE_SOURCES) - 1;
+        path(file, sizeof(file), "%s/prefixes/game9/system.reg", base);
+        write_text(file, "registry");
+        memset(&quiet, 0, sizeof(quiet));
+        pc5_copy(quiet.root, sizeof(quiet.root), base);
+        quiet.http = http;
+        quiet.games = off;
+        quiet.count = 1;
+        int asked = net.requests;
+        pc5_backgrounds_run(&quiet);
+        path(file, sizeof(file), "%s/prefixes/game9/pc5/background-none.txt", base);
+        CHECK(net.requests == asked && !pc5_exists(file) && pc5_background_needed(base, off), "all off: nothing asked, no note");
+        pc5_free(off);
+    }
     /* On a thread, as the screens start it. */
     CHECK(!pc5_backgrounds_start(&b, games, 3), "the worker started");
     pc5_backgrounds_end(&b, 0);
@@ -2811,15 +2833,41 @@ static void test_java(void)
     path(dir, sizeof(dir), "%s/stubs/Pixel Dungeon", work);
     path(file, sizeof(file), "%s/Pixel Dungeon.exe", dir);
     copy_file(from, file);
-    CHECK(!pc5_folder_inspect(dir, "Pixel Dungeon", folder) && folder->exe_count && !folder->java &&
+    CHECK(!pc5_folder_inspect(dir, "Pixel Dungeon", folder) && folder->exe_count && !folder->exes[0].java &&
           pc5_folder_api(folder, 0) == PC5_API_GDI, "without a runtime: Windows' own drawing");
     CHECK(!pc5_java_beside(dir), "no runtime beside it");
     path(file, sizeof(file), "%s/Runtime/BIN/Server/JVM.dll", dir);
     copy_file(from, file);
     CHECK(pc5_java_beside(dir), "a runtime beside it, names in any case");
-    CHECK(!pc5_folder_inspect(dir, "Pixel Dungeon", folder) && folder->java && folder->exe_count &&
+    CHECK(!pc5_folder_inspect(dir, "Pixel Dungeon", folder) && folder->exe_count && folder->exes[0].java &&
           !strcmp(folder->exes[0].path, "Pixel Dungeon.exe") && pc5_folder_api(folder, 0) == PC5_API_OPENGL,
           "with one: OpenGL (%s, %d)", folder->exe_count ? folder->exes[0].path : "", (int)pc5_folder_api(folder, 0));
+    /* A runtime elsewhere in the folder (a tool's) isn't the game's: not beside its program. */
+    {
+        char other[PC5_PATH];
+        path(other, sizeof(other), "%s/stubs/Tooled", work);
+        path(file, sizeof(file), "%s/Tooled.exe", other);
+        copy_file(from, file);
+        path(file, sizeof(file), "%s/tools/editor/jre64/bin/server/jvm.dll", other);
+        copy_file(from, file);
+        CHECK(!pc5_folder_inspect(other, "Tooled", folder) && folder->exe_count && !folder->exes[0].java &&
+              pc5_folder_api(folder, 0) == PC5_API_GDI, "a tool's runtime: not a Java game");
+    }
+    /* A library beside the program that draws comes first, at install and at start. */
+    {
+        char beside[PC5_PATH], engine[PC5_PATH];
+        path(beside, sizeof(beside), "%s/stubs/Engined", work);
+        path(file, sizeof(file), "%s/Engined.exe", beside);
+        copy_file(from, file);
+        path(engine, sizeof(engine), "%s/engine.dll", programs);
+        path(file, sizeof(file), "%s/engine.dll", beside);
+        copy_file(engine, file);
+        path(file, sizeof(file), "%s/jre/bin/server/jvm.dll", beside);
+        copy_file(from, file);
+        CHECK(!pc5_folder_inspect(beside, "Engined", folder) && folder->exe_count && folder->exes[0].java &&
+              pc5_folder_api(folder, 0) == PC5_API_D3D12, "its library's Direct3D 12 first: %d", (int)pc5_folder_api(folder, 0));
+        CHECK(pc5_dll_imports_in(beside) & PC5_IMPORT_D3D12, "the library's imports");
+    }
     pc5_free(folder);
 
     path(root, sizeof(root), "%s/java-root", work);
@@ -2847,6 +2895,29 @@ static void test_java(void)
         CHECK(!pc5_read_file(file, &profile, 16384) && !pc5_buf_terminate(&profile) &&
               strstr((char *)profile.data, "graphics = opengl\n"), "drawn through OpenGL now");
         pc5_buf_free(&profile);
+    }
+    /* With a library beside it that draws, it isn't switched. */
+    {
+        char engine[PC5_PATH];
+        Pc5Info drawn;
+        path(file, sizeof(file), "%s/prefixes/engined/drive_c/Games/Engined/Engined.exe", root);
+        copy_file(from, file);
+        path(engine, sizeof(engine), "%s/engine.dll", programs);
+        path(file, sizeof(file), "%s/prefixes/engined/drive_c/Games/Engined/engine.dll", root);
+        copy_file(engine, file);
+        path(file, sizeof(file), "%s/prefixes/engined/drive_c/Games/Engined/jre/bin/server/jvm.dll", root);
+        copy_file(from, file);
+        memset(&drawn, 0, sizeof(drawn));
+        pc5_copy(drawn.title, sizeof(drawn.title), "Engined");
+        pc5_copy(drawn.folder, sizeof(drawn.folder), "Engined");
+        pc5_copy(drawn.exe, sizeof(drawn.exe), "Engined.exe");
+        drawn.bits = 64;
+        drawn.api = PC5_API_D3D12;
+        pc5_info_text(&drawn, text, sizeof(text));
+        path(file, sizeof(file), "%s/prefixes/engined/pc5/info.txt", root);
+        write_text(file, text);
+        CHECK(!pc5_profile_refresh(root, "engined", error, sizeof(error)) && !pc5_info_read(root, "engined", &drawn) &&
+              drawn.api == PC5_API_D3D12, "its library's Direct3D 12 kept: %d", (int)drawn.api);
     }
     path(file, sizeof(file), "%s/prefixes/pixel/drive_c/Games/Pixel Dungeon/App/pixel dungeon.CFG", root);
     write_text(file, "[Application]\napp.mainclass=com.example.Main\n");
