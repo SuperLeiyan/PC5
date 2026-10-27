@@ -232,7 +232,7 @@ With ShadowMountPlus and elfldr running.
 | 100b | Keep saves again; Options › Uninstall game › Saves of … › Delete | "The saves of … are deleted"; the row is gone | `PC5 saves delete name=…` |
 | 101 | A game with WebM or ASF movies | the movies play smoothly, in time with their sound | no `EBML` warnings from FFmpeg |
 | 102 | A game whose Back opens a menu, Xbox controller mode: press the touchpad | the game's Back menu, and no share menu from the console | |
-| 103 | Update PC5 from 1.8.0 to this version (Settings › Updates › Update now), then Restart PC5 | PC5 opens again by itself, the new version in About PC5, no CE-108255-1 | `PC5 restarting after its update eboot=/app0/eboot.bin` |
+| 103 | Update PC5 from 1.8.0 to this version (Settings › Updates › Update now; from 1.8.2, Settings › System), then Restart PC5 | PC5 opens again by itself, the new version in About PC5, no CE-108255-1 | `PC5 restarting after its update eboot=/app0/eboot.bin` |
 | 104 | △: the game menu; Graphics, Appearance, Manage; ○ in a group | five rows (six with Keyboard & mouse); each group's rows; ○ back to the first page on the group's row, △ to the library | |
 | 105 | △ › Appearance › Cover; L1/R1; △, type another name, Done; ✕ | the cover it has first, then those found; the PS5 keyboard with the game's name; covers for the name typed; the library shows the new cover | `PC5 picture choices=…`, `PC5 screens keyboard open rc=0`, `PC5 picture saved kind=cover … failed=0` |
 | 105a | △ › Appearance › Background; a Steam match; ✕; then Background › None | the background behind the library changes; with None, PC5's own backdrop | `PC5 picture saved kind=background … failed=0` |
@@ -240,7 +240,20 @@ With ShadowMountPlus and elfldr running.
 | 107 | A Direct3D 12 game that needs feature level 12_0 (Unreal Engine 5) | no message from the game about DirectX 12 feature level 12_0; it goes on starting | |
 | 108 | A game whose sound engine asks for spatial audio (7.1.4) | it has sound | `stream … opened: … 12 channels`, no `stream refused` |
 | 109 | `prefixes/<game>/pc5/winedebug.txt` with `err+all,+loaddll,+process,+seh`; start the game | the log has the extra channels | `PW_WINE64 winedebug=err+all,+loaddll,+process,+seh` |
-| 110 | Settings › In games › Startup sound | the list has no "PC5"; cheap chinese speaker is the default | |
+| 110 | Settings › System › Startup sound | the list has no "PC5"; cheap chinese speaker is the default | |
+
+## The library's new look, System, picture sources, Java and batch games (1.8.2)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 111 | Open PC5 with a few games; move left and right | covers stand on a floor that mirrors them, the side ones turned a little towards the middle; the chosen one framed and lit in its cover's colours; its name and a pill with its bits, graphics and size under it; "N GAMES" at the bottom right; moving stays smooth | |
+| 112 | Choose a game with a background, then one without | the background behind the covers, mirrored in the floor; for the other, a backdrop of its cover's colours | |
+| 113 | Settings: the first page; System | In games, Overlay, System, About; System has Startup sound, Keep all logs, Picture sources, Check when PC5 opens, Check now | |
+| 114 | Controller Speaker Volume at its middle, then its lowest; close PC5 and open it each time | the startup sound quieter, then silent | `PC5 startup sound … level=… speaker_volume(rc=… value=…)`: send the line with each volume |
+| 115 | System › Picture sources: Steam off; △ › Appearance › Cover on a game | no Steam cover among those found; the screens don't say where a picture comes from | `PC5 settings … pictures_off=0x1` |
+| 116 | △ › Appearance › Cover on a game Steam's search misses but PCGamingWiki or Wikidata has | a cover found | `PC5 picture choices=…` |
+| 117 | A Java game that carries its own runtime (`runtime/bin/server/jvm.dll`), made with jpackage | it shows as OpenGL; it starts in one program (no "process creation is not supported" for its own program) | `PC5 Java launcher: C:\Games\…\app in PATH`, `Loaded … jvm.dll` |
+| 118 | A game that starts from a .bat file whose program is 64-bit, installed with an earlier PC5 as 32-bit | it starts as 64-bit | `zink provider=… architecture=pe64` |
 
 A non-zero `rc=` on the light bar or triggers lines means the console refused that call; send
 that log. On the startup sound line, a negative `port=` means the console refused the

@@ -48,6 +48,8 @@ typedef struct Pc5Settings {
     /* The sound on the controller's speaker when PC5 is opened: a sound's name
      * (pc5_sound.h), or "off". */
     char startup_sound[64];
+    /* The picture sources turned off (pc5_cover.h's PC5_PICTURES_*): "pictures_<key> = off". */
+    uint32_t pictures_off;
 } Pc5Settings;
 
 void pc5_settings_default(Pc5Settings *settings);

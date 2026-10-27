@@ -99,7 +99,7 @@ No. Games, saves and settings are in `/data/prospero-win`, not in the app's fold
 No. When a new version brings something games need, each game gets it the next time it starts.
 
 **How do I know a new version is out?**
-With **Settings › Updates › Check when PC5 opens** on (the default), PC5 asks GitHub when it opens and shows a notification when a newer version is out.
+With **Settings › System › Check when PC5 opens** on (the default), PC5 asks GitHub when it opens and shows a notification when a newer version is out.
 
 ## Problems
 

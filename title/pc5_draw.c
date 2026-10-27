@@ -60,12 +60,15 @@ static inline float rect_distance(float px, float py, float cx, float cy, float 
     return sqrtf(ox * ox + oy * oy) + (inside < 0 ? inside : 0) - r;
 }
 
-static void rect_shape(Pc5Canvas *c, float x, float y, float w, float h, float radius, float width, uint32_t color)
+/* A rounded rectangle, filled or (width > 0) its frame, in color; with color2 not color, the
+ * colour goes from color at its top left corner to color2 at its bottom right. */
+static void rect_shape(Pc5Canvas *c, float x, float y, float w, float h, float radius, float width, uint32_t color,
+                       uint32_t color2)
 {
     float hw = w / 2, hh = h / 2, cx = x + hw, cy = y + hh;
-    int x0, x1, y0, y1;
+    int x0, x1, y0, y1, graded = color2 != color;
 
-    if (w <= 0 || h <= 0 || !(color >> 24)) return;
+    if (w <= 0 || h <= 0 || (!(color >> 24) && !(color2 >> 24))) return;
     if (radius > hw) radius = hw;
     if (radius > hh) radius = hh;
     x0 = (int)floorf(x - 1); x1 = (int)ceilf(x + w + 1);
@@ -88,27 +91,35 @@ static void rect_shape(Pc5Canvas *c, float x, float y, float w, float h, float r
             if (fabsf(fy - cy) > hh - width - 1.5f) in0 = 1, in1 = 0;
         }
         for (int px = x0; px < x1; px++) {
+            uint32_t at = color;
+            if (graded) at = pc5_mix(color, color2, (int)(clampf(((px + 0.5f - x) / w * 0.45f + (fy - y) / h * 0.55f), 0, 1) * 255));
             if (px >= in0 && px <= in1) {
                 if (width > 0) { px = in1; continue; }
-                blend(&row[px], color, 256);
+                blend(&row[px], at, 256);
                 continue;
             }
             float d = rect_distance(px + 0.5f, fy, cx, cy, hw, hh, radius);
             if (width > 0) d = fabsf(d + width / 2) - width / 2;
             float cover = clampf(0.5f - d, 0, 1);
-            if (cover > 0) blend(&row[px], color, (int)(cover * 256));
+            if (cover > 0) blend(&row[px], at, (int)(cover * 256));
         }
     }
 }
 
 void pc5_round_rect(Pc5Canvas *c, float x, float y, float w, float h, float radius, uint32_t color)
 {
-    rect_shape(c, x, y, w, h, radius, 0, color);
+    rect_shape(c, x, y, w, h, radius, 0, color, color);
 }
 
 void pc5_round_frame(Pc5Canvas *c, float x, float y, float w, float h, float radius, float width, uint32_t color)
 {
-    rect_shape(c, x, y, w, h, radius, width, color);
+    rect_shape(c, x, y, w, h, radius, width, color, color);
+}
+
+void pc5_round_frame_graded(Pc5Canvas *c, float x, float y, float w, float h, float radius, float width, uint32_t from,
+                            uint32_t to)
+{
+    rect_shape(c, x, y, w, h, radius, width, from, to);
 }
 
 /* Any shape given by a distance function over a box. */
@@ -344,6 +355,88 @@ void pc5_draw_cover(Pc5Canvas *c, const Pc5Picture *picture, float x, float cy, 
                 cover = 0.24f * fade * fade * edge;
                 if (radius > 0) cover *= corner_cover(lx, ly, w, h, radius);
                 pixel = darken(sample(im, u, (int32_t)(ly * v_step * 65536.0f) - 32768), bright);
+                blend(&c->px[(size_t)py * (size_t)c->stride + (size_t)px], pixel, (int)(cover * (float)alpha));
+            }
+        }
+    }
+}
+
+/* pixel lightened towards white by amount (0-256). */
+static inline uint32_t lighten(uint32_t pixel, int amount)
+{
+    if (amount <= 0) return pixel;
+    uint32_t rb = pixel & 0xff00ffu, g = pixel & 0x00ff00u;
+    rb += ((0xff00ffu - rb) * (uint32_t)amount >> 8) & 0xff00ffu;
+    g += ((0x00ff00u - g) * (uint32_t)amount >> 8) & 0x00ff00u;
+    return (pixel & 0xff000000u) | rb | g;
+}
+
+void pc5_draw_card(Pc5Canvas *c, const Pc5Picture *picture, float x, float ground, float w, float h_left, float h_right,
+                   float radius, int bright, int alpha, int reflect, float fade, int gloss)
+{
+    const Pc5Image *im, *soft;
+    int x0, x1;
+
+    if (!picture->levels || w < 1 || alpha <= 0) return;
+    im = pick_level(picture, h_left > h_right ? h_left : h_right);
+    /* The reflection a level smaller: softer, as on a wet floor. */
+    soft = pick_level(picture, (h_left > h_right ? h_left : h_right) * 0.5f);
+    x0 = (int)floorf(x);
+    x1 = (int)ceilf(x + w);
+    if (x0 < 0) x0 = 0;
+    if (x1 > c->w) x1 = c->w;
+    for (int px = x0; px < x1; px++) {
+        float t = (px + 0.5f - x) / w;
+        if (t < 0 || t > 1) continue;
+        float edge = clampf(fminf(px + 1 - x, x + w - px), 0, 1);   /* the outer columns, partly covered */
+        float h = h_left + (h_right - h_left) * t, top = ground - h;
+        int32_t u = (int32_t)(t * im->w * 65536.0f) - 32768, su = (int32_t)(t * soft->w * 65536.0f) - 32768;
+        float v_step = im->h / h, sv_step = soft->h / h, lx = t * w;
+        /* The sheen: lightest at the top left corner, gone by the middle. */
+        float sheen_rows = gloss > 0 ? h * (0.5f - 0.6f * t) / 0.4f : 0;
+        int y0 = (int)floorf(top), y1 = (int)ceilf(ground + (reflect > 0 ? h * fade : 0));
+        int corner = radius > 0 && (lx < radius || lx > w - radius);
+        float inner_top = top + (corner ? radius : 0), inner_bottom = ground - (corner ? radius : 0);
+        int fast0 = (int)ceilf(fmaxf(inner_top, top + (sheen_rows > 0 ? sheen_rows : 0))), fast1 = (int)floorf(inner_bottom);
+        int fast = edge >= 1 && alpha >= 256 && fast1 > fast0;
+        if (y0 < 0) y0 = 0;
+        if (y1 > c->h) y1 = c->h;
+        if (fast) {
+            int a = fast0 < 0 ? 0 : fast0, b = fast1 > c->h ? c->h : fast1;
+            int32_t v = (int32_t)(((float)a + 0.5f - top) * v_step * 65536.0f) - 32768, dv = (int32_t)(v_step * 65536.0f);
+            uint32_t *dst = c->px + (size_t)a * (size_t)c->stride + (size_t)px;
+            for (int py = a; py < b; py++, v += dv, dst += c->stride) {
+                uint32_t pixel = darken(sample(im, u, v), bright);
+                if ((pixel >> 24) == 255) *dst = pixel;
+                else blend(dst, pixel, 256);
+            }
+        }
+        for (int py = y0; py < y1; py++) {
+            float fy = py + 0.5f;
+            uint32_t pixel;
+            float cover;
+            if (fast && py >= fast0 && py < fast1) { py = fast1 - 1; continue; }
+            if (fy < ground + 0.5f) {
+                float ly = fy - top;
+                if (ly < 0) ly = 0;
+                cover = clampf(fminf(fy + 0.5f - top, ground - (fy - 0.5f)), 0, 1) * edge;
+                if (radius > 0) cover *= corner_cover(lx, ly, w, h, radius);
+                if (cover <= 0) continue;
+                pixel = darken(sample(im, u, (int32_t)(ly * v_step * 65536.0f) - 32768), bright);
+                if (ly < sheen_rows) {
+                    float s = 1 - ly / sheen_rows;
+                    pixel = lighten(pixel, (int)((float)gloss * s * s));
+                }
+                blend(&c->px[(size_t)py * (size_t)c->stride + (size_t)px], pixel, (int)(cover * (float)alpha));
+            } else {
+                /* The reflection: mirrored on the floor, fading out over fade of its height. */
+                float below = fy - ground, left = 1 - below / (h * fade);
+                if (left <= 0) break;
+                float ly = h - below;
+                if (ly < 0) break;
+                cover = (float)reflect / 256 * left * edge;
+                if (radius > 0) cover *= corner_cover(lx, ly, w, h, radius);
+                pixel = darken(sample(soft, su, (int32_t)(ly * sv_step * 65536.0f) - 32768), bright);
                 blend(&c->px[(size_t)py * (size_t)c->stride + (size_t)px], pixel, (int)(cover * (float)alpha));
             }
         }

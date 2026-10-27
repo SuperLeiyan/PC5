@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: finding a game's cover online, from public sources only, with no
- * account and no key: Steam's store, GOG's catalogue and Wikipedia, in that
- * order, after the player's own picture when there is one. Each lookup is one
- * request, so the screen can move between them. */
+ * account and no key: Steam's store, GOG's catalogue, PCGamingWiki, Wikipedia
+ * and Wikidata, in that order, after the player's own picture when there is
+ * one. Each can be turned off (Settings › System › Picture sources). Each
+ * lookup is one request, so the screen can move between them. */
 #ifndef PC5_COVER_H
 #define PC5_COVER_H
 #include "pc5.h"
@@ -20,6 +21,20 @@ typedef struct Pc5Http {
     int (*download)(void *context, const char *url, const Pc5Sink *sink, int *status);
 } Pc5Http;
 
+/* The sources, as bits of Pc5CoverHint's off. */
+enum {
+    PC5_PICTURES_STEAM = 1u << 0,
+    PC5_PICTURES_GOG = 1u << 1,
+    PC5_PICTURES_PCGAMINGWIKI = 1u << 2,
+    PC5_PICTURES_WIKIPEDIA = 1u << 3,
+    PC5_PICTURES_WIKIDATA = 1u << 4,
+    PC5_PICTURE_SOURCES = 5
+};
+/* A source's name ("Steam", "GOG", "PCGamingWiki", "Wikipedia", "Wikidata") and its key in
+ * the settings file ("steam", ...), by its index (its bit's). */
+const char *pc5_picture_source_name(int index);
+const char *pc5_picture_source_key(int index);
+
 /* What PC5 knows about the game before asking. */
 typedef struct Pc5CoverHint {
     char folder[PC5_NAME];      /* the folder's name, as on the USB drive */
@@ -30,12 +45,13 @@ typedef struct Pc5CoverHint {
      * with picture_only nothing is asked online. "" for none. */
     char picture[PC5_PATH];
     int picture_only;
+    uint32_t off;               /* PC5_PICTURES_* not to ask */
 } Pc5CoverHint;
 
 enum { PC5_COVER_CHOICES = 12 };
 
 typedef struct Pc5CoverChoice {
-    char source[16];            /* "Steam", "GOG", "Wikipedia", or "your picture" */
+    char source[16];            /* a source's name (pc5_picture_source_name), or "your picture" */
     char title[128];            /* the game's name there */
     char url[PC5_PATH];         /* its cover picture: https://..., or the player's file */
     char background[PC5_PATH];  /* the game's wide background picture there (https://...), or "" */
@@ -50,6 +66,8 @@ typedef struct Pc5CoverSearch {
     char queries[3][PC5_NAME];
     int query_count, step, requests, answered;
     int answered_stores;          /* of those, Steam's and GOG's (which have backgrounds) */
+    char wikidata[5][16];         /* Wikidata's items for the first query, for its next step */
+    int wikidata_count;
     Pc5CoverHint hint;
 } Pc5CoverSearch;
 

@@ -10,6 +10,7 @@
 #include "pc5_library.h"
 #include "pc5_ui.h"
 #include "pc5_game.h"
+#include "pc5_backgrounds.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -279,6 +280,26 @@ int main(int argc, char **argv)
     settle(ui);
     pc5_ui_destroy(ui);
 
+    /* A game with a background of its own (Steam's library hero), mirrored on the floor. */
+    {
+        Pc5Library library;
+        Pc5Buf data = { 0 };
+        Pc5Image picture = { 0 }, background = { 0 };
+        pc5_library_load(root, &library);
+        fmt(file, sizeof(file), "%s/wide.png", covers);
+        if (library.count && !pc5_read_file(file, &data, 1u << 24) && !pc5_image_decode(data.data, data.len, &picture) &&
+            !pc5_background_compose(&picture, &background) &&
+            !pc5_background_path(root, library.games[0].prefix, file, sizeof(file)))
+            pc5_cover_save(file, &background, 0);
+        pc5_buf_free(&data);
+        pc5_image_free(&picture);
+        pc5_image_free(&background);
+    }
+    ui = open_ui(root, 0);
+    settle(ui);
+    save("04b-library-background");
+    pc5_ui_destroy(ui);
+
     make_library(root, 40, 1);
     ui = open_ui(root, 1);   /* online: GitHub has a newer PC5 for the Updates page */
     for (int i = 0; i < 20; i++) { step(ui, PC5_KEY_RIGHT, 1); step(ui, 0, 3); }
@@ -365,7 +386,6 @@ int main(int argc, char **argv)
     step(ui, PC5_KEY_DOWN, 1);
     settle(ui);
     save("07b-settings-in-games");
-    step(ui, PC5_KEY_DOWN, 1);
     step(ui, PC5_KEY_LEFT, 1);             /* triggers: rumble + resistance */
     step(ui, PC5_KEY_DOWN, 1);
     step(ui, PC5_KEY_LEFT, 1);             /* trigger rumble: 75 % */
@@ -382,18 +402,23 @@ int main(int argc, char **argv)
     settle(ui);
     save("07e-settings-overlay");
     step(ui, PC5_KEY_BACK, 1);
-    step(ui, PC5_KEY_DOWN, 1);             /* Updates */
+    step(ui, PC5_KEY_DOWN, 1);             /* System */
     step(ui, PC5_KEY_ACCEPT, 1);
     settle(ui);
-    save("07c-settings-updates");
-    step(ui, PC5_KEY_BACK, 1);
+    save("07c-settings-system");
     step(ui, PC5_KEY_DOWN, 1);
+    step(ui, PC5_KEY_DOWN, 1);             /* Picture sources */
+    step(ui, PC5_KEY_ACCEPT, 1);
+    settle(ui);
+    save("07f-settings-picture-sources");
+    step(ui, PC5_KEY_BACK, 1);
+    step(ui, PC5_KEY_BACK, 1);
     step(ui, PC5_KEY_DOWN, 1);             /* About */
     step(ui, PC5_KEY_ACCEPT, 1);
     settle(ui);
     save("08-about");
     step(ui, PC5_KEY_BACK, 1);
-    for (int i = 0; i < 5; i++) step(ui, PC5_KEY_UP, 1);
+    for (int i = 0; i < 4; i++) step(ui, PC5_KEY_UP, 1);
     step(ui, PC5_KEY_ACCEPT, 1);           /* Uninstall game */
     settle(ui);
     for (int i = 0; i < 3; i++) { step(ui, PC5_KEY_DOWN, 1); step(ui, 0, 2); }

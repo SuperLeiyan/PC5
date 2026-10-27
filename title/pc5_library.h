@@ -83,6 +83,10 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
  * writes it for the game's own program again). 1 when it was written, 0 when there was
  * none, -1 when it was refused (why in error): a program outside the game's folder or not
  * there, or a fourth hand-off in a row. */
+/* A Java game made with jpackage: its app folder as Windows names it (C:\Games\<folder>\app
+ * beside the program) for WINEPATH, so its program doesn't start itself again to put it in
+ * PATH; 0, or -1 (out "") when the game's program isn't such a one. */
+int pc5_game_winepath(const char *root, const char *id, char *out, size_t size);
 int pc5_handoff_env(const char *root, const char *id, char *file, size_t file_size, char *dir, size_t dir_size);
 int pc5_handoff_take(const char *root, const char *id, char *error, size_t size);
 /* The program a PC5 game starts, on the console: its program, or the one its batch file

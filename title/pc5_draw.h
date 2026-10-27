@@ -52,6 +52,9 @@ void pc5_clear(Pc5Canvas *c, uint32_t color);
 /* A rectangle with rounded corners (radius 0: square), soft-edged. */
 void pc5_round_rect(Pc5Canvas *c, float x, float y, float w, float h, float radius, uint32_t color);
 void pc5_round_frame(Pc5Canvas *c, float x, float y, float w, float h, float radius, float width, uint32_t color);
+/* The same frame, its colour going from from (top left) to to (bottom right). */
+void pc5_round_frame_graded(Pc5Canvas *c, float x, float y, float w, float h, float radius, float width, uint32_t from,
+                            uint32_t to);
 void pc5_circle(Pc5Canvas *c, float cx, float cy, float r, uint32_t color);
 void pc5_ring(Pc5Canvas *c, float cx, float cy, float r, float width, uint32_t color);
 void pc5_line(Pc5Canvas *c, float x0, float y0, float x1, float y1, float width, uint32_t color);
@@ -78,6 +81,13 @@ void pc5_picture_free(Pc5Picture *picture);
  * reflect: also its mirror image under it, fading out over reflect pixels. */
 void pc5_draw_cover(Pc5Canvas *c, const Pc5Picture *picture, float x, float cy, float w, float h_left, float h_right,
                     float radius, int bright, int alpha, float reflect);
+/* A cover standing on the floor (its bottom at y = ground): x..x+w across, its left edge
+ * h_left tall and its right edge h_right tall (turned a little about its upright axis).
+ * Corners rounded by radius, colours by bright (0-256), the whole by alpha (0-256); a sheen
+ * from its top left corner, gloss (0-256) at most; and its mirror image on the floor under
+ * it, reflect (0-256) at most, fading out over fade of its height. */
+void pc5_draw_card(Pc5Canvas *c, const Pc5Picture *picture, float x, float ground, float w, float h_left, float h_right,
+                   float radius, int bright, int alpha, int reflect, float fade, int gloss);
 /* A picture scaled into a rectangle (alpha 0-256). */
 void pc5_draw_image(Pc5Canvas *c, const Pc5Image *image, float x, float y, float w, float h, int alpha);
 

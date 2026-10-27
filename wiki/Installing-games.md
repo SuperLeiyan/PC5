@@ -130,7 +130,7 @@ Some games start from a batch file (`.bat` or `.cmd`) that starts the game's pro
 
 - A batch file that starts one of the game's programs is listed with the programs, with that program's bits and graphics. When the game's folder has one such batch file, PC5 picks it, unless its name says it is another way to start (safe mode, windowed, a benchmark).
 - PC5 follows `cd`, `pushd`, `set` and `start` (with `/d`), and fills in `%~dp0`, `%CD%` and the variables the batch file sets. Everything else in it (copying files, registry changes, messages) is left out.
-- PC5 reads the batch file each time the game starts, so a change to it takes effect at the next start.
+- PC5 reads the batch file each time the game starts, so a change to it takes effect at the next start. The game runs as 32-bit or 64-bit as the program it starts is.
 - Don't turn the batch file into an `.exe` with a converter: such a program starts the batch file as a second program, which the console can't run.
 
 ## Updating a game
@@ -194,9 +194,12 @@ PC5 handles every game the same way. It reads the game's program to see whether 
 | Direct3D 12 | VKD3D-Proton 3.0.1 |
 | Vulkan | RADV directly |
 | OpenGL | Mesa Zink |
+| Java (a game that carries its own Java runtime) | Mesa Zink, as OpenGL |
 | DirectDraw (and its Direct3D 7 and older) | Wine's own Direct3D, on Mesa Zink |
 | Plain Windows drawing | Wine itself |
 | .NET Framework | Wine Mono 11.3.0 |
+
+A Java game is one that carries its own Java runtime beside its program (a `runtime` or `jre` folder with `bin/server/jvm.dll` or `bin/client/jvm.dll`): its libraries (LWJGL, libGDX, JOGL) draw with OpenGL. A Java game made with jpackage (its program beside an `app` folder with the program's `.cfg`) runs in one program, as the console needs.
 
 Games that write text with Windows' fonts get Liberation for Arial, Times New Roman and Courier New (made to take the same space), and Droid Sans Fallback for Windows' Chinese, Japanese and Korean fonts.
 

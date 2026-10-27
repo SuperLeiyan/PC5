@@ -176,25 +176,54 @@ static pthread_t sound_thread;
 static int sound_started, sound_user = -1;
 static atomic_int sound_stop;
 
+/* The console's Controller Speaker Volume for the player, which libSceUserService holds. Its
+ * arguments aren't published: asked first with a pointer where a player would go (as a call
+ * taking only the pointer reads it, and one taking the player first refuses), then, refused,
+ * with the player and the pointer. */
+int sceUserServiceGetPadSpeakerVolume(intptr_t first, int32_t *second);
+
+/* The sound's level (sceAudioOut's, AUDIO_VOLUME_0DB the most) from that setting: 0 to 10, 0
+ * to 100 or 0 to 0x8000, as its size says. -1 when the console doesn't say (the most, as
+ * before 1.8.2); what it said in *raw for the log. */
+static int pad_speaker_level(int32_t user, char *raw, size_t size)
+{
+    enum { UNSET = -0x5a5a };
+    int32_t a = UNSET, b = UNSET, value;
+    int first, second = 0;
+
+    first = sceUserServiceGetPadSpeakerVolume((intptr_t)&a, &b);
+    value = a != UNSET ? a : b;
+    if (value == UNSET && first < 0) {
+        second = sceUserServiceGetPadSpeakerVolume((intptr_t)user, &b);
+        if (second >= 0) value = b;
+    }
+    snprintf(raw, size, "rc=%#x/%#x value=%d", (unsigned)first, (unsigned)second, value == UNSET ? -1 : value);
+    if (value == UNSET || value < 0) return -1;
+    if (value <= 10) return AUDIO_VOLUME_0DB * value / 10;
+    if (value <= 100) return AUDIO_VOLUME_0DB * value / 100;
+    return value <= AUDIO_VOLUME_0DB ? value : AUDIO_VOLUME_0DB;
+}
+
 static void *play_sound(void *argument)
 {
     PwAudioPs5Ops ops;
     int16_t grain[AUDIO_GRAIN];
-    int init = -1, port = -1, volume = -1, output = 0;
+    char line[300], raw[96];
+    int init = -1, port = -1, volume = -1, output = 0, level = pad_speaker_level(sound_user, raw, sizeof(raw));
     size_t played = 0;
-    char line[200];
     (void)argument;
 
-    if (pw_audio_ps5_platform_ops(&ops) == PW_OK && (init = ops.init()) >= 0) {
+    if (level < 0) level = AUDIO_VOLUME_0DB;
+    if (level > 0 && pw_audio_ps5_platform_ops(&ops) == PW_OK && (init = ops.init()) >= 0) {
         port = ops.open(sound_user, AUDIO_PORT_PADSPK, 0, AUDIO_GRAIN, PC5_SOUND_RATE, AUDIO_FORMAT_S16_MONO);
         if (port >= 0) {
             int32_t volumes[8];
-            for (int i = 0; i < 8; i++) volumes[i] = AUDIO_VOLUME_0DB;
+            for (int i = 0; i < 8; i++) volumes[i] = level;
             volume = ops.volume(port, AUDIO_VOLUME_FLAG_CH0, volumes);
         }
     }
-    snprintf(line, sizeof(line), "PC5 startup sound user=%d init=%d port=%d volume=%d frames=%zu", sound_user, init, port,
-             volume, startup_sound.frames);
+    snprintf(line, sizeof(line), "PC5 startup sound user=%d init=%d port=%d volume=%d level=%d speaker_volume(%s) frames=%zu",
+             sound_user, init, port, volume, level, raw, startup_sound.frames);
     plain_log(line);
     if (port >= 0) {
         while (played < startup_sound.frames && !atomic_load(&sound_stop)) {

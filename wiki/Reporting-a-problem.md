@@ -15,7 +15,7 @@ Please don't report problems in ProsperoStore comments. Comments can't hold a lo
 
 ## What to include
 
-1. **The PC5 version**, from **Settings › About PC5** (press **Options** in the library). For example `1.8.1`.
+1. **The PC5 version**, from **Settings › About PC5** (press **Options** in the library). For example `1.8.2`.
 2. **The game**: its name, and the program PC5 starts for it (shown in the game's menu under **Manage › Change program**).
 3. **What happened**: what you did, where it stopped, what was on screen, and whether it happens every time.
 4. **How the game is set up**, if you changed anything: its controller mode, frame generation, and any [launch options](Launch-options).
@@ -33,7 +33,7 @@ While a game runs, its log is written as `session-N.log`, and put on the console
 
 - A session that **went wrong** is kept as `issue-<when>_<game>.zip`: the game crashed, closed within a minute without showing anything, or didn't close when asked and had to be ended.
 - Each game's **newest session** is kept as `log-<when>_<game>.zip` even when nothing went wrong, so a problem without a crash (no sound, a wrong picture, a freeze) still has its log. Playing that game again replaces it.
-- PC5's own sessions that went well are deleted, unless **Settings › Keep all logs** is **On** (then every session is kept).
+- PC5's own sessions that went well are deleted, unless **Settings › System › Keep all logs** is **On** (then every session is kept).
 - Nothing in `logs/` is kept longer than **seven days**.
 
 `<when>` is the date and time the session began, on the console's clock (`2026-10-25_14-17`), and `<game>` is the game's id (`neon-drift`, for example; `launcher` for PC5's own sessions).

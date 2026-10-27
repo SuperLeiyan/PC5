@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-/* PC5: covers from Steam, GOG and Wikipedia (pc5_cover.h), and the games'
- * backgrounds from the first two.
+/* PC5: covers from Steam, GOG, PCGamingWiki, Wikipedia and Wikidata (pc5_cover.h), and
+ * the games' backgrounds from Steam and GOG.
  *
  *   Steam      store.steampowered.com/api/storesearch: the store's own search,
  *              then the app's 600x900 library picture on Steam's image server
@@ -9,10 +9,17 @@
  *              the library's hero picture, found the same way
  *   GOG        catalog.gog.com/v1/catalog: each product's coverVertical, and its
  *              galaxyBackgroundImage for the background
+ *   PCGamingWiki  www.pcgamingwiki.com/w/api.php: the pages found, with their
+ *              text, whose infobox names the cover (fetched through
+ *              Special:FilePath) and the game's Steam app (its library hero,
+ *              the background)
  *   Wikipedia  en.wikipedia.org/w/api.php: the article's lead picture
  *              (pageimages, which for a game is its box art)
+ *   Wikidata   www.wikidata.org/w/api.php: the items found by name, then their
+ *              Steam application ID (P1733): that app's pictures on Steam's
+ *              image server, for games Steam's own search doesn't find by that name
  *
- * None of them needs an account or a key. */
+ * None of them needs an account or a key; each sees PC5's own User-Agent. */
 #include "pc5_cover.h"
 #include "pc5_image.h"
 #include "pc5_json.h"
@@ -24,7 +31,20 @@
 
 #define STEAM_IMAGES "https://shared.akamai.steamstatic.com/store_item_assets/"
 
-enum { ANSWER_MAX = 2 * 1024 * 1024, PICTURE_MAX = 16 * 1024 * 1024, MIN_SIMILARITY = 50 };
+enum { ANSWER_MAX = 2 * 1024 * 1024, PICTURE_MAX = 16 * 1024 * 1024, MIN_SIMILARITY = 50, WIKITEXT = 16 * 1024 };
+
+static const char *const source_names[PC5_PICTURE_SOURCES] = { "Steam", "GOG", "PCGamingWiki", "Wikipedia", "Wikidata" };
+static const char *const source_keys[PC5_PICTURE_SOURCES] = { "steam", "gog", "pcgamingwiki", "wikipedia", "wikidata" };
+
+const char *pc5_picture_source_name(int index)
+{
+    return index >= 0 && index < PC5_PICTURE_SOURCES ? source_names[index] : "";
+}
+
+const char *pc5_picture_source_key(int index)
+{
+    return index >= 0 && index < PC5_PICTURE_SOURCES ? source_keys[index] : "";
+}
 
 int pc5_url_encode(const char *text, char *out, size_t size)
 {
@@ -241,20 +261,29 @@ int pc5_cover_queries(const Pc5CoverHint *hint, char queries[3][PC5_NAME])
 
 /* ---- the search ------------------------------------------------------------------- */
 
-typedef enum Plan { PLAN_STEAM_APP, PLAN_STEAM, PLAN_GOG, PLAN_WIKIPEDIA, PLAN_DONE } Plan;
+typedef enum Plan {
+    PLAN_STEAM_APP, PLAN_STEAM, PLAN_GOG, PLAN_PCGAMINGWIKI, PLAN_WIKIPEDIA, PLAN_WIKIDATA, PLAN_WIKIDATA_APPS, PLAN_DONE
+} Plan;
 
-/* What step n does: the given app first, Steam for the first two queries,
- * GOG for the first, Wikipedia for the first. */
+/* What step n does: the given app first, Steam for the first two queries, GOG,
+ * PCGamingWiki, Wikipedia and Wikidata (two steps) for the first; the sources turned
+ * off left out. */
 static Plan plan(const Pc5CoverSearch *search, int step, int *query)
 {
-    Plan order[6];
-    int queries[6], n = 0;
+    Plan order[10];
+    int queries[10], n = 0;
+    uint32_t off = search->hint.off;
 
-    if (search->hint.steam_appid) { order[n] = PLAN_STEAM_APP; queries[n++] = 0; }
-    if (search->query_count > 0) { order[n] = PLAN_STEAM; queries[n++] = 0; }
-    if (search->query_count > 1) { order[n] = PLAN_STEAM; queries[n++] = 1; }
-    if (search->query_count > 0) { order[n] = PLAN_GOG; queries[n++] = 0; }
-    if (search->query_count > 0) { order[n] = PLAN_WIKIPEDIA; queries[n++] = 0; }
+    if (search->hint.steam_appid && !(off & PC5_PICTURES_STEAM)) { order[n] = PLAN_STEAM_APP; queries[n++] = 0; }
+    if (search->query_count > 0 && !(off & PC5_PICTURES_STEAM)) { order[n] = PLAN_STEAM; queries[n++] = 0; }
+    if (search->query_count > 1 && !(off & PC5_PICTURES_STEAM)) { order[n] = PLAN_STEAM; queries[n++] = 1; }
+    if (search->query_count > 0 && !(off & PC5_PICTURES_GOG)) { order[n] = PLAN_GOG; queries[n++] = 0; }
+    if (search->query_count > 0 && !(off & PC5_PICTURES_PCGAMINGWIKI)) { order[n] = PLAN_PCGAMINGWIKI; queries[n++] = 0; }
+    if (search->query_count > 0 && !(off & PC5_PICTURES_WIKIPEDIA)) { order[n] = PLAN_WIKIPEDIA; queries[n++] = 0; }
+    if (search->query_count > 0 && !(off & PC5_PICTURES_WIKIDATA)) {
+        order[n] = PLAN_WIKIDATA; queries[n++] = 0;
+        order[n] = PLAN_WIKIDATA_APPS; queries[n++] = 0;
+    }
     if (step >= n) return PLAN_DONE;
     *query = queries[step];
     return order[step];
@@ -381,7 +410,7 @@ static void steam_search(Pc5CoverSearch *search, const Pc5Http *http, const char
             if (similarity < MIN_SIMILARITY) continue;
             snprintf(picture, sizeof(picture), STEAM_IMAGES "steam/apps/%u/library_600x900_2x.jpg", (unsigned)id);
             steam_hero(id, hero, sizeof(hero));
-            add_choice(search, "Steam", name, picture, hero, id, similarity + 30 - (int)i * 2);
+            add_choice(search, source_names[0], name, picture, hero, id, similarity + 30 - (int)i * 2);
         }
         pc5_json_free(&json);
     }
@@ -411,7 +440,7 @@ static void gog_search(Pc5CoverSearch *search, const Pc5Http *http, const char *
             if (similarity < MIN_SIMILARITY) continue;
             if (pc5_json_text(&json, pc5_json_get(&json, product, "galaxyBackgroundImage"), background, sizeof(background)))
                 background[0] = 0;
-            add_choice(search, "GOG", name, picture, background, 0, similarity + 20 - (int)i * 2);
+            add_choice(search, source_names[1], name, picture, background, 0, similarity + 20 - (int)i * 2);
         }
         pc5_json_free(&json);
     }
@@ -444,7 +473,159 @@ static void wikipedia_search(Pc5CoverSearch *search, const Pc5Http *http, const 
             int similarity = best_similarity(search, name);
             if (similarity < MIN_SIMILARITY) continue;
             int rank = (int)pc5_json_number(&json, pc5_json_get(&json, page, "index"), 3);
-            add_choice(search, "Wikipedia", name, picture, NULL, 0, similarity - rank * 2);
+            add_choice(search, source_names[3], name, picture, NULL, 0, similarity - rank * 2);
+        }
+        pc5_json_free(&json);
+    }
+    pc5_buf_free(&answer);
+}
+
+/* A parameter of PCGamingWiki's {{Infobox game}} in a page's text: "|name = value" (any
+ * spaces), its value to the end of its line, trimmed. 0, or -1 when it isn't there or is
+ * empty. */
+static int infobox_value(const char *text, const char *name, char *out, size_t size)
+{
+    const char *box = strstr(text, "{{Infobox game");
+    size_t n = strlen(name);
+
+    out[0] = 0;
+    if (!box) return -1;
+    for (const char *p = box; (p = strchr(p, '|')); p++) {
+        const char *q = p + 1, *end;
+        while (*q == ' ' || *q == '\t') q++;
+        if (strncmp(q, name, n)) continue;
+        q += n;
+        while (*q == ' ' || *q == '\t') q++;
+        if (*q != '=') continue;
+        for (q++; *q == ' ' || *q == '\t'; q++) {
+        }
+        end = q;
+        while (*end && *end != '\n' && *end != '\r' && *end != '|' && strncmp(end, "}}", 2)) end++;
+        while (end > q && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if (end == q || (size_t)(end - q) >= size) return -1;
+        memcpy(out, q, (size_t)(end - q));
+        out[end - q] = 0;
+        return 0;
+    }
+    return -1;
+}
+
+static void pcgamingwiki_search(Pc5CoverSearch *search, const Pc5Http *http, const char *query)
+{
+    char term[3 * PC5_NAME + 1], url[768], name[128], file[256], encoded[3 * 256 + 1], picture[1024], hero[256],
+         appid_text[64];
+    char *text = pc5_alloc(WIKITEXT);
+    Pc5Buf answer = { 0 };
+    Pc5Json json;
+
+    if (!text) return;
+    if (pc5_url_encode(query, term, sizeof(term)) ||
+        pc5_format(url, sizeof(url),
+                   "https://www.pcgamingwiki.com/w/api.php?action=query&format=json&formatversion=2&generator=search"
+                   "&gsrnamespace=0&gsrlimit=3&gsrsearch=%s&prop=revisions&rvprop=content&rvslots=main",
+                   term)) {
+        pc5_free(text);
+        return;
+    }
+    if (!ask(http, url, &json, &answer)) {
+        search->answered++;
+        uint32_t pages = pc5_json_get(&json, pc5_json_get(&json, 0, "query"), "pages");
+        for (uint32_t i = 0; i < 3; i++) {
+            uint32_t page = pc5_json_item(&json, pages, i);
+            if (!page) break;
+            uint32_t revision = pc5_json_item(&json, pc5_json_get(&json, page, "revisions"), 0);
+            uint32_t content = pc5_json_get(&json, pc5_json_get(&json, pc5_json_get(&json, revision, "slots"), "main"),
+                                            "content");
+            if (pc5_json_text(&json, pc5_json_get(&json, page, "title"), name, sizeof(name)) ||
+                pc5_json_text(&json, content, text, WIKITEXT) || infobox_value(text, "cover", file, sizeof(file)))
+                continue;
+            int similarity = best_similarity(search, name);
+            if (similarity < MIN_SIMILARITY) continue;
+            const char *bare = !strncmp(file, "File:", 5) ? file + 5 : file;
+            if (pc5_url_encode(bare, encoded, sizeof(encoded)) ||
+                pc5_format(picture, sizeof(picture), "https://www.pcgamingwiki.com/wiki/Special:FilePath/%s", encoded))
+                continue;
+            uint32_t appid = 0;
+            if (!infobox_value(text, "steam appid", appid_text, sizeof(appid_text)))
+                appid = (uint32_t)strtoul(appid_text, NULL, 10);
+            if (appid) steam_hero(appid, hero, sizeof(hero));
+            int rank = (int)pc5_json_number(&json, pc5_json_get(&json, page, "index"), 3);
+            add_choice(search, source_names[2], name, picture, appid ? hero : NULL, appid, similarity + 10 - rank * 2);
+        }
+        pc5_json_free(&json);
+    }
+    pc5_buf_free(&answer);
+    pc5_free(text);
+}
+
+/* Wikidata, first step: the items its search finds for the name, kept for the next. */
+static void wikidata_find(Pc5CoverSearch *search, const Pc5Http *http, const char *query)
+{
+    char term[3 * PC5_NAME + 1], url[768], id[16];
+    Pc5Buf answer = { 0 };
+    Pc5Json json;
+
+    search->wikidata_count = 0;
+    if (pc5_url_encode(query, term, sizeof(term)) ||
+        pc5_format(url, sizeof(url),
+                   "https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&uselang=en"
+                   "&type=item&limit=5&search=%s",
+                   term))
+        return;
+    if (!ask(http, url, &json, &answer)) {
+        search->answered++;
+        uint32_t found = pc5_json_get(&json, 0, "search");
+        for (uint32_t i = 0; i < 5 && search->wikidata_count < 5; i++) {
+            uint32_t item = pc5_json_item(&json, found, i);
+            if (!item) break;
+            if (pc5_json_text(&json, pc5_json_get(&json, item, "id"), id, sizeof(id)) || id[0] != 'Q' || !id[1]) continue;
+            int digits = 1;
+            for (const char *p = id + 1; *p; p++) digits &= *p >= '0' && *p <= '9';
+            if (digits) pc5_copy(search->wikidata[search->wikidata_count++], sizeof(search->wikidata[0]), id);
+        }
+        pc5_json_free(&json);
+    }
+    pc5_buf_free(&answer);
+}
+
+/* Wikidata, second step: those items' names and Steam application IDs (P1733). */
+static void wikidata_apps(Pc5CoverSearch *search, const Pc5Http *http)
+{
+    char ids[5 * 20], url[768], name[128], appid_text[32], picture[256], hero[256];
+    Pc5Buf answer = { 0 };
+    Pc5Json json;
+    size_t n = 0;
+
+    if (!search->wikidata_count) {
+        search->requests--;   /* nothing to ask */
+        return;
+    }
+    ids[0] = 0;
+    for (int i = 0; i < search->wikidata_count; i++)
+        n += (size_t)snprintf(ids + n, sizeof(ids) - n, "%s%s", i ? "%7C" : "", search->wikidata[i]);
+    if (pc5_format(url, sizeof(url),
+                   "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&props=claims%%7Clabels"
+                   "&languages=en&ids=%s",
+                   ids))
+        return;
+    if (!ask(http, url, &json, &answer)) {
+        search->answered++;
+        uint32_t entities = pc5_json_get(&json, 0, "entities");
+        for (int i = 0; i < search->wikidata_count; i++) {
+            uint32_t entity = pc5_json_get(&json, entities, search->wikidata[i]);
+            uint32_t label = pc5_json_get(&json, pc5_json_get(&json, pc5_json_get(&json, entity, "labels"), "en"), "value");
+            uint32_t claim = pc5_json_item(&json, pc5_json_get(&json, pc5_json_get(&json, entity, "claims"), "P1733"), 0);
+            uint32_t value = pc5_json_get(&json, pc5_json_get(&json, pc5_json_get(&json, claim, "mainsnak"), "datavalue"),
+                                          "value");
+            if (!entity || pc5_json_text(&json, label, name, sizeof(name)) ||
+                pc5_json_text(&json, value, appid_text, sizeof(appid_text)))
+                continue;
+            uint32_t appid = (uint32_t)strtoul(appid_text, NULL, 10);
+            int similarity = best_similarity(search, name);
+            if (!appid || similarity < MIN_SIMILARITY) continue;
+            snprintf(picture, sizeof(picture), STEAM_IMAGES "steam/apps/%u/library_600x900_2x.jpg", (unsigned)appid);
+            steam_hero(appid, hero, sizeof(hero));
+            add_choice(search, source_names[4], name, picture, hero, appid, similarity + 25 - i * 2);
         }
         pc5_json_free(&json);
     }
@@ -474,13 +655,16 @@ int pc5_cover_search_step(Pc5CoverSearch *search, const Pc5Http *http)
         snprintf(picture, sizeof(picture), STEAM_IMAGES "steam/apps/%u/library_600x900_2x.jpg",
                  (unsigned)search->hint.steam_appid);
         steam_hero(search->hint.steam_appid, hero, sizeof(hero));
-        add_choice(search, "Steam", search->hint.folder, picture, hero, search->hint.steam_appid, 1000);
+        add_choice(search, source_names[0], search->hint.folder, picture, hero, search->hint.steam_appid, 1000);
         search->requests--;   /* nothing was asked */
         break;
     }
     case PLAN_STEAM: steam_search(search, http, search->queries[query]); break;
     case PLAN_GOG: gog_search(search, http, search->queries[query]); break;
+    case PLAN_PCGAMINGWIKI: pcgamingwiki_search(search, http, search->queries[query]); break;
     case PLAN_WIKIPEDIA: wikipedia_search(search, http, search->queries[query]); break;
+    case PLAN_WIKIDATA: wikidata_find(search, http, search->queries[query]); break;
+    case PLAN_WIKIDATA_APPS: wikidata_apps(search, http); break;
     default: break;
     }
     search->step++;

@@ -16,7 +16,7 @@ The first time, the library is empty. Press **Options** and choose **Install gam
 
 ### From PC5 (1.7.0 and newer)
 
-When PC5 opens and a newer release is out on GitHub, it asks: **Update now** or **Later**. Later leaves it for **Settings › Updates › Update now**.
+When PC5 opens and a newer release is out on GitHub, it asks: **Update now** or **Later**. Later leaves it for **Settings › System › Update now**.
 
 1. Choose **Update now**. PC5 downloads the new `PPSA11018.zip` from the release, unpacks it and checks every file, then puts the new files in place of its own. A progress bar shows the download and the unpacking; **○** stops it until the files are put in place, and PC5 is then as it was.
 2. When it says the new version is installed, press **✕** (**Restart PC5**). PC5 starts again as the new version.
@@ -38,10 +38,10 @@ When a new version brings something games need (for example new video and sound 
 
 ## Checking for a newer version
 
-PC5 can ask GitHub whether a newer release is out. Open **Settings › Updates**.
+PC5 can ask GitHub whether a newer release is out. Open **Settings › System**.
 
-![The Updates page of Settings](images/settings-updates.png)
-*Settings › Updates: the check when PC5 opens, and the result of the last check.*
+![The System page of Settings](images/settings-system.png)
+*Settings › System: the startup sound, the logs, the picture sources and the update rows.*
 
 | Row | What it does |
 | --- | --- |
@@ -53,7 +53,7 @@ The answer is one of these:
 
 | Message | Meaning |
 | --- | --- |
-| You have the newest PC5 (1.8.1) | No newer release is published. |
+| You have the newest PC5 (1.8.2) | No newer release is published. |
 | PC5 1.x.y is available on GitHub | A newer release is out. When PC5 opens it asks whether to update; after Check now, the console shows a notification, once for each new release. |
 | GitHub didn't answer: is the console online? | The check failed. Check the console's internet connection and try again. |
 | Not checked yet | PC5 hasn't asked since it was installed. |

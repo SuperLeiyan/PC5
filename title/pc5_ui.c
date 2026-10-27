@@ -24,7 +24,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-enum { W = 1920, H = 1080, COVER_W = 400, COVER_H = 600, FLOOR_Y = 712, MARGIN = 72 };
+enum { W = 1920, H = 1080, FLOOR_Y = 750, MARGIN = 72 };
 
 #define C_TEXT 0xffffffffu
 #define C_DIM 0xff9aa3afu
@@ -72,23 +72,28 @@ typedef struct QueueGame {
     char id[PC5_ID], error[PC5_ERROR];
 } QueueGame;
 
-/* Settings: its rows, on four pages. */
+/* Settings: its rows, on five pages. */
 typedef enum SettingRow {
-    SR_INSTALL, SR_UNINSTALL, SR_GAMES, SR_OVERLAY, SR_UPDATES, SR_KEEP_LOGS, SR_ABOUT,
+    SR_INSTALL, SR_UNINSTALL, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
-    SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_STARTUP_SOUND, SR_UPDATE_NOW
+    SR_STARTUP_SOUND, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
+    SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
-enum { PAGE_ROWS = 7, PAGE_GAMES = 1, PAGE_UPDATES = 2, PAGE_OVERLAY = 3 };
-static const char *const page_titles[4] = { "Settings", "In games", "Updates", "Overlay" };
+enum { PAGE_ROWS = 7, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, SETTING_PAGES = 5 };
+static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources" };
+/* Where each page's row is on the page that opens it (Back goes there). */
+enum { ROW_GAMES = 2, ROW_OVERLAY = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5, ROW_PICTURES = 2, ROW_CHECK_NOW = 4 };
 
 /* A page's rows: the triggers' strengths only while they are used, Update now only
  * while there is a newer PC5 it can install (offer_update). */
 static int page_rows(const Pc5Settings *set, int page, int offer_update, SettingRow rows[PAGE_ROWS])
 {
     int n = 0;
-    if (page == PAGE_OVERLAY) {
+    if (page == PAGE_PICTURES) {
+        for (int i = 0; i < PC5_PICTURE_SOURCES; i++) rows[n++] = (SettingRow)(SR_SOURCE + i);
+    } else if (page == PAGE_OVERLAY) {
         rows[n++] = SR_FPS;
         rows[n++] = SR_FRAME_TIME;
         rows[n++] = SR_CPU_USAGE;
@@ -103,8 +108,10 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         if (set->triggers == PC5_TRIGGERS_RUMBLE || set->triggers == PC5_TRIGGERS_BOTH) rows[n++] = SR_TRIGGER_RUMBLE;
         if (set->triggers == PC5_TRIGGERS_RESISTANCE || set->triggers == PC5_TRIGGERS_BOTH)
             rows[n++] = SR_TRIGGER_RESISTANCE;
+    } else if (page == PAGE_SYSTEM) {
         rows[n++] = SR_STARTUP_SOUND;
-    } else if (page == PAGE_UPDATES) {
+        rows[n++] = SR_KEEP_LOGS;
+        rows[n++] = SR_PICTURES;
         rows[n++] = SR_CHECK_ON_OPEN;
         rows[n++] = SR_CHECK_NOW;
         if (offer_update) rows[n++] = SR_UPDATE_NOW;
@@ -113,8 +120,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_UNINSTALL;
         rows[n++] = SR_GAMES;
         rows[n++] = SR_OVERLAY;
-        rows[n++] = SR_UPDATES;
-        rows[n++] = SR_KEEP_LOGS;
+        rows[n++] = SR_SYSTEM;
         rows[n++] = SR_ABOUT;
     }
     return n;
@@ -321,6 +327,7 @@ struct Pc5Ui {
     uint64_t bg_selected_at;       /* when the chosen game changed */
     uint32_t *bg, *bg_old;         /* the background as drawn (W x H), and the one fading out */
     int bg_has, bg_old_has, bg_fading;
+    int bg_cover_wait;             /* the chosen game has no background, and its cover isn't loaded yet */
     int64_t bg_changed;            /* the shown background's file: its time and size */
     uint64_t bg_fade_at;
 
@@ -773,7 +780,7 @@ static void fetch_review_cover(Pc5Ui *ui)
     ui->dirty = 1;
 }
 
-static void hint_for_folder(const Pc5Folder *folder, int exe, Pc5CoverHint *hint)
+static void hint_for_folder(const Pc5Ui *ui, const Pc5Folder *folder, int exe, Pc5CoverHint *hint)
 {
     char program[PC5_PATH] = "";
     if (exe >= 0 && exe < folder->exe_count) folder_program(folder, exe, program, sizeof(program));
@@ -786,6 +793,7 @@ static void hint_for_folder(const Pc5Folder *folder, int exe, Pc5CoverHint *hint
     snprintf(hint->program, sizeof(hint->program), "%.*s", (int)(strlen(name) > 4 ? strlen(name) - 4 : 0), name);
     hint->steam_appid = folder->steam_appid;
     pc5_copy(hint->picture, sizeof(hint->picture), folder->picture);
+    hint->off = ui->settings.pictures_off;
 }
 
 /* The player's own cover for an installed game: a picture in the covers
@@ -814,6 +822,7 @@ static void hint_for_game(Pc5Ui *ui, const Pc5Game *game, Pc5CoverHint *hint)
     snprintf(hint->program, sizeof(hint->program), "%.*s", (int)(strlen(name) > 4 ? strlen(name) - 4 : 0), name);
     /* The player's own picture takes the place of anything found online. */
     hint->picture_only = !own_cover(ui, game, hint->picture, sizeof(hint->picture));
+    hint->off = ui->settings.pictures_off;
 }
 
 /* 1 when the player's own picture for game is newer than its cover. */
@@ -917,30 +926,53 @@ static void backgrounds_refresh(Pc5Ui *ui)
     if (pc5_backgrounds_start(&ui->backgrounds, games, n)) say(ui, "PC5 problem backgrounds: no thread");
 }
 
-/* A kept background (960x540) as drawn: twice its size, darkened so the covers and the
- * text in front of it stand out, most at the top and bottom where the text is. */
+static void hsv_of(uint32_t color, float *h, float *s, float *v);
+static uint32_t from_hsv(float h, float s, float v, int alpha);
+
+/* A picture (the kept background, 960x540, or one made from a cover) as drawn behind the
+ * library: filling the screen, darker at the top where the clock is and at the sides; below
+ * the floor, where the covers stand, its mirror image, stretched and blurred as on a wet
+ * floor and darkening towards the hints. */
 static void background_prepare(const Pc5Image *small, uint32_t *out)
 {
     static int vertical[H], horizontal[W], x0s[W], x1s[W], fxs[W];
+    Pc5Image soft = { 0 };
     for (int y = 0; y < H; y++) {
-        float v = y < 220 ? 0.30f + 0.20f * (float)y / 220 : y < 640 ? 0.50f : 0.50f - 0.36f * (float)(y - 640) / (H - 640);
+        float v;
+        if (y < FLOOR_Y) v = y < 220 ? 0.42f + 0.36f * (float)y / 220 : 0.78f;
+        else {
+            float f = (float)(y - FLOOR_Y) / (H - FLOOR_Y);
+            v = 0.85f * (1 - (f < 0.5f ? 0.12f + 0.76f * f : 0.50f + 0.80f * (f - 0.5f)));
+        }
         vertical[y] = (int)(v * 256);
     }
     /* bilinear: a pixel's centre (x + 0.5) is (x + 0.5) * w / W - 0.5 in the source, in 1/256ths */
     for (int x = 0; x < W; x++) {
         float e = fabsf((float)x - W / 2.0f) / (W / 2.0f);
-        horizontal[x] = (int)((1 - 0.30f * e * e) * 256);
-        int sx = (int)((2 * (int64_t)x + 1) * small->w * 128 / W) - 128;
-        if (sx < 0) sx = 0;
-        x0s[x] = sx >> 8;
-        fxs[x] = sx & 255;
-        x1s[x] = x0s[x] + 1 < small->w ? x0s[x] + 1 : x0s[x];
+        horizontal[x] = (int)((1 - 0.25f * e * e) * 256);
     }
+    /* The floor's: a quarter of the size, blurred. */
+    if (!pc5_image_resize(small, small->w / 4 > 8 ? small->w / 4 : small->w, small->h / 4 > 8 ? small->h / 4 : small->h, &soft))
+        pc5_image_blur(&soft, 2);
     for (int y = 0; y < H; y++) {
-        int sy = (int)((2 * (int64_t)y + 1) * small->h * 128 / H) - 128;
+        int floor_row = y >= FLOOR_Y && soft.px;
+        const Pc5Image *from = floor_row ? &soft : small;
+        /* above the floor the picture's own row; below it the row as far above the floor, a
+         * little under twice as far down */
+        float at = floor_row ? FLOOR_Y - (float)(y - FLOOR_Y) / 1.9f : (float)y;
+        int sy = (int)((2 * at + 1) * (float)from->h * 128 / H) - 128;
         if (sy < 0) sy = 0;
-        int y0 = sy >> 8, fy = sy & 255, y1 = y0 + 1 < small->h ? y0 + 1 : y0;
-        const uint32_t *r0 = small->px + (size_t)y0 * (size_t)small->w, *r1 = small->px + (size_t)y1 * (size_t)small->w;
+        int y0 = sy >> 8, fy = sy & 255, y1 = y0 + 1 < from->h ? y0 + 1 : y0;
+        if (y0 > from->h - 1) y0 = y1 = from->h - 1;
+        const uint32_t *r0 = from->px + (size_t)y0 * (size_t)from->w, *r1 = from->px + (size_t)y1 * (size_t)from->w;
+        if (y == 0 || y == FLOOR_Y)
+            for (int x = 0; x < W; x++) {
+                int sx = (int)((2 * (int64_t)x + 1) * from->w * 128 / W) - 128;
+                if (sx < 0) sx = 0;
+                x0s[x] = sx >> 8;
+                fxs[x] = sx & 255;
+                x1s[x] = x0s[x] + 1 < from->w ? x0s[x] + 1 : x0s[x];
+            }
         for (int x = 0; x < W; x++) {
             int fx = fxs[x], m = vertical[y] * horizontal[x] >> 8;
             uint32_t a = r0[x0s[x]], b = r0[x1s[x]], c = r1[x0s[x]], d = r1[x1s[x]], px = 0xff000000u;
@@ -953,10 +985,42 @@ static void background_prepare(const Pc5Image *small, uint32_t *out)
             out[(size_t)y * W + (size_t)x] = px;
         }
     }
+    /* the floor's edge catches the light */
+    for (int x = 0; x < W; x++) {
+        float e = fabsf((float)x - W / 2.0f) / (W / 2.0f), a = e < 0.4f ? 0.14f : e < 1 ? 0.14f * (1 - e) / 0.6f : 0;
+        uint32_t p = out[(size_t)FLOOR_Y * W + (size_t)x];
+        out[(size_t)FLOOR_Y * W + (size_t)x] = pc5_mix(p, 0xffffffffu, (int)(a * 255));
+    }
+    pc5_image_free(&soft);
+}
+
+/* A backdrop for a game with no background of its own: its cover, filling the screen,
+ * blurred to its colours, fuller and a little darker (then drawn as a background is). */
+static int cover_backdrop(const Pc5Picture *cover, uint32_t *out)
+{
+    Pc5Image wide = { 0 }, small = { 0 };
+
+    if (!cover->levels || pc5_background_compose(&cover->level[cover->levels - 1], &wide) ||
+        pc5_image_resize(&wide, 192, 108, &small)) {
+        pc5_image_free(&wide);
+        pc5_image_free(&small);
+        return -1;
+    }
+    pc5_image_free(&wide);
+    pc5_image_blur(&small, 9);
+    for (size_t i = 0; i < (size_t)small.w * (size_t)small.h; i++) {
+        float h, s, v;
+        hsv_of(small.px[i], &h, &s, &v);
+        small.px[i] = from_hsv(h, fminf(1, s * 1.5f), v * 0.8f, 255);
+    }
+    background_prepare(&small, out);
+    pc5_image_free(&small);
+    return 0;
 }
 
 /* The chosen game's background, looked for once it stays chosen a moment, and again when
- * the worker has saved one: for a game that had none, or a newer one (its file changed). */
+ * the worker has saved one: for a game that had none, or a newer one (its file changed). A
+ * game without one gets a backdrop made from its cover, once its cover is loaded. */
 static void background_follow(Pc5Ui *ui)
 {
     char path[PC5_PATH];
@@ -968,8 +1032,11 @@ static void background_follow(Pc5Ui *ui)
     }
     unsigned generation = atomic_load(&ui->backgrounds.generation);
     const char *id = ui->library.count ? ui->library.games[ui->selected].id : "";
+    const Cover *cover = ui->library.count ? &ui->covers[ui->selected] : NULL;
+    int cover_ready = cover && cover->state && cover->picture.levels;
     int same = !strcmp(id, ui->bg_id) && ui->bg_id[0];
-    if (same && generation == ui->bg_generation) return;
+    int cover_late = same && ui->bg_cover_wait && cover_ready;   /* its cover loaded after it was chosen */
+    if (same && generation == ui->bg_generation && !cover_late) return;
     if (!same && ui->now - ui->bg_selected_at < BG_SETTLE_MS && ui->bg_id[0]) return;
     ui->bg_generation = generation;
     struct stat st;
@@ -978,22 +1045,27 @@ static void background_follow(Pc5Ui *ui)
                !pc5_background_path(ui->root, ui->library.games[ui->selected].prefix, path, sizeof(path)) && !stat(path, &st);
     if (have) changed = (int64_t)st.st_mtime * 1000000000 + (int64_t)st.st_size;
     /* Another game's saved: the chosen one's file is as it was. */
-    if (same && (!have || (ui->bg_has && changed == ui->bg_changed))) return;
+    if (same && !cover_late && (!have || (ui->bg_has && changed == ui->bg_changed))) return;
     int ok = have && !pc5_cover_load(path, &small, NULL) && small.w == PC5_BACKGROUND_WIDTH &&
              small.h == PC5_BACKGROUND_HEIGHT;
-    if (same && !ok) { pc5_image_free(&small); return; }
+    if (same && !ok && !cover_late) { pc5_image_free(&small); return; }
+    int from_cover = !ok && cover_ready;
+    ui->bg_cover_wait = !ok && !cover_ready && ui->library.count;
     ui->bg_changed = ok ? changed : 0;
     pc5_copy(ui->bg_id, sizeof(ui->bg_id), id[0] ? id : "-");
-    if ((ok || ui->bg_has) && !ui->bg && !(ui->bg = pc5_alloc((size_t)W * H * 4))) ok = 0;
-    if ((ok || ui->bg_has) && !ui->bg_old && !(ui->bg_old = pc5_alloc((size_t)W * H * 4))) ok = 0;
-    if (ok || ui->bg_has) {
+    int any = ok || from_cover || ui->bg_has;
+    if (any && !ui->bg && !(ui->bg = pc5_alloc((size_t)W * H * 4))) ok = from_cover = 0;
+    if (any && !ui->bg_old && !(ui->bg_old = pc5_alloc((size_t)W * H * 4))) ok = from_cover = 0;
+    if (any && ui->bg && ui->bg_old) {
         uint32_t *swap = ui->bg_old;
         ui->bg_old = ui->bg;
         ui->bg = swap;
         ui->bg_old_has = ui->bg_has;
         ui->bg_has = 0;
-        if (ok && ui->bg) {
+        if (ok) {
             background_prepare(&small, ui->bg);
+            ui->bg_has = 1;
+        } else if (from_cover && !cover_backdrop(&cover->picture, ui->bg)) {
             ui->bg_has = 1;
         }
         ui->bg_fade_at = ui->now;
@@ -1007,7 +1079,8 @@ static void background_follow(Pc5Ui *ui)
 enum { PICK_COVER, PICK_BACKGROUND };
 
 /* What the picture at is: -1 the game's own now, 0 to count - 1 a choice found, count the
- * last: the card made from the game's icon and name, or (a background) PC5's own backdrop. */
+ * last: the card made from the game's icon and name, or (a background) none: a backdrop made
+ * from its cover. */
 static int pick_entry(const Pc5Ui *ui, int at)
 {
     return ui->pick_now && at == 0 ? -1 : at - ui->pick_now;
@@ -1103,6 +1176,22 @@ static void pick_searched(Pc5Ui *ui)
 }
 
 /* The picture at pick_at, fetched or made; one that can't be had is taken out of the list. */
+/* None, for a background: the backdrop made from the game's cover, at a background's size. */
+static void none_preview(Pc5Ui *ui, const Pc5Game *game, Pc5Image *out)
+{
+    int index = pc5_library_find(&ui->library, game->id);
+    uint32_t *screen;
+
+    if (index < 0) return;
+    if (!ui->covers[index].state) cover_load(ui, index);
+    if (!ui->covers[index].state || !(screen = pc5_alloc((size_t)W * H * 4))) return;
+    if (!cover_backdrop(&ui->covers[index].picture, screen)) {
+        Pc5Image full = { .px = screen, .w = W, .h = H };
+        pc5_image_resize(&full, PC5_BACKGROUND_WIDTH, PC5_BACKGROUND_HEIGHT, out);
+    }
+    pc5_free(screen);
+}
+
 static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
 {
     char path[PC5_PATH];
@@ -1131,6 +1220,7 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
             pick->count--;
         } else {
             if (ui->pick_kind == PICK_COVER) card_for(ui, game, &ui->pick_image, &ui->pick_tint);
+            else none_preview(ui, game, &ui->pick_image);
             break;
         }
         /* Taken out: the list is one shorter, and the next one (going back, the one before) is tried. */
@@ -1147,7 +1237,8 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
 }
 
 /* The picture shown becomes the game's: a cover (its downloaded picture kept beside it, as an
- * install keeps it), a background, or none (PC5's own backdrop, not looked for again). */
+ * install keeps it), a background, or none (a backdrop made from its cover, not looked for
+ * again). */
 static void pick_use(Pc5Ui *ui, const Pc5Game *game)
 {
     char path[PC5_PATH], dir[PC5_PATH], note[PC5_PATH];
@@ -1172,6 +1263,7 @@ static void pick_use(Pc5Ui *ui, const Pc5Game *game)
                 pc5_picture_free(&ui->covers[index].picture);
                 ui->covers[index].state = 0;
             }
+            ui->bg_id[0] = 0;   /* a backdrop made from the cover is made again */
         }
     } else if (!failed) {
         /* The worker, waiting while the picker is open, is stopped first: it doesn't save over
@@ -1474,7 +1566,7 @@ static int queue_read_step(Pc5Ui *ui)
         say(ui, "PC5 folder=%s files=%u bytes=%llu exes=%d problem=%s queue=%d/%d", q->folder.name,
             (unsigned)q->folder.files, (unsigned long long)q->folder.bytes, q->folder.exe_count, q->folder.problem,
             ui->queue_at + 1, ui->queue_count);
-        hint_for_folder(&q->folder, q->exe, &hint);
+        hint_for_folder(ui, &q->folder, q->exe, &hint);
         pc5_cover_search_start(&q->search, &hint);
         ui->queue_phase = 1;
         return 1;
@@ -1596,7 +1688,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_GAMES:
         *label = "In games";
-        pc5_copy(about, about_size, "Vibration, light bar, triggers and startup sound");
+        pc5_copy(about, about_size, "Vibration, light bar and triggers");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
     case SR_OVERLAY:
@@ -1604,11 +1696,20 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         pc5_copy(about, about_size, "FPS, frame time, CPU, temperatures and memory");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
-    case SR_UPDATES:
-        *label = "Updates";
-        pc5_update_text(&ui->update.last, about, about_size);
+    case SR_SYSTEM:
+        *label = "System";
+        if (ui->update.last.state == PC5_UPDATE_AVAILABLE) pc5_update_text(&ui->update.last, about, about_size);
+        else pc5_copy(about, about_size, "Startup sound, logs, picture sources and updates");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
+    case SR_PICTURES: {
+        int on = 0;
+        for (int i = 0; i < PC5_PICTURE_SOURCES; i++) on += !(set->pictures_off & (1u << i));
+        *label = "Picture sources";
+        pc5_copy(about, about_size, "Where covers and backgrounds are looked for");
+        snprintf(value, value_size, "%d of %d \xe2\x80\xba", on, PC5_PICTURE_SOURCES);
+        break;
+    }
     case SR_KEEP_LOGS:
         *label = "Keep all logs";
         pc5_copy(about, about_size, set->keep_logs ? "Every session's log is kept for 7 days"
@@ -1703,6 +1804,19 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         *label = "Update now";
         snprintf(about, about_size, "Downloads PC5 %s from GitHub and installs it", ui->update.last.version);
         break;
+    default:
+        if (row >= SR_SOURCE && row < SR_SOURCE + PC5_PICTURE_SOURCES) {
+            static const char *const abouts[PC5_PICTURE_SOURCES] = {
+                "Its store's covers and backgrounds", "Its catalogue's covers and backgrounds",
+                "The cover on the game's page, and its Steam background", "The box art of the game's article",
+                "Steam's pictures for a game Steam's search misses"
+            };
+            int i = (int)(row - SR_SOURCE);
+            *label = pc5_picture_source_name(i);
+            pc5_copy(about, about_size, abouts[i]);
+            pc5_copy(value, value_size, set->pictures_off & (1u << i) ? "Off" : "On");
+        }
+        break;
     }
 }
 
@@ -1739,14 +1853,17 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
         if (next >= 0 && ui->platform.sound) ui->platform.sound(ui->platform.context, set->startup_sound);
         break;
     }
-    default: return 0;
+    default:
+        if (row < SR_SOURCE || row >= SR_SOURCE + PC5_PICTURE_SOURCES) return 0;
+        set->pictures_off ^= 1u << (row - SR_SOURCE);
+        break;
     }
     if (pc5_settings_save(ui->root, set)) say(ui, "PC5 problem settings: can't write them");
     say(ui, "PC5 settings fps=%d frame_time=%d cpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d vibration=%d light=%d "
-        "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s", set->fps, set->frame_time,
-        set->cpu_usage, set->cpu_temperature, set->soc_temperature, set->memory, (int)set->fps_corner, set->vibration,
-        (int)set->light_bar, (int)set->triggers, set->trigger_rumble, set->trigger_resistance, set->check_updates,
-        set->keep_logs, set->startup_sound);
+        "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s pictures_off=%#x",
+        set->fps, set->frame_time, set->cpu_usage, set->cpu_temperature, set->soc_temperature, set->memory,
+        (int)set->fps_corner, set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
+        set->trigger_resistance, set->check_updates, set->keep_logs, set->startup_sound, (unsigned)set->pictures_off);
     return 1;
 }
 
@@ -2061,7 +2178,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             break;
         }
         if (step == PC5_UPGRADE_FAILED || step == PC5_UPGRADE_CANCELLED) {
-            if (ui->upgrade_back == S_SETTINGS) ui->page = PAGE_UPDATES;
+            if (ui->upgrade_back == S_SETTINGS) ui->page = PAGE_SYSTEM;
             if (step == PC5_UPGRADE_CANCELLED)
                 message(ui, 0, "The update was stopped", "PC5 is as it was, and what was downloaded is deleted.",
                         ui->upgrade_back);
@@ -2146,9 +2263,10 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         } else if (k & PC5_KEY_OPTIONS) {
             go(ui, S_LIBRARY);
         } else if (k & back) {
-            if (ui->page == PAGE_GAMES) settings_open(ui, 0, 2);
-            else if (ui->page == PAGE_OVERLAY) settings_open(ui, 0, 3);
-            else if (ui->page == PAGE_UPDATES) settings_open(ui, 0, 4);
+            if (ui->page == PAGE_GAMES) settings_open(ui, 0, ROW_GAMES);
+            else if (ui->page == PAGE_OVERLAY) settings_open(ui, 0, ROW_OVERLAY);
+            else if (ui->page == PAGE_SYSTEM) settings_open(ui, 0, ROW_SYSTEM);
+            else if (ui->page == PAGE_PICTURES) settings_open(ui, PAGE_SYSTEM, ROW_PICTURES);
             else go(ui, S_LIBRARY);
         } else if (k & accept) {
             switch (row) {
@@ -2161,7 +2279,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 break;
             case SR_GAMES: settings_open(ui, PAGE_GAMES, 0); break;
             case SR_OVERLAY: settings_open(ui, PAGE_OVERLAY, 0); break;
-            case SR_UPDATES: settings_open(ui, PAGE_UPDATES, 0); break;
+            case SR_SYSTEM: settings_open(ui, PAGE_SYSTEM, 0); break;
+            case SR_PICTURES: settings_open(ui, PAGE_PICTURES, 0); break;
             case SR_ABOUT: go(ui, S_ABOUT); break;
             case SR_CHECK_NOW: go(ui, S_CHECKING); break;
             case SR_UPDATE_NOW: upgrade_begin(ui, S_SETTINGS); break;
@@ -2173,10 +2292,10 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_CHECKING:
         if (!ui->drawn) break;
         update_check_now(ui, 0);
-        settings_open(ui, PAGE_UPDATES, offer_update(ui) ? 2 : 1);   /* on Update now when there is one */
+        settings_open(ui, PAGE_SYSTEM, ROW_CHECK_NOW + offer_update(ui));   /* on Update now when there is one */
         break;
     case S_ABOUT:
-        if (k & (back | accept)) settings_open(ui, 0, 6);
+        if (k & (back | accept)) settings_open(ui, 0, ROW_ABOUT);
         break;
     case S_SCAN:
         if (!ui->drawn) break;
@@ -2231,7 +2350,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 go(ui, S_GAME_UPDATE_ASK);
                 break;
             }
-            hint_for_folder(&ui->folder, ui->exe, &hint);
+            hint_for_folder(ui, &ui->folder, ui->exe, &hint);
             pc5_cover_search_start(&ui->search, &hint);
             ui->choice = 0;
             ui->choice_loaded = 0;
@@ -2977,28 +3096,75 @@ static void backdrop(Pc5Ui *ui, Pc5Canvas *c)
         memcpy(c->px + (size_t)y * (size_t)c->stride, to + (size_t)y * W, (size_t)W * 4);
 }
 
-/* Where a cover sits d places from the middle. */
-static void slot(float d, float *x, float *scale, float *bright)
+/* A colour made bright and full: a cover's main colour as the light around it. */
+static void hsv_of(uint32_t color, float *h, float *s, float *v)
 {
-    static const float xs[] = { 0, 372, 612, 818, 1000, 1165, 1320 }, ss[] = { 1, 0.66f, 0.58f, 0.52f, 0.48f, 0.45f, 0.43f },
-                       bs[] = { 1, 0.58f, 0.44f, 0.34f, 0.26f, 0.0f, 0.0f };
-    float a = fabsf(d);
+    float r = (float)((color >> 16) & 255) / 255, g = (float)((color >> 8) & 255) / 255, b = (float)(color & 255) / 255;
+    float hi = fmaxf(r, fmaxf(g, b)), lo = fminf(r, fminf(g, b)), d = hi - lo;
+    *v = hi;
+    *s = hi > 0 ? d / hi : 0;
+    if (d <= 0) *h = 0;
+    else if (hi == r) *h = 60 * fmodf((g - b) / d + 6, 6);
+    else if (hi == g) *h = 60 * ((b - r) / d + 2);
+    else *h = 60 * ((r - g) / d + 4);
+}
+
+static uint32_t from_hsv(float h, float s, float v, int alpha)
+{
+    h = fmodf(h + 360, 360);
+    float c = v * s, x = c * (1 - fabsf(fmodf(h / 60, 2) - 1)), m = v - c, r = 0, g = 0, b = 0;
+    if (h < 60) r = c, g = x;
+    else if (h < 120) r = x, g = c;
+    else if (h < 180) g = c, b = x;
+    else if (h < 240) g = x, b = c;
+    else if (h < 300) r = x, b = c;
+    else r = c, b = x;
+    return pc5_rgba((int)((r + m) * 255 + 0.5f), (int)((g + m) * 255 + 0.5f), (int)((b + m) * 255 + 0.5f), alpha);
+}
+
+/* The chosen cover's neon: its colour, bright and full (a grey cover's a soft blue), and the
+ * same turned round the colour wheel, for the frame's two ends. */
+static void neon_of(uint32_t tint, uint32_t *from, uint32_t *to, int alpha)
+{
+    float h, s, v;
+    hsv_of(tint, &h, &s, &v);
+    if (s < 0.15f) h = 222, s = 0.35f;
+    s = s < 0.55f ? 0.55f + (s - 0.15f) * 0.5f : s;
+    if (s > 0.9f) s = 0.9f;
+    /* the other end turned towards blue and violet, or, from there, on to magenta */
+    float d = fmodf(250 - h + 540, 360) - 180;
+    *from = from_hsv(h, s, 1.0f, alpha);
+    *to = from_hsv(fabsf(d) < 40 ? h + 60 : h + (d > 0 ? 55 : -55), s, 1.0f, alpha);
+}
+
+/* Where a cover stands d places from the middle, on the floor: its left and right edges and
+ * their heights (the ones beside the middle turned a little towards it), how bright it is and
+ * how much of it the floor shows. */
+static void slot(float d, float *left, float *right, float *h_left, float *h_right, float *bright, float *mirror)
+{
+    static const float ls[] = { 744, 1209, 1452, 1677, 1881, 2090, 2300 }, rs[] = { 1176, 1443, 1671, 1875, 2076, 2280, 2480 },
+                       hls[] = { 630, 468, 432, 399, 372, 350, 330 }, hrs[] = { 630, 450, 415, 385, 358, 338, 320 },
+                       bs[] = { 1, 0.88f, 0.74f, 0.60f, 0.48f, 0.40f, 0.35f },
+                       ms[] = { 0.68f, 0.55f, 0.46f, 0.38f, 0.30f, 0.24f, 0.20f };
+    float a = fabsf(d), t;
     int i = (int)a;
-    float t = a - (float)i;
-    if (i >= 6) { *x = xs[6]; *scale = ss[6]; *bright = 0; }
-    else {
-        *x = xs[i] + (xs[i + 1] - xs[i]) * t;
-        *scale = ss[i] + (ss[i + 1] - ss[i]) * t;
-        *bright = bs[i] + (bs[i + 1] - bs[i]) * t;
-    }
-    if (d < 0) *x = -*x;
+    if (i >= 6) { i = 5; t = 1; }
+    else t = a - (float)i;
+    float l = ls[i] + (ls[i + 1] - ls[i]) * t, r = rs[i] + (rs[i + 1] - rs[i]) * t;
+    float hl = hls[i] + (hls[i + 1] - hls[i]) * t, hr = hrs[i] + (hrs[i + 1] - hrs[i]) * t;
+    *bright = bs[i] + (bs[i + 1] - bs[i]) * t;
+    *mirror = ms[i] + (ms[i + 1] - ms[i]) * t;
+    if (d >= 0) { *left = l; *right = r; *h_left = hl; *h_right = hr; }
+    else { *left = W - r; *right = W - l; *h_left = hr; *h_right = hl; }
 }
 
 static void carousel(Pc5Ui *ui, Pc5Canvas *c)
 {
     int order[16], n = 0;
     int first = (int)floorf(ui->scroll) - 6, last = (int)ceilf(ui->scroll) + 6;
+    uint32_t tint = pc5_rgba((int)ui->glow[0], (int)ui->glow[1], (int)ui->glow[2], 255), from, to;
 
+    neon_of(tint, &from, &to, 255);
     for (int i = first; i <= last; i++)
         if (i >= 0 && i < ui->library.count && n < 16) order[n++] = i;
     /* farthest first */
@@ -3007,31 +3173,66 @@ static void carousel(Pc5Ui *ui, Pc5Canvas *c)
             if (fabsf(order[b] - ui->scroll) > fabsf(order[a] - ui->scroll)) { int t = order[a]; order[a] = order[b]; order[b] = t; }
     for (int k = 0; k < n; k++) {
         int i = order[k];
-        float d = (float)i - ui->scroll, x, scale, bright;
-        slot(d, &x, &scale, &bright);
-        if (bright <= 0.01f) continue;
-        float t = fabsf(d) < 1 ? fabsf(d) : 1;
-        float w = COVER_W * scale * (1 - 0.16f * t), h = COVER_H * scale, outer = h * (1 - 0.12f * t);
-        float cx = 960 + x, left = cx - w / 2, cy = FLOOR_Y - h / 2;
-        float hl = d < 0 ? outer : h, hr = d < 0 ? h : outer;
+        float d = (float)i - ui->scroll, left, right, hl, hr, bright, mirror;
+        slot(d, &left, &right, &hl, &hr, &bright, &mirror);
+        if (right <= 0 || left >= W) continue;
+        float w = right - left, h = hl > hr ? hl : hr, radius = fabsf(d) < 1 ? 20 - 2 * fabsf(d) : 18;
         const Cover *cover = &ui->covers[i];
-        int near = fabsf(d) < 0.5f;
-        if (near) {
-            uint32_t tint = pc5_rgba((int)ui->glow[0], (int)ui->glow[1], (int)ui->glow[2], 150);
-            pc5_shadow(c, left, cy - h / 2, w, h, 14, 70, tint);
+        float near = 1 - fabsf(d) * 2;   /* the chosen one's light, gone half way to the next */
+        if (near > 0) {
+            /* its glow, and its light on the floor */
+            pc5_shadow(c, left, FLOOR_Y - h, w, h, radius, 34, (from & 0xffffffu) | (uint32_t)(150 * near) << 24);
+            pc5_shadow(c, left, FLOOR_Y - h, w, h, radius, 96, (to & 0xffffffu) | (uint32_t)(70 * near) << 24);
+            pc5_shadow(c, left + w * 0.12f, FLOOR_Y - 2, w * 0.76f, 6, 3, 30, (from & 0xffffffu) | (uint32_t)(150 * near) << 24);
         }
         if (cover->state && cover->picture.levels) {
-            pc5_draw_cover(c, &cover->picture, left, cy, w, hl, hr, 12 * scale, (int)(bright * 256), 256, 150 * scale);
+            pc5_draw_card(c, &cover->picture, left, FLOOR_Y, w, hl, hr, radius, (int)(bright * 256), 256, (int)(mirror * 256),
+                          0.58f, near > 0 ? 52 : 40);
         } else {
             /* not loaded yet: a plain dark card */
-            pc5_round_rect(c, left, cy - h / 2, w, h, 12 * scale, pc5_rgba(28, 32, 40, (int)(255 * bright)));
+            pc5_round_rect(c, left, FLOOR_Y - h, w, h, radius, pc5_rgba(28, 32, 40, (int)(255 * bright)));
         }
-        if (near) {
-            float gap = 7, a = 1 - fabsf(d) * 2;
-            pc5_round_frame(c, left - gap, cy - h / 2 - gap, w + 2 * gap, h + 2 * gap, 12 * scale + gap, 2.5f,
-                            pc5_rgba(255, 255, 255, (int)(215 * a)));
+        if (near > 0) {
+            pc5_round_frame_graded(c, left - 6, FLOOR_Y - h - 6, w + 12, h + 12, radius + 6, 6,
+                                   (from & 0xffffffu) | (uint32_t)(255 * near) << 24, (to & 0xffffffu) | (uint32_t)(255 * near) << 24);
+        } else {
+            /* the edge turned towards the middle catches the light */
+            float x = d < 0 ? right : left, edge = d < 0 ? hr : hl;
+            pc5_line(c, x, FLOOR_Y - edge + radius * 0.6f, x, FLOOR_Y - radius * 0.6f, 1.5f, (uint32_t)(64 * bright) << 24 | 0xffffffu);
         }
     }
+}
+
+/* text in capitals with letter spacing (ASCII letters only; others as they are), its centre
+ * at x; its width. */
+static int spaced_caps(Pc5Ui *ui, Pc5Canvas *c, Pc5Face face, int x, int y, uint32_t color, const char *text, int spacing,
+                       int draw)
+{
+    char one[8], caps[256];
+    int width = 0, count = 0;
+    size_t n = 0;
+
+    for (const char *p = text; *p && n + 1 < sizeof(caps); p++) caps[n++] = (char)(*p >= 'a' && *p <= 'z' ? *p - 32 : *p);
+    caps[n] = 0;
+    for (size_t at = 0; caps[at];) {
+        size_t len = 1;
+        while (caps[at + len] && ((unsigned char)caps[at + len] & 0xc0) == 0x80) len++;
+        memcpy(one, caps + at, len);
+        one[len] = 0;
+        width += pc5_text_width(&ui->fonts, face, one) + (count++ ? spacing : 0);
+        at += len;
+    }
+    if (!draw) return width;
+    int px = x - width / 2;
+    for (size_t at = 0; caps[at];) {
+        size_t len = 1;
+        while (caps[at + len] && ((unsigned char)caps[at + len] & 0xc0) == 0x80) len++;
+        memcpy(one, caps + at, len);
+        one[len] = 0;
+        px += pc5_text(c, &ui->fonts, face, px, y, color, one, 0, 0) + spacing;
+        at += len;
+    }
+    return width;
 }
 
 static void library_screen(Pc5Ui *ui, Pc5Canvas *c)
@@ -3039,6 +3240,12 @@ static void library_screen(Pc5Ui *ui, Pc5Canvas *c)
     char count[48];
 
     backdrop(ui, c);
+    /* a hairline across the top */
+    for (int k = 0; k < 16; k++) {
+        float x0 = W * (float)k / 16, x1 = W * (float)(k + 1) / 16, mid = fabsf((x0 + x1) / 2 - W / 2) / (W / 2);
+        int alpha = (int)(34 * (mid < 0.76f ? 1 : (1 - mid) / 0.24f));
+        if (alpha > 0) pc5_line(c, x0, 33, x1, 33, 1.2f, (uint32_t)alpha << 24 | 0xffffffu);
+    }
     wordmark(ui, c, MARGIN, 92);
     if (ui->clock[0]) pc5_text(c, &ui->fonts, PC5_FACE_LABEL, W - MARGIN, 88, C_TEXT, ui->clock, 0, 2);
     if (!ui->library.count) {
@@ -3050,13 +3257,31 @@ static void library_screen(Pc5Ui *ui, Pc5Canvas *c)
     }
     carousel(ui, c);
     const Pc5Game *game = &ui->library.games[ui->selected];
+    /* its name, a shadow behind it, and what it is in a pill */
+    pc5_text(c, &ui->fonts, PC5_FACE_TITLE, 960, 834, 0x90000000u, game->title, 1500, 1);
     pc5_text(c, &ui->fonts, PC5_FACE_TITLE, 960, 830, C_TEXT, game->title, 1500, 1);
-    if (!game->playable) pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 884, C_WARN, game->problem, 1500, 1);
-    else pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 884, C_DIM, game->detail, 1500, 1);
+    if (!game->playable) {
+        pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 892, C_WARN, game->problem, 1500, 1);
+    } else if (game->detail[0]) {
+        uint32_t tint = pc5_rgba((int)ui->glow[0], (int)ui->glow[1], (int)ui->glow[2], 255), from, to;
+        int tw = spaced_caps(ui, c, PC5_FACE_SMALL, 960, 892, 0, game->detail, 4, 0);
+        float pw = (float)tw + 64, px = 960 - pw / 2;
+        neon_of(tint, &from, &to, 255);
+        pc5_shadow(c, px, 861, pw, 46, 23, 22, (to & 0xffffffu) | 0x50000000u);
+        pc5_round_rect(c, px, 861, pw, 46, 23, 0x730a0d1au);
+        pc5_round_frame(c, px, 861, pw, 46, 23, 2, pc5_mix(from, 0xffffffffu, 70) & 0xd0ffffffu);
+        spaced_caps(ui, c, PC5_FACE_SMALL, 960, 892, 0xf0eef1fcu, game->detail, 4, 1);
+    }
     Hint list[] = { { accept_glyph(ui), "Play" }, { G_TRIANGLE, "Game menu" }, { G_L1R1, "Jump" }, { G_OPTIONS, "Settings" } };
     hints(ui, c, MARGIN, 1012, list, 4);
-    snprintf(count, sizeof(count), ui->library.count == 1 ? "%d game" : "%d games", ui->library.count);
-    pc5_text(c, &ui->fonts, PC5_FACE_BODY, W - MARGIN, 1012, C_FAINT, count, 0, 2);
+    /* a line from the hints to the count, and the count */
+    pc5_line(c, 840, 996, 1545, 996, 1.2f, 0x29ffffffu);
+    pc5_line(c, 1545, 996, 1575, 960, 1.2f, 0x29ffffffu);
+    pc5_line(c, 1575, 960, W, 960, 1.2f, 0x29ffffffu);
+    snprintf(count, sizeof(count), "%d", ui->library.count);
+    int words = spaced_caps(ui, c, PC5_FACE_SMALL, 0, 1012, 0, ui->library.count == 1 ? "game" : "games", 5, 0);
+    spaced_caps(ui, c, PC5_FACE_SMALL, W - MARGIN - words / 2, 1012, C_DIM, ui->library.count == 1 ? "game" : "games", 5, 1);
+    pc5_text(c, &ui->fonts, PC5_FACE_LABEL, W - MARGIN - words - 10, 1012, C_TEXT, count, 0, 2);
 }
 
 /* ---- drawing: the other screens ---------------------------------------------------------- */
@@ -3121,7 +3346,7 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
         setting_text(ui, rows[i], &label, about, sizeof(about), value, sizeof(value));
         drawer_row(ui, c, x, 196 + pitch * i, pitch, i == ui->menu, label, about, value);
     }
-    if (ui->page == PAGE_UPDATES && ui->update.last.state == PC5_UPDATE_AVAILABLE)
+    if (ui->page == PAGE_SYSTEM && ui->update.last.state == PC5_UPDATE_AVAILABLE)
         pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)x + 72, 196 + (int)pitch * count + 60, 760 - 144, 4, 42, C_DIM,
                       offer_update(ui) ? "Update now downloads it from GitHub, puts it in place of this PC5 and restarts "
                                          "PC5. Your games, saves and settings stay."
@@ -3129,7 +3354,7 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
                                          "the way you added PC5. Your games, saves and settings stay.", 0);
     SettingRow row = rows[ui->menu < count ? ui->menu : 0];
     int changes = row == SR_KEEP_LOGS || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
-                  row == SR_STARTUP_SOUND;
+                  row == SR_STARTUP_SOUND || row >= SR_SOURCE;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);
 }
@@ -3505,8 +3730,8 @@ static void review_screen(Pc5Ui *ui, Pc5Canvas *c)
     }
     {
         int at = ui->choice < 0 ? choices : ui->choice + 1;
-        const char *from = ui->choice >= 0 && ui->choice < ui->search.count ? ui->search.choices[ui->choice].source : "the game's icon";
-        snprintf(line, sizeof(line), "Cover from %s \xc2\xb7 %d of %d", from, at, choices);
+        if (ui->choice >= 0 && ui->choice < ui->search.count) snprintf(line, sizeof(line), "Cover %d of %d", at, choices);
+        else snprintf(line, sizeof(line), "Made from the game's icon \xc2\xb7 %d of %d", at, choices);
         pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)(cx + cw / 2), (int)(cy + ch + 46), C_DIM, line, (int)cw + 40, 1);
     }
     float tx = cx + cw + 72, tw = x + w - 72 - tx;
@@ -3855,12 +4080,9 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
     } else if (ui->pick_image.px) {
         pc5_draw_image(c, &ui->pick_image, px, py, pw, ph, 255);
     } else {
-        /* PC5's own backdrop, as behind the library without a background */
+        /* PC5's own backdrop, when the backdrop made from the cover can't be shown */
         pc5_round_rect(c, px, py, pw, ph, 14, 0xff0d0f14u);
         pc5_round_frame(c, px, py, pw, ph, 14, 1.5f, C_EDGE);
-        if (!ui->pick_fetching)
-            pc5_text(c, &ui->fonts, PC5_FACE_BODY, (int)(px + pw / 2), (int)(py + ph / 2 + 12), C_FAINT, "PC5's own backdrop",
-                     (int)pw - 80, 1);
     }
     if (ui->pick_fetching) {
         pc5_round_rect(c, px, py, pw, ph, 14, 0xa0000000u);
@@ -3877,10 +4099,9 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
     if (ui->pick_fetching) what = "";
     else if (entry < 0) what = cover ? "The cover it has now" : "The background it has now";
     else if (entry < ui->pick->count) {
-        snprintf(line, sizeof(line), "From %s", ui->pick->choices[entry].source);
-        what = line;
+        what = cover ? "A cover found online" : "A background found online";
         detail = ui->pick->choices[entry].title;
-    } else what = cover ? "Made from the game's icon and name" : "None: PC5's own backdrop";
+    } else what = cover ? "Made from the game's icon and name" : "None: a backdrop made from its cover";
     ty += 50 * (float)pc5_text_wrap(c, &ui->fonts, PC5_FACE_LABEL, (int)tx, (int)ty, (int)tw, 2, 50, C_TEXT, what, 0);
     if (detail[0]) ty += 42 * (float)pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ty, (int)tw, 2, 42, C_DIM, detail, 0);
     ty += 40;

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: its settings file (pc5_settings.h). */
 #include "pc5_settings.h"
+#include "pc5_cover.h"
 #include "pc5_sound.h"
 
 #include <stdio.h>
@@ -111,6 +112,13 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
             settings->triggers = (Pc5Triggers)pick(value, trigger_keys, PC5_TRIGGERS_COUNT, (int)settings->triggers);
         else if (!strcmp(name, "check_updates")) settings->check_updates = on_off(value, settings->check_updates);
         else if (!strcmp(name, "keep_logs")) settings->keep_logs = on_off(value, settings->keep_logs);
+        else if (!strncmp(name, "pictures_", 9)) {
+            for (int i = 0; i < PC5_PICTURE_SOURCES; i++) {
+                if (strcmp(name + 9, pc5_picture_source_key(i))) continue;
+                if (on_off(value, 1)) settings->pictures_off &= ~(1u << i);
+                else settings->pictures_off |= 1u << i;
+            }
+        }
     }
     pc5_buf_free(&text);
     return 0;
@@ -118,7 +126,7 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
 
 int pc5_settings_save(const char *root, const Pc5Settings *settings)
 {
-    char path[PC5_PATH], text[800];
+    char path[PC5_PATH], text[1400];
     int length;
 
     if (pc5_format(path, sizeof(path), "%s/pc5", root) || pc5_mkdirs(path) ||
@@ -136,6 +144,10 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
                       light_keys[settings->light_bar % PC5_LIGHTS], trigger_keys[settings->triggers % PC5_TRIGGERS_COUNT],
                       settings->trigger_rumble, settings->trigger_resistance, settings->check_updates ? "on" : "off",
                       settings->keep_logs ? "on" : "off", settings->startup_sound);
+    for (int i = 0; i < PC5_PICTURE_SOURCES && length > 0 && (size_t)length < sizeof(text); i++)
+        length += snprintf(text + length, sizeof(text) - (size_t)length, "pictures_%s = %s\n", pc5_picture_source_key(i),
+                           settings->pictures_off & (1u << i) ? "off" : "on");
+    if (length < 0 || (size_t)length >= sizeof(text)) return -1;
     return pc5_write_file(path, text, (size_t)length);
 }
 

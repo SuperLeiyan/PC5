@@ -14,7 +14,8 @@
  *
  * A game no source has a background for gets pc5/background-none.txt, once Steam or GOG
  * has answered with no background for it, or after three starts whose backgrounds couldn't
- * be fetched (pc5/background-tries.txt), and keeps PC5's own backdrop. Only the choices
+ * be fetched (pc5/background-tries.txt), and keeps the backdrop the library makes from its
+ * cover. Only the choices
  * that are the same game as the best one are used. A game whose Windows is gone (being
  * uninstalled) gets nothing. The work is done on a thread of its own,
  * one game after another, while the library shows. */

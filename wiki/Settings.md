@@ -1,4 +1,4 @@
-PC5's Settings hold installing and uninstalling games, the settings that apply in every game (the controller's rumble, light bar and triggers, and the overlay), the startup sound, updates, the logs and the About screen. Settings that belong to one game (its controller, graphics, cover, background, home screen tile and program) are in that game's menu instead: see [Playing games](Playing-games#the-game-menu). The row chosen says what it does under its name.
+PC5's Settings hold installing and uninstalling games, the settings that apply in every game (the controller's rumble, light bar and triggers, and the overlay), PC5's own system settings (the startup sound, the logs, where covers and backgrounds come from, and updates) and the About screen. Settings that belong to one game (its controller, graphics, cover, background, home screen tile and program) are in that game's menu instead: see [Playing games](Playing-games#the-game-menu). The row chosen says what it does under its name.
 
 ## Opening Settings
 
@@ -23,10 +23,9 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 | --- | --- |
 | Install games from USB | Copies one game, or several in a row, from a USB drive to the console. See [Installing games](Installing-games). |
 | Uninstall game | Lists your games to uninstall one, keeping its saves or not, then the saves kept from games uninstalled before, to delete them. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
-| In games › | Vibration, light bar, adaptive triggers and the startup sound. See [In games](#in-games). |
+| In games › | Vibration, light bar and adaptive triggers. See [In games](#in-games). |
 | Overlay › | The overlay shown over every game. See [Overlay](#overlay). |
-| Updates › | Checking GitHub for a newer PC5, and installing it. The row shows the last answer. See [Updates](#updates). |
-| Keep all logs | **Off** (the default): the logs of sessions that went wrong are kept, and each game's newest session. **On**: every session's log is kept, PC5's own too. Either way, each is one zip, kept for 7 days. See [Reporting a problem](Reporting-a-problem). |
+| System › | The startup sound, the logs, the picture sources and updates. When a newer PC5 is out, the row says so. See [System](#system). |
 | About PC5 | The version, where games are kept, the free space on the console, and a QR code for Buy Me a Coffee. |
 
 ## In games
@@ -41,15 +40,30 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 | Adaptive triggers | **Off**, Rumble, Resistance, Rumble + resistance | Rumble: L2 and R2 vibrate with the game's rumble. Resistance: they push back as you press them. Rumble + resistance: they push back, and vibrate instead while the game rumbles (a trigger runs one effect at a time). |
 | Trigger rumble | 25, 50, 75, **100 %** | How strongly L2 and R2 vibrate. Shows with Rumble or Rumble + resistance. |
 | Trigger resistance | 25, **50**, 75, 100 % | How firmly L2 and R2 push back. Shows with Resistance or Rumble + resistance. |
-| Startup sound | Off, **cheap chinese speaker** (the default), and the other sounds by name | The sound on the controller's speaker when you open PC5 from the home screen (not when you come back to it from a game). Choosing a sound plays it. See [Startup sound](#startup-sound). |
 
 Defaults are in **bold**.
 
 These follow the settings in every game, whatever its [controller mode](Controllers). With the **DualSense** mode, a game that sets its own light bar or trigger effects gets them instead, from the moment it sets them. When a game ends, PC5 gives the controller back as the console had it.
 
+## System
+
+![The System page of Settings](images/settings-system.png)
+*Settings › System.*
+
+| Row | Values | What it does |
+| --- | --- | --- |
+| Startup sound | Off, **cheap chinese speaker**, and the other sounds by name | The sound on the controller's speaker when you open PC5 from the home screen (not when you come back to it from a game). Choosing a sound plays it. See [Startup sound](#startup-sound). |
+| Keep all logs | **Off**, On | Off: the logs of sessions that went wrong are kept, and each game's newest session. On: every session's log is kept, PC5's own too. Either way, each is one zip, kept for 7 days. See [Reporting a problem](Reporting-a-problem). |
+| Picture sources › | the number turned on | Where PC5 looks for covers and backgrounds. See [Picture sources](#picture-sources). |
+| Check when PC5 opens | **On**, Off | On: PC5 asks GitHub for a newer release when it opens, at most once an hour. Off: only when you ask. |
+| Check now | | Asks GitHub straight away. The answer shows under the row. |
+| Update now | | Shows while a newer release is out: downloads it from GitHub, puts it in place of this PC5 and restarts PC5. |
+
+When a newer PC5 is out, PC5 asks when it opens whether to update now or later. PC5 never updates without asking. See [Updating PC5](Installing-and-updating#updating-pc5).
+
 ## Startup sound
 
-**Settings › In games › Startup sound** chooses the sound PC5 plays on the controller's speaker when you open it, or **Off**. Choosing a sound with **✕** or left and right plays it, so you can hear it.
+**Settings › System › Startup sound** chooses the sound PC5 plays on the controller's speaker when you open it, or **Off**. Choosing a sound with **✕** or left and right plays it, so you can hear it. It plays as loud as the console's controller speaker volume is set; with the volume at its lowest, it doesn't play.
 
 PC5 comes with **Beeper - Push**, **Cha-Ching**, **cheap chinese speaker** (the default), **fahh**, **funny message tone**, **rizz** and **System Activated**.
 
@@ -80,15 +94,22 @@ The overlay is a small box over every game, updated every second. Each line can 
 
 All lines are **Off** by default. A line the console can't read is left out. With [frame generation](Playing-games#frame-generation) on, the FPS counts every frame shown, the made ones too.
 
-## Updates
+## Picture sources
 
-| Row | What it does |
+**Settings › System › Picture sources** turns each place PC5 looks for covers and backgrounds on or off. All are **On** by default, and none needs an account or a key.
+
+![The Picture sources page of Settings](images/settings-picture-sources.png)
+*Settings › System › Picture sources.*
+
+| Source | What PC5 takes from it |
 | --- | --- |
-| Check when PC5 opens | **On** (the default): PC5 asks GitHub for a newer release when it opens, at most once an hour. Off: only when you ask. |
-| Check now | Asks GitHub straight away. The answer shows under the row. |
-| Update now | Shows while a newer release is out: downloads it from GitHub, puts it in place of this PC5 and closes PC5. |
+| Steam | Its store's cover and library background for the game |
+| GOG | Its catalogue's cover and background |
+| PCGamingWiki | The cover on the game's page, and the background of the Steam game the page names |
+| Wikipedia | The box art of the game's article (no background) |
+| Wikidata | Steam's cover and background for a game Steam's own search doesn't find by that name |
 
-When a newer PC5 is out, PC5 asks when it opens whether to update now or later. PC5 never updates without asking. See [Updating PC5](Installing-and-updating#updating-pc5).
+A source turned off isn't asked when PC5 installs a game, looks for its background, or when you choose a cover or background by hand. Pictures already kept stay. See [Covers](Covers).
 
 ## About PC5
 

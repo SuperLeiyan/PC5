@@ -243,6 +243,21 @@ static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int
     } else if (!strncmp(url, "https://en.wikipedia.org/w/api.php?", 35)) {
         if (!strstr(url, "pilicense=any") || !strstr(url, "prop=pageimages")) { *status = 400; return 0; }
         path(file, sizeof(file), "%s/wikipedia.json", fixtures);
+    } else if (!strncmp(url, "https://www.pcgamingwiki.com/w/api.php?", 39)) {
+        if (!strstr(url, "generator=search") || !strstr(url, "rvslots=main") || !strstr(url, "formatversion=2")) {
+            *status = 400;
+            return 0;
+        }
+        path(file, sizeof(file), "%s/pcgamingwiki.json", fixtures);
+    } else if (!strcmp(url, "https://www.pcgamingwiki.com/wiki/Special:FilePath/Neon%20Drift%20cover.jpg")) {
+        path(file, sizeof(file), "%s/cover-02.png", covers);
+    } else if (!strncmp(url, "https://www.wikidata.org/w/api.php?action=wbsearchentities&", 59)) {
+        path(file, sizeof(file), "%s/wikidata-search.json", fixtures);
+    } else if (!strncmp(url, "https://www.wikidata.org/w/api.php?action=wbgetentities&", 56)) {
+        if (!strstr(url, "ids=Q900111%7CQ900222%7CQ900333") || !strstr(url, "props=claims%7Clabels")) { *status = 400; return 0; }
+        path(file, sizeof(file), "%s/wikidata-entities.json", fixtures);
+    } else if (!strcmp(url, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/901003/library_600x900_2x.jpg")) {
+        path(file, sizeof(file), "%s/cover-03.png", covers);
     } else if (!strncmp(url, "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=", 73)) {
         path(file, sizeof(file), "%s/steam-items.json", fixtures);
     } else if (!strcmp(url, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/901001/0a1b2c3d/library_600x900_2x.jpg?t=1700000000")) {
@@ -335,6 +350,54 @@ static void test_cover_search(void)
             CHECK(((top >> 16) & 255) < 200 && ((top >> 8) & 255) < 200, "blurred and darkened above");
             pc5_image_free(&cover);
         }
+
+    /* PCGamingWiki: the page's infobox cover, its Steam app's hero the background; Wikidata:
+     * its items' Steam apps, an app Steam's search found already once. */
+    {
+        int pcgw = -1, wikidata = -1, steam = 0;
+        for (int i = 0; i < search.count; i++) {
+            if (!strcmp(search.choices[i].source, "PCGamingWiki")) pcgw = i;
+            if (!strcmp(search.choices[i].source, "Wikidata")) wikidata = i;
+            steam += strstr(search.choices[i].url, "/901001/library_600x900_2x.jpg") != NULL;
+            CHECK(!strstr(search.choices[i].title, "Road Kings"), "an unrelated PCGamingWiki page kept");
+        }
+        CHECK(pcgw >= 0 && !strcmp(search.choices[pcgw].title, "Neon Drift") &&
+              !strcmp(search.choices[pcgw].url, "https://www.pcgamingwiki.com/wiki/Special:FilePath/Neon%20Drift%20cover.jpg") &&
+              search.choices[pcgw].steam_appid == 901001 && strstr(search.choices[pcgw].background, "/901001/library_hero.jpg"),
+              "PCGamingWiki's cover: %s", pcgw >= 0 ? search.choices[pcgw].url : "none");
+        CHECK(wikidata >= 0 && search.choices[wikidata].steam_appid == 901003 &&
+              !strcmp(search.choices[wikidata].title, "Neon Drift: Overdrive"), "Wikidata's other app");
+        CHECK(steam == 1, "one choice for one Steam picture: %d", steam);
+        if (pcgw >= 0) {
+            CHECK(!pc5_cover_fetch(&search.choices[pcgw], &http, &cover, NULL), "PCGamingWiki's picture");
+            pc5_image_free(&cover);
+        }
+        if (wikidata >= 0) {
+            CHECK(!pc5_cover_fetch(&search.choices[wikidata], &http, &cover, NULL), "Wikidata's app's picture");
+            pc5_image_free(&cover);
+        }
+    }
+
+    /* Sources turned off aren't asked. */
+    {
+        Pc5CoverHint some = hint;
+        some.off = PC5_PICTURES_STEAM | PC5_PICTURES_PCGAMINGWIKI | PC5_PICTURES_WIKIPEDIA | PC5_PICTURES_WIKIDATA;
+        net.requests = 0;
+        pc5_cover_search_start(&search, &some);
+        while (pc5_cover_search_step(&search, &http)) {}
+        int others = 0;
+        for (int i = 0; i < search.count; i++) others += strcmp(search.choices[i].source, "GOG") != 0;
+        CHECK(net.requests == 1 && strstr(net.last, "https://catalog.gog.com/") && !others,
+              "only GOG: %d requests, %d others, %s", net.requests, others, net.last);
+        some.off = (1u << PC5_PICTURE_SOURCES) - 1;
+        some.steam_appid = 901002;
+        net.requests = 0;
+        pc5_cover_search_start(&search, &some);
+        while (pc5_cover_search_step(&search, &http)) {}
+        CHECK(net.requests == 0 && search.count == 0, "all off: nothing asked, nothing found");
+        CHECK(!strcmp(pc5_picture_source_name(2), "PCGamingWiki") && !strcmp(pc5_picture_source_key(4), "wikidata") &&
+              !pc5_picture_source_name(5)[0], "the sources' names");
+    }
 
     /* A steam_appid.txt is taken at its word. */
     Pc5CoverHint known = { .folder = "Whatever", .steam_appid = 901002 };
@@ -1523,6 +1586,8 @@ static void test_settings(void)
     set.check_updates = 0;
     set.keep_logs = 1;
     pc5_copy(set.startup_sound, sizeof(set.startup_sound), "Chime Two");
+    CHECK(!set.pictures_off, "every picture source on by default");
+    set.pictures_off = PC5_PICTURES_GOG | PC5_PICTURES_WIKIDATA;
     CHECK(!pc5_settings_save(dir, &set), "saved");
     CHECK(!pc5_settings_load(dir, &back) && !memcmp(&set, &back, sizeof(set)), "read back the same");
     path(file, sizeof(file), "%s/pc5/settings.txt", dir);
@@ -1531,6 +1596,9 @@ static void test_settings(void)
     CHECK(!pc5_settings_load(dir, &back) && !back.fps && back.fps_corner == PC5_CORNER_TOP_RIGHT && !back.vibration &&
           back.light_bar == PC5_LIGHT_CONSOLE && back.trigger_rumble == 100 && back.trigger_resistance == 50 &&
           back.triggers == PC5_TRIGGERS_BOTH, "what it doesn't know gives the default");
+    write_text(file, "pictures_steam = maybe\npictures_wikipedia = off\npictures_bing = off\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.pictures_off == PC5_PICTURES_WIKIPEDIA, "picture sources: %#x",
+          (unsigned)back.pictures_off);
     write_text(file, "vibration = on\n");
     CHECK(!pc5_settings_load(dir, &back) && back.vibration == 100, "an earlier PC5's vibration = on is 100 %%");
     write_text(file, "startup_sound = PC5\n");
@@ -2728,6 +2796,102 @@ static void test_named_libraries(void)
     }
 }
 
+/* A Java game: a launcher that imports nothing it draws with, a Java runtime beside it. It
+ * draws with OpenGL, at install and for one installed before; one made with jpackage gets
+ * its app folder in PATH (WINEPATH) so it doesn't start itself again. */
+static void test_java(void)
+{
+    char root[PC5_PATH], from[PC5_PATH], file[PC5_PATH], dir[PC5_PATH], error[PC5_ERROR], winepath[PC5_PATH];
+    static char text[4096];
+    Pc5Folder *folder = pc5_alloc(sizeof(*folder));
+    Pc5Info info;
+
+    if (!folder) return;
+    path(from, sizeof(from), "%s/launcher.exe", programs);
+    path(dir, sizeof(dir), "%s/stubs/Pixel Dungeon", work);
+    path(file, sizeof(file), "%s/Pixel Dungeon.exe", dir);
+    copy_file(from, file);
+    CHECK(!pc5_folder_inspect(dir, "Pixel Dungeon", folder) && folder->exe_count && !folder->java &&
+          pc5_folder_api(folder, 0) == PC5_API_GDI, "without a runtime: Windows' own drawing");
+    CHECK(!pc5_java_beside(dir), "no runtime beside it");
+    path(file, sizeof(file), "%s/Runtime/BIN/Server/JVM.dll", dir);
+    copy_file(from, file);
+    CHECK(pc5_java_beside(dir), "a runtime beside it, names in any case");
+    CHECK(!pc5_folder_inspect(dir, "Pixel Dungeon", folder) && folder->java && folder->exe_count &&
+          !strcmp(folder->exes[0].path, "Pixel Dungeon.exe") && pc5_folder_api(folder, 0) == PC5_API_OPENGL,
+          "with one: OpenGL (%s, %d)", folder->exe_count ? folder->exes[0].path : "", (int)pc5_folder_api(folder, 0));
+    pc5_free(folder);
+
+    path(root, sizeof(root), "%s/java-root", work);
+    path(file, sizeof(file), "%s/prefixes/pixel/drive_c/Games/Pixel Dungeon/Pixel Dungeon.exe", root);
+    copy_file(from, file);
+    path(file, sizeof(file), "%s/prefixes/pixel/drive_c/Games/Pixel Dungeon/jre/bin/client/jvm.dll", root);
+    copy_file(from, file);
+    memset(&info, 0, sizeof(info));
+    pc5_copy(info.title, sizeof(info.title), "Pixel Dungeon");
+    pc5_copy(info.folder, sizeof(info.folder), "Pixel Dungeon");
+    pc5_copy(info.exe, sizeof(info.exe), "Pixel Dungeon.exe");
+    info.bits = 64;
+    info.api = PC5_API_D3D9;   /* what its runtime's libraries import */
+    pc5_info_text(&info, text, sizeof(text));
+    path(file, sizeof(file), "%s/prefixes/pixel/pc5/info.txt", root);
+    write_text(file, text);
+    path(file, sizeof(file), "%s/profiles/index.txt", root);
+    write_text(file, "");
+    CHECK(pc5_game_winepath(root, "pixel", winepath, sizeof(winepath)) == -1 && !winepath[0], "not made with jpackage");
+    CHECK(!pc5_profile_refresh(root, "pixel", error, sizeof(error)), "refreshed: %s", error);
+    CHECK(!pc5_info_read(root, "pixel", &info) && info.api == PC5_API_OPENGL, "OpenGL kept in its notes: %d", (int)info.api);
+    path(file, sizeof(file), "%s/profiles/pixel.profile", root);
+    {
+        Pc5Buf profile = { 0 };
+        CHECK(!pc5_read_file(file, &profile, 16384) && !pc5_buf_terminate(&profile) &&
+              strstr((char *)profile.data, "graphics = opengl\n"), "drawn through OpenGL now");
+        pc5_buf_free(&profile);
+    }
+    path(file, sizeof(file), "%s/prefixes/pixel/drive_c/Games/Pixel Dungeon/App/pixel dungeon.CFG", root);
+    write_text(file, "[Application]\napp.mainclass=com.example.Main\n");
+    CHECK(!pc5_game_winepath(root, "pixel", winepath, sizeof(winepath)) &&
+          !strcmp(winepath, "C:\\Games\\Pixel Dungeon\\app"), "jpackage's app folder: %s", winepath);
+}
+
+/* A game started from a batch file runs with the bits of the program the batch file starts,
+ * whatever its notes say. */
+static void test_batch_bits(void)
+{
+    char root[PC5_PATH], from[PC5_PATH], file[PC5_PATH], error[PC5_ERROR];
+    static char text[4096];
+    Pc5Info info;
+    Pc5Buf profile = { 0 };
+
+    path(root, sizeof(root), "%s/batch-root", work);
+    path(from, sizeof(from), "%s/game64.exe", programs);
+    path(file, sizeof(file), "%s/prefixes/hunt/drive_c/Games/Hunt/System/Win64_AMD64/Engine.exe", root);
+    copy_file(from, file);
+    path(from, sizeof(from), "%s/game32.exe", programs);
+    path(file, sizeof(file), "%s/prefixes/hunt/drive_c/Games/Hunt/System/Engine.exe", root);
+    copy_file(from, file);
+    path(file, sizeof(file), "%s/prefixes/hunt/drive_c/Games/Hunt/Hunt.bat", root);
+    write_text(file, "@echo off\r\nstart \"\" \"System\\Win64_AMD64\\Engine.exe\" -game\r\n");
+    memset(&info, 0, sizeof(info));
+    pc5_copy(info.title, sizeof(info.title), "Hunt");
+    pc5_copy(info.folder, sizeof(info.folder), "Hunt");
+    pc5_copy(info.exe, sizeof(info.exe), "Hunt.bat");
+    info.bits = 32;   /* the 32-bit program's, chosen before */
+    info.api = PC5_API_D3D9;
+    pc5_info_text(&info, text, sizeof(text));
+    path(file, sizeof(file), "%s/prefixes/hunt/pc5/info.txt", root);
+    write_text(file, text);
+    path(file, sizeof(file), "%s/profiles/index.txt", root);
+    write_text(file, "");
+    CHECK(!pc5_profile_refresh(root, "hunt", error, sizeof(error)), "refreshed: %s", error);
+    path(file, sizeof(file), "%s/profiles/hunt.profile", root);
+    CHECK(!pc5_read_file(file, &profile, 16384) && !pc5_buf_terminate(&profile) &&
+          strstr((char *)profile.data, "executable = C:\\Games\\Hunt\\System\\Win64_AMD64\\Engine.exe\n") &&
+          strstr((char *)profile.data, "architecture = pe64\n"), "the 64-bit program it starts, as 64-bit:\n%s",
+          profile.data ? (char *)profile.data : "");
+    pc5_buf_free(&profile);
+}
+
 /* A game's prefix from before winegstreamer gets its registrations once. */
 /* An installed game's DXVK follows the app's: replaced once when the app names another. */
 /* .NET: what an older game's prefix lacks, the runtime's path, and the runtime's one copy. */
@@ -3883,10 +4047,17 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_LEFT, &canvas);        /* trigger rumble: 100 % -> 75 % */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_RIGHT, &canvas);       /* trigger resistance: 50 % -> 75 % */
+    press(ui, PC5_KEY_DOWN, &canvas);        /* the last row: still on it (Startup sound is in System now) */
+    press(ui, PC5_KEY_RIGHT, &canvas);       /* trigger resistance: 75 % -> 100 % */
+    press(ui, PC5_KEY_LEFT, &canvas);        /* and back */
+    /* System: Startup sound. */
+    press(ui, PC5_KEY_BACK, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on In games");
     press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Startup sound: cheap chinese speaker, the first, -> Chime */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Chime, the last one, -> Off */
-    press(ui, PC5_KEY_DOWN, &canvas);        /* the last row: still on it */
     {
         Pc5Settings set;
         pc5_settings_load(root, &set);
@@ -3897,16 +4068,39 @@ static void test_screens(const char *fonts)
               (int)set.light_bar, set.vibration, (int)set.triggers, set.trigger_rumble, set.trigger_resistance,
               set.startup_sound);
     }
-    /* Off again, then rumble: only its own strength shows, then Startup sound. */
+    /* Picture sources: GOG off, from System. */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Picture sources */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* GOG: off */
+    {
+        Pc5Settings set;
+        pc5_settings_load(root, &set);
+        CHECK(set.pictures_off == PC5_PICTURES_GOG, "GOG off: %#x", (unsigned)set.pictures_off);
+    }
+    press(ui, PC5_KEY_BACK, &canvas);        /* System, on Picture sources */
     press(ui, PC5_KEY_UP, &canvas);
     press(ui, PC5_KEY_UP, &canvas);
-    press(ui, PC5_KEY_UP, &canvas);          /* Adaptive triggers */
+    press(ui, PC5_KEY_BACK, &canvas);        /* the first page, on System */
+    /* Off again, then rumble: only its own strength shows; then Startup sound again. */
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* In games */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Adaptive triggers */
     press(ui, PC5_KEY_RIGHT, &canvas);       /* both -> off */
     press(ui, PC5_KEY_RIGHT, &canvas);       /* off -> rumble */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_RIGHT, &canvas);       /* trigger rumble: 75 % -> 100 % */
+    press(ui, PC5_KEY_DOWN, &canvas);        /* the last row now */
+    press(ui, PC5_KEY_RIGHT, &canvas);       /* trigger rumble: 100 % -> 25 % */
+    press(ui, PC5_KEY_LEFT, &canvas);        /* and back */
+    press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
-    press(ui, PC5_KEY_RIGHT, &canvas);       /* the next row is Startup sound's: Off -> cheap chinese speaker, the first */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
+    press(ui, PC5_KEY_RIGHT, &canvas);       /* Startup sound: Off -> cheap chinese speaker, the first */
     {
         Pc5Settings set;
         pc5_settings_load(root, &set);
@@ -3919,7 +4113,7 @@ static void test_screens(const char *fonts)
     /* Overlay: its lines, each on its own, and the corner. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page");
-    press(ui, PC5_KEY_DOWN, &canvas);        /* Overlay */
+    press(ui, PC5_KEY_UP, &canvas);          /* Overlay */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Show FPS: on */
     press(ui, PC5_KEY_DOWN, &canvas);
@@ -3939,12 +4133,12 @@ static void test_screens(const char *fonts)
         CHECK(pc5_game_overlay_lines(&set) == (PW_PC5_HUD_FPS | PW_PC5_HUD_FRAME_TIME | PW_PC5_HUD_MEMORY),
               "its lines: %#x", pc5_game_overlay_lines(&set));
     }
-    /* Updates: Check now finds a newer PC5 and says so once, with the console's notification. */
+    /* System's Check now finds a newer PC5 and says so once, with the console's notification. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on Overlay");
-    press(ui, PC5_KEY_DOWN, &canvas);        /* Updates */
+    press(ui, PC5_KEY_DOWN, &canvas);        /* System */
     press(ui, PC5_KEY_ACCEPT, &canvas);
-    press(ui, PC5_KEY_DOWN, &canvas);        /* Check now */
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Check now */
     /* a release newer than any this test runs on */
     net.release = "{\"tag_name\":\"v99.0.0\",\"html_url\":\"https://github.com/bornaradusin/PC5/releases/tag/v99.0.0\"}";
     press(ui, PC5_KEY_ACCEPT, &canvas);
@@ -4179,7 +4373,7 @@ static void save_shot(const Pc5Canvas *c, const char *name)
 }
 
 /* When PC5 opens with a newer release out: it asks; Later leaves it for Settings ›
- * Updates, whose Update now installs it, shows the progress, and closes PC5. */
+ * System, whose Update now installs it, shows the progress, and closes PC5. */
 static void test_upgrade_screens(const char *fonts)
 {
     FakeConsole console = { 0 };
@@ -4232,9 +4426,8 @@ static void test_upgrade_screens(const char *fonts)
 
     press(ui, PC5_KEY_OPTIONS, &canvas);
     for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
-    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Updates */
-    press(ui, PC5_KEY_DOWN, &canvas);
-    press(ui, PC5_KEY_DOWN, &canvas);        /* Update now */
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Update now */
     pc5_ui_draw(ui, &canvas);
     save_shot(&canvas, "updates-page");
     net.gate = 1;
@@ -4318,6 +4511,8 @@ int main(int argc, char **argv)
     test_dotnet();
     test_keyboard();
     test_named_libraries();
+    test_java();
+    test_batch_bits();
     test_game(fonts);
     test_screens(fonts);
     test_tile_start(fonts);

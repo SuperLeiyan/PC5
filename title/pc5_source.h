@@ -37,6 +37,7 @@ typedef struct Pc5Folder {
     uint32_t imports;         /* every program and library in the game's folders */
     uint32_t steam_appid;     /* a steam_appid.txt at the top, or 0 */
     char picture[PC5_PATH];   /* the player's cover: cover.jpg, .jpeg or .png at the top, or "" */
+    int java;                 /* a Java runtime inside it (bin/server or bin/client jvm.dll) */
     char problem[PC5_ERROR];  /* why it can't be installed, or "" */
 } Pc5Folder;
 
@@ -44,8 +45,13 @@ typedef struct Pc5Folder {
  * with. A problem (no Windows program, a name Windows can't use, too deep)
  * is in problem. -1 only when the folder can't be read at all. */
 int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder);
-/* The API of the chosen program, with the libraries beside it. */
+/* The API of the chosen program, with the libraries beside it. A Java game (a program that
+ * draws with nothing it imports, in a folder with a Java runtime) draws with OpenGL: Java
+ * games' libraries (LWJGL, JOGL, libGDX) load it at run time. */
 Pc5Api pc5_folder_api(const Pc5Folder *folder, int exe);
+/* 1 when the folder dir (on disk) has a Java runtime in it, as a Java game carries one:
+ * runtime/ or jre/ with bin/server/jvm.dll or bin/client/jvm.dll, names in any case. */
+int pc5_java_beside(const char *dir);
 
 /* ---- batch files ---------------------------------------------------------------------
  * A game that starts from a batch file (.bat or .cmd): the console runs one program, so

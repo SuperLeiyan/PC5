@@ -330,6 +330,9 @@ int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder)
                 folder->files++;
                 folder->bytes += (uint64_t)st.st_size;
                 int is_exe = pc5_ends_with_ci(entry->d_name, ".exe"), is_dll = pc5_ends_with_ci(entry->d_name, ".dll");
+                if (is_dll && !pc5_casecmp(entry->d_name, "jvm.dll") &&
+                    (pc5_ends_with_ci(relative, "bin/server") || pc5_ends_with_ci(relative, "bin/client")))
+                    folder->java = 1;
                 if ((is_exe || is_dll) && !helper_folder(child)) {
                     Pc5PeInfo pe;
                     if (pc5_pe_read(entry_path, &pe)) continue;
@@ -443,7 +446,39 @@ Pc5Api pc5_folder_api(const Pc5Folder *folder, int index)
     beside = folder->exes[index].beside;
     if (own & drawing) return pc5_api_from_imports(own);
     if (beside & drawing) return pc5_api_from_imports(beside);
+    if (folder->java) return PC5_API_OPENGL;
     return pc5_api_from_imports(folder->imports);
+}
+
+/* name in dir in any case, joined to dir into out: 0, or -1 when there is none. */
+static int join_ci(const char *dir, const char *name, char *out, size_t size)
+{
+    DIR *folder;
+    struct dirent *entry;
+    int found = -1;
+
+    if (pc5_join(out, size, dir, name)) return -1;
+    if (pc5_exists(out)) return 0;
+    if (!(folder = opendir(dir))) return -1;
+    while (found && (entry = readdir(folder)))
+        if (!pc5_casecmp(entry->d_name, name) && !pc5_join(out, size, dir, entry->d_name)) found = 0;
+    closedir(folder);
+    return found;
+}
+
+int pc5_java_beside(const char *dir)
+{
+    static const char *const tops[] = { "runtime", "jre" }, *const kinds[] = { "server", "client" };
+    char top[PC5_PATH], bin[PC5_PATH], kind[PC5_PATH], jvm[PC5_PATH];
+
+    for (size_t t = 0; t < sizeof(tops) / sizeof(tops[0]); t++) {
+        if (join_ci(dir, tops[t], top, sizeof(top)) || join_ci(top, "bin", bin, sizeof(bin))) continue;
+        for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++)
+            if (!join_ci(bin, kinds[k], kind, sizeof(kind)) && !join_ci(kind, "jvm.dll", jvm, sizeof(jvm)) &&
+                pc5_is_file(jvm))
+                return 1;
+    }
+    return 0;
 }
 
 /* ---- batch files ------------------------------------------------------------------- */

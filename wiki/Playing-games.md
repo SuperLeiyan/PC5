@@ -1,9 +1,9 @@
-Your installed games are in PC5's library, a row of covers sorted by name. From there you start a game, open its menu to set it up, and come back to PC5 when you leave it. This page covers the library, starting and leaving a game, the game menu and frame generation.
+Your installed games are in PC5's library, a row of covers sorted by name, standing on a floor that mirrors them. From there you start a game, open its menu to set it up, and come back to PC5 when you leave it. This page covers the library, starting and leaving a game, the game menu and frame generation.
 
 ## The library
 
 ![The PC5 library](images/library.png)
-*The library. Under the chosen game: its name, 32-bit or 64-bit, what it draws with, and its size.*
+*The library. The chosen game stands in the middle, lit in its cover's colours; under it, its name and, in the pill, 32-bit or 64-bit, what it draws with, and its size. Behind it, its background, or a backdrop made from its cover (see [Backgrounds](Covers#backgrounds)).*
 
 | Button | In the library |
 | --- | --- |

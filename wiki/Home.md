@@ -1,4 +1,4 @@
-PC5 is a launcher for your own Windows PC games on a PS5 that runs homebrew. It installs games from a USB drive, shows them as a row of covers, and runs them with [prospero-win](https://github.com/mpereiraesaa/prospero-win) (Wine on the PS5). The app's title ID is `PPSA11018` and its tile on the home screen is called **PC5**. This wiki describes PC5 **1.8.1**.
+PC5 is a launcher for your own Windows PC games on a PS5 that runs homebrew. It installs games from a USB drive, shows them as a row of covers, and runs them with [prospero-win](https://github.com/mpereiraesaa/prospero-win) (Wine on the PS5). The app's title ID is `PPSA11018` and its tile on the home screen is called **PC5**. This wiki describes PC5 **1.8.2**.
 
 ![The PC5 library](images/library.png)
 *The library: your games as a row of covers, with the chosen one in the middle.*
@@ -8,7 +8,7 @@ PC5 contains no games and downloads none. You install the games you own.
 ## What PC5 does
 
 - **Installs games from a USB drive.** Each game is copied once to the console, checked against the drive, and gets its own Windows (its own saves, settings and shader cache). The USB drive is never written to.
-- **Shows your library as covers.** Covers come from Steam's store, GOG's catalogue or Wikipedia, with no account and no key. You can also use your own pictures.
+- **Shows your library as covers**, standing on a floor that mirrors them, the chosen game's background behind them. Covers come from Steam's store, GOG's catalogue, PCGamingWiki, Wikipedia or Wikidata, with no account and no key; each can be turned off. You can also use your own pictures.
 - **Runs the games** with Wine, DXVK (Direct3D 8 to 11), VKD3D-Proton (Direct3D 12), Mesa (RADV for Vulkan, Zink for OpenGL) and Wine Mono (.NET Framework).
 - **Lets you set each game up on its own:** its controller (Xbox controller, DualSense, or keyboard and mouse with your own button mapping), its resolution (1080p, 1440p or 4K) and aspect ratio, frame generation from 30 to 60 fps, launch options, and a tile of its own on the PS5's home screen.
 - **Has settings for every game:** an overlay (FPS, frame time, CPU, temperatures, memory), vibration strength, the light bar and the adaptive triggers.

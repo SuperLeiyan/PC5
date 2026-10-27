@@ -478,6 +478,15 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
     }
     if (memory_2gb) setenv("PW_LARGE_ADDRESS_AWARE", "0", 1);
     else unsetenv("PW_LARGE_ADDRESS_AWARE");
+    /* A Java game's launcher made with jpackage: its app folder in PATH from the start, which
+     * Wine takes from WINEPATH (pc5_game_winepath). */
+    char winepath[PC5_PATH + 40];
+    if (prefix && prefix[0] && strcmp(prefix, "default") && !pc5_game_winepath(root, prefix, winepath, sizeof(winepath))) {
+        setenv("WINEPATH", winepath, 1);
+        say(game, "PC5 Java launcher: %s in PATH", winepath);
+    } else {
+        unsetenv("WINEPATH");
+    }
     say(game, "PC5 game fps=%d overlay=%#x corner=%d vibration=%d light=%d triggers=%d trigger_rumble=%d "
         "trigger_resistance=%d tint=%06x frame_generation=%d memory_32bit=%s aspect_ratio=%s", game->settings.fps,
         pc5_game_overlay_lines(&game->settings), (int)game->settings.fps_corner, game->settings.vibration,

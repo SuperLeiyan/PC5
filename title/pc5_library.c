@@ -383,6 +383,14 @@ static int start_program(const char *root, const char *id, const Pc5Info *info, 
     }
     pc5_copy(program->exe, sizeof(program->exe), batch->exe);
     pc5_copy(arguments, arguments_size, batch->arguments);
+    /* Its bits are the program's own, whatever the notes say (a batch file chosen as the game's
+     * program before 1.8.2 kept those of the program chosen before it). */
+    {
+        char exe[PC5_PATH];
+        Pc5PeInfo pe;
+        if (!pc5_join(exe, sizeof(exe), top, batch->exe) && !pc5_pe_read(exe, &pe) && (pe.bits == 32 || pe.bits == 64))
+            program->bits = pe.bits;
+    }
     pc5_copy(own, sizeof(own), batch->exe);
     slash = strrchr(own, '/');
     if (slash) *slash = 0; else own[0] = 0;
@@ -494,6 +502,22 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
                 pc5_write_file(path, text, strlen(text));
         }
     }
+    /* A Java game installed before 1.8.2 as drawing with Windows itself (or what its runtime's
+     * libraries import): its program draws with nothing it imports and a Java runtime is
+     * beside it, so it draws with OpenGL (pc5_folder_api), kept in its notes. */
+    if (info.api != PC5_API_OPENGL) {
+        char dir[PC5_PATH];
+        Pc5PeInfo pe;
+        program_folder(root, id, &program, dir, sizeof(dir));
+        if (dir[0] && pc5_java_beside(dir) &&
+            !pc5_format(path, sizeof(path), "%s/prefixes/%s/drive_c/Games/%s/%s", root, id, info.folder, program.exe) &&
+            !pc5_pe_read(path, &pe) && !(pe.imports & PC5_IMPORT_DRAWING)) {
+            info.api = program.api = PC5_API_OPENGL;
+            if (!pc5_info_text(&info, text, sizeof(text)) &&
+                !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/info.txt", root, id))
+                pc5_write_file(path, text, strlen(text));
+        }
+    }
     /* launch.txt beside the program chosen (a batch file's options come first). */
     launch_options(root, id, &info, options, sizeof(options));
     if (options[0]) {
@@ -526,6 +550,37 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
     /* A start of the game's own program: any hand-offs before it are done with. */
     if (!pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/handoff-count.txt", root, id)) unlink(path);
     return status;
+}
+
+/* ---- a Java game's launcher ---------------------------------------------------------- */
+
+static int resolve_ci(const char *base, const char *relative, char *out, size_t size);
+
+/* A program made with Java's jpackage finds its app folder (app\<program>.cfg beside it)
+ * through PATH: when PATH lacks it, the program adds it and starts itself again, which a
+ * program on the console can't. With it in PATH from the start (WINEPATH, which Wine puts
+ * first in PATH), it runs its game in its own process. */
+int pc5_game_winepath(const char *root, const char *id, char *out, size_t size)
+{
+    Pc5Info info, program;
+    char arguments[512], work[PC5_PATH + 32], error[PC5_ERROR], dir[PC5_PATH], cfg[PC5_PATH], found[PC5_PATH],
+         windows[PC5_PATH + 32];
+    const char *slash, *name;
+    size_t base;
+
+    out[0] = 0;
+    if (pc5_info_read(root, id, &info) ||
+        start_program(root, id, &info, &program, arguments, sizeof(arguments), work, sizeof(work), error, sizeof(error)))
+        return -1;
+    program_folder(root, id, &program, dir, sizeof(dir));
+    slash = strrchr(program.exe, '/');
+    name = slash ? slash + 1 : program.exe;
+    base = strlen(name) > 4 && pc5_ends_with_ci(name, ".exe") ? strlen(name) - 4 : 0;
+    if (!dir[0] || !base || pc5_format(cfg, sizeof(cfg), "app/%.*s.cfg", (int)base, name) ||
+        resolve_ci(dir, cfg, found, sizeof(found)) || !pc5_is_file(found))
+        return -1;
+    windows_path(info.folder, program.exe, 0, windows, sizeof(windows));
+    return pc5_format(out, size, "%s\\app", windows);
 }
 
 /* ---- a launcher's hand-off ------------------------------------------------------------ */
