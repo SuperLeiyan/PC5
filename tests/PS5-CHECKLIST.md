@@ -261,7 +261,7 @@ With ShadowMountPlus and elfldr running.
 | --- | --- | --- | --- |
 | 119 | Open PC5 with 20 or more games, some with backgrounds; hold left, then right | the covers move smoothly, at the console's frame rate; a game's background shows a moment after it is chosen | |
 | 120 | Fallout or Fallout 2 (falloutw.exe, fallout2.exe) | it gets past startup to its own screens | `wine-ps5: 32-bit FS base repaired (1): … for %fs:18, fs 0013 base …`: send the line |
-| 121 | A game that looks up kernel32's UTRegister (Brian Lara International Cricket 2007), without a krnl386 override | it doesn't close at once; no `i386_set_ldt: Invalid argument` | `module not found for forward 'krnl386.exe16.UTRegister'` |
+| 121 | A game that looks up kernel32's UTRegister (Brian Lara International Cricket 2007), without a krnl386 override | it doesn't close at once; no `i386_set_ldt: Invalid argument` | `process_attach failed for forward 'krnl386.exe16.UTRegister'` |
 | 122 | △ › Graphics › CPU sharing On on a game; start it | it plays; for a game that stopped for seconds at a time (Ori and the Blind Forest in Xbox mode), it no longer stops | `PW_WINE64 runtime thread_scheduling=1` |
 | 123 | Open PC5 | the log names the firmware the console's Settings › System › System Software shows | `PC5 system firmware=13.60 …` (with `reported=…` when libkernel answers another): send the line |
 

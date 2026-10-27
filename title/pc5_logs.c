@@ -596,13 +596,14 @@ int pc5_firmware_from_kernel(const char *version, char *out, size_t size)
 
     while (at && (at = strstr(at, "releases/"))) {
         const char *p = at += 9;
-        int major = 0, minor = 0;
-        while (*p >= '0' && *p <= '9' && major < 3) p++, major++;
-        if (major && *p == '.') {
+        int digits = 0, minor = 0, major = 0;
+        while (*p >= '0' && *p <= '9' && digits < 3) major = major * 10 + *p++ - '0', digits++;
+        if (digits && *p == '.') {
             const char *dot = p++;
             while (*p >= '0' && *p <= '9' && minor < 3) p++, minor++;
+            /* "09.60" as libkernel's number reads, 9.60 */
             if (minor && !(*p >= '0' && *p <= '9') && *p != '.')
-                return pc5_format(out, size, "%.*s.%.*s", major, at, minor, dot + 1);
+                return pc5_format(out, size, "%d.%.*s", major, minor, dot + 1);
         }
     }
     return -1;

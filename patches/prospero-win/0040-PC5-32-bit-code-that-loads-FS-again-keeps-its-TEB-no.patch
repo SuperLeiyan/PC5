@@ -18,9 +18,9 @@ system without 16-bit support.
 ---
  PUBLICATION_ALLOWLIST.txt                     |   2 +
  docs/WINE_PS5_BUILD.md                        |   2 +
- ...-the-fs-base-a-32-bit-program-loaded.patch | 236 ++++++++++++++++++
+ ...-the-fs-base-a-32-bit-program-loaded.patch | 251 ++++++++++++++++++
  ...tdll-ps5-no-ldt-and-no-16-bit-kernel.patch |  51 ++++
- 4 files changed, 291 insertions(+)
+ 4 files changed, 306 insertions(+)
  create mode 100644 wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
  create mode 100644 wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
 
@@ -38,24 +38,24 @@ index b569eb6..61572ab 100644
  
  
 diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
-index dafaa1b..5cff186 100644
+index dafaa1b..01b0dbe 100644
 --- a/docs/WINE_PS5_BUILD.md
 +++ b/docs/WINE_PS5_BUILD.md
 @@ -131,6 +131,8 @@ before evaluating a candidate built from that cache.
  | 0899 | `include`: list the PS5 sync headers (0810, 0820, 0885, 0887) in `include/Makefile.in`, which makedep needs to resolve them; configure failed without it |
  | 0902 | `win32u`: the PS5 driver sends the arrows, Insert, Delete, Home, End, Page Up, Page Down, right Ctrl and Alt, the Windows and menu keys and keypad `/` with `KEYEVENTF_EXTENDEDKEY`; their scan codes are the keypad's without it, so DirectInput reported the keypad's 8 for the up arrow and a game's arrow-key bindings never fired |
  | 0903 | `ntdll`: a signal frame keeps the FS base it was taken with when the thread resumes where it was; the host's is set only where the handler sends a context to Wine's 64-bit code (the exception dispatcher, a different 64-bit context). The native WoW64 CPU sets the guest FS just before it switches to 32-bit code, and a signal in that window used to send the thread into its 32-bit code with the host FS (GTA San Andreas' DXVK workers crashing at startup in `RtlEnterCriticalSection`) |
-+| 0928 | `ntdll`: a page fault in 32-bit code on the native WoW64 CPU whose `%fs:` operand missed the 32-bit TEB gets the TEB's base back in the signal frame and runs again. sysarch(AMD64_SET_FSBASE) sets the base the CPU uses but not the GDT descriptor of the kernel's user FS selector, which the kernel writes from the thread's saved base when it switches the thread in, often while it is on its 64-bit side with the host's FS; a program that loads FS again got the low half of the host thread pointer (Fallout 1 and 2 in `GetStdHandle`, reading `%fs:0x18` at FF81C098). The first repair, and every hundredfold after, is logged; 64 repairs in a row in one state give the fault to the program |
++| 0928 | `ntdll`: a page fault in 32-bit code on the native WoW64 CPU whose `%fs:` operand missed the 32-bit TEB gets the TEB's base back in the signal frame and runs again. sysarch(AMD64_SET_FSBASE) sets the base the CPU uses but not the GDT descriptor of the kernel's user FS selector, which the kernel writes from the thread's saved base when it switches the thread in, often while it is on its 64-bit side with the host's FS; a program that loads FS again got the low half of the host thread pointer (Fallout 1 and 2 in `GetStdHandle`, reading `%fs:0x18` at FF81C098). Only an access violation `virtual_handle_fault` left alone, not an execute fault, and not one on the stack; the first repair, and every hundredfold after, is logged; 64 repairs in one state, each within a millisecond of the last, give the fault to the program |
 +| 0929 | `ntdll`, `krnl386`: `NtSetLdtEntries` returns `STATUS_NOT_IMPLEMENTED`, as for a 64-bit process: the console refuses I386_SET_LDT (EINVAL), and `ldt_set_entry` ended the process on that. krnl386.exe16 doesn't load without LDT entries, so a lookup of a forwarded 16-bit export (`kernel32.UTRegister`, Brian Lara International Cricket 2007) fails instead of ending the game |
  | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
  
  ## Allocator
 diff --git a/wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch b/wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
 new file mode 100644
-index 0000000..073c500
+index 0000000..2cfba22
 --- /dev/null
 +++ b/wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,251 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: prospero-win <prospero-win@invalid>
 +Date: Tue, 27 Oct 2026 12:00:00 +0000
@@ -72,30 +72,33 @@ index 0000000..073c500
 +and 2 in GetStdHandle, reading %fs:0x18 at FF81C098.
 +
 +The kernel sets the base saved in the signal frame on sigreturn (0903).
-+A page fault in 32-bit code whose %fs: operand missed the TEB now gets the
-+TEB's base and the kernel's selector in the frame and runs again; the
-+first repair and every hundredfold after are logged. A repair that does
-+not take faults again in the same state, and after 64 of those the fault
-+goes to the program as before.
++An access violation in 32-bit code that virtual_handle_fault left alone,
++not an execute fault, whose %fs: operand missed the TEB (and its stack)
++now gets the TEB's base and the kernel's selector in the frame and runs
++again; the first repair and every hundredfold after are logged. A repair
++that does not take faults again at once in the same state, and after 64
++of those, each within a millisecond of the last, the fault goes to the
++program as before.
 +---
-+ dlls/ntdll/unix/signal_x86_64.c | 184 +++++++++++++++++++++++++++++++++++++++++-
-+ 1 file changed, 183 insertions(+), 1 deletion(-)
++ dlls/ntdll/unix/signal_x86_64.c | 197 +++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 196 insertions(+), 1 deletion(-)
 +
 +diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
 +--- a/dlls/ntdll/unix/signal_x86_64.c
 ++++ b/dlls/ntdll/unix/signal_x86_64.c
-+@@ -639,6 +639,10 @@
++@@ -639,6 +639,11 @@
 +     DWORD                 fs;            /* 0338 WOW TEB selector */
 +     DWORD                 mxcsr;         /* 033c Unix-side mxcsr register */
 +     char                  syscall_dispatch; /* 0340 */
 ++#ifdef __PROSPERO__
 ++    DWORD                 fs_repair_state; /* 0344 the guest state of the last FS base repair */
 ++    DWORD                 fs_repair_count; /* 0348 repairs in a row in that same state */
+++    ULONGLONG             fs_repair_time;  /* 0350 when the last one was, in microseconds */
 ++#endif
 + };
 + 
 + C_ASSERT( sizeof(struct amd64_thread_data) <= sizeof(((struct teb_data *)0)->cpu_data) );
-+@@ -2603,6 +2607,180 @@
++@@ -2603,6 +2608,192 @@
 + {
 +     segv_unresolved_hook = hook;
 + }
@@ -215,30 +218,41 @@ index 0000000..073c500
 ++    return TRUE;
 ++}
 ++
-++static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext, siginfo_t *siginfo )
+++static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext, siginfo_t *siginfo,
+++                                const EXCEPTION_RECORD *rec )
 ++{
 ++    static LONG repairs;
 ++    struct amd64_thread_data *amd64_data = amd64_thread_data( data );
-++    DWORD teb32, offset, fault, state;
+++    DWORD teb32, offset, fault, expected, state;
 ++    BYTE code[16];
 ++    unsigned int len;
+++    struct timespec now;
+++    ULONGLONG now_us;
 ++    USHORT sel;
 ++    LONG count;
 ++
+++    /* Only an access violation virtual_handle_fault left as it was: a guard page or a stack
+++     * overflow it found stays the program's, and so does an execute fault. */
+++    if (rec->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || rec->ExceptionInformation[0] == EXCEPTION_EXECUTE_FAULT)
+++        return FALSE;
 ++    if (!amd64_data || !cs32_sel || CS_sig(sigcontext) != cs32_sel) return FALSE;
 ++    if (!data->teb || !data->teb->WowTebOffset) return FALSE;
 ++    len = virtual_uninterrupted_read_memory( (const void *)RIP_sig(sigcontext), code, sizeof(code) );
 ++    if (!pw_fs_offset( code, len, sigcontext, &offset )) return FALSE;
 ++    teb32 = PtrToUlong( get_wow_teb( data->teb ) );
 ++    fault = (DWORD)(ULONG_PTR)siginfo->si_addr;
-++    /* With the TEB's base the operand lies at teb32 + offset: a fault there
-++     * (give or take a stack adjustment) is the program's own. */
-++    if ((DWORD)(fault - (teb32 + offset)) < 16 || (DWORD)(teb32 + offset - fault) < 16) return FALSE;
+++    expected = teb32 + offset;
+++    /* With the TEB's base the operand lies at teb32 + offset: a fault in it (a large operand's
+++     * later bytes too) is the program's own, and so is one on its stack, from an instruction
+++     * that also pushes, pops or calls. */
+++    if ((DWORD)(fault - expected) < 0x1000 || (DWORD)(expected - fault) < 16) return FALSE;
+++    if ((DWORD)(fault - ((DWORD)RSP_sig(sigcontext) - 64)) < 128) return FALSE;
 ++    __asm__( "movw %%fs,%0" : "=r" (sel) );
 ++    if (!sel) return FALSE;
 ++
-++    /* A repair the kernel did not apply would fault again in the same state:
-++     * after 64 of those in a row the fault goes to the program as before. */
+++    /* A repair the kernel did not apply would fault again at once in the same state: after
+++     * 64 of those, each within a millisecond of the last, the fault goes to the program as
+++     * before. A program that loads FS again later faults again later, and is repaired. */
 ++    state = (DWORD)RIP_sig(sigcontext);
 ++    state = state * 31 + (DWORD)RAX_sig(sigcontext);
 ++    state = state * 31 + (DWORD)RCX_sig(sigcontext);
@@ -250,11 +264,12 @@ index 0000000..073c500
 ++    state = state * 31 + (DWORD)RDI_sig(sigcontext);
 ++    state = state * 31 + (DWORD)EFL_sig(sigcontext);
 ++    state = state * 31 + fault;
-++    if (state != amd64_data->fs_repair_state)
-++    {
-++        amd64_data->fs_repair_state = state;
+++    clock_gettime( CLOCK_MONOTONIC, &now );
+++    now_us = (ULONGLONG)now.tv_sec * 1000000 + now.tv_nsec / 1000;
+++    if (state != amd64_data->fs_repair_state || now_us - amd64_data->fs_repair_time > 1000)
 ++        amd64_data->fs_repair_count = 0;
-++    }
+++    amd64_data->fs_repair_state = state;
+++    amd64_data->fs_repair_time = now_us;
 ++    if (++amd64_data->fs_repair_count > 64)
 ++    {
 ++        if (amd64_data->fs_repair_count == 65)
@@ -276,14 +291,14 @@ index 0000000..073c500
 + #endif
 + 
 + /**********************************************************************
-+@@ -2656,7 +2834,11 @@
++@@ -2656,7 +2847,11 @@
 +         rec.ExceptionInformation[0] = (ERROR_sig(sigcontext) >> 1) & 0x09;
 +         rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
 +         if (!virtual_handle_fault( data, &rec, (void *)RSP_sig(sigcontext) ) ||
 +-            check_invalid_gsbase( data, sigcontext ))
 ++            check_invalid_gsbase( data, sigcontext )
 ++#ifdef __PROSPERO__
-++            || pw_repair_guest_fs( data, sigcontext, siginfo )
+++            || pw_repair_guest_fs( data, sigcontext, siginfo, &rec )
 ++#endif
 ++            )
 +         {

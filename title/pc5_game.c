@@ -450,15 +450,18 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
     }
     /* Frame generation and the aspect ratio, which libvulkan.prx reads from the
      * environment (the picture of a game drawn on the CPU follows its profile's
-     * scaling), and a 32-bit game's address space, which Wine does (patch 0921:
-     * 4 GB unless PW_LARGE_ADDRESS_AWARE=0). */
-    int memory_2gb = 0, stretch = 0;
+     * scaling), a 32-bit game's address space, which Wine does (patch 0921:
+     * 4 GB unless PW_LARGE_ADDRESS_AWARE=0), and CPU sharing, which Wine's server
+     * reads (patch 0882, WINE_PS5_SCHED=1; the profile says it too, but PC5 writes
+     * only the profiles of the games it installed). */
+    int memory_2gb = 0, stretch = 0, cpu_sharing = 0;
     if (prefix && prefix[0]) {
         Pc5Controls controls;
         pc5_controls_load(root, prefix, &controls);
         game->frame_generation = controls.frame_generation;
         memory_2gb = controls.memory_2gb;
         stretch = controls.stretch;
+        cpu_sharing = controls.cpu_sharing;
     }
     if (game->frame_generation) setenv("PW_PC5_FRAMEGEN", "1", 1);
     else unsetenv("PW_PC5_FRAMEGEN");
@@ -478,6 +481,8 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
     }
     if (memory_2gb) setenv("PW_LARGE_ADDRESS_AWARE", "0", 1);
     else unsetenv("PW_LARGE_ADDRESS_AWARE");
+    if (cpu_sharing) setenv("WINE_PS5_SCHED", "1", 1);
+    else unsetenv("WINE_PS5_SCHED");
     /* A Java game's launcher made with jpackage: its app folder in PATH from the start, which
      * Wine takes from WINEPATH (pc5_game_winepath). */
     char winepath[PC5_PATH + 40];
@@ -488,11 +493,12 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
         unsetenv("WINEPATH");
     }
     say(game, "PC5 game fps=%d overlay=%#x corner=%d vibration=%d light=%d triggers=%d trigger_rumble=%d "
-        "trigger_resistance=%d tint=%06x frame_generation=%d memory_32bit=%s aspect_ratio=%s", game->settings.fps,
+        "trigger_resistance=%d tint=%06x frame_generation=%d memory_32bit=%s aspect_ratio=%s cpu_sharing=%d",
+        game->settings.fps,
         pc5_game_overlay_lines(&game->settings), (int)game->settings.fps_corner, game->settings.vibration,
         (int)game->settings.light_bar, (int)game->settings.triggers, game->settings.trigger_rumble,
         game->settings.trigger_resistance, (unsigned)game->cover_tint, game->frame_generation, memory_2gb ? "2gb" : "4gb",
-        stretch ? "stretch" : "keep");
+        stretch ? "stretch" : "keep", cpu_sharing);
 }
 
 const uint32_t *pc5_game_loading(Pc5GameSession *game, uint64_t now_ms)

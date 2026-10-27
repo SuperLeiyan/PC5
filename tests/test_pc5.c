@@ -2537,6 +2537,8 @@ static void test_logs(void)
               !strcmp(firmware, "13.60"), "kern.version's release: %s", firmware);
         CHECK(!pc5_firmware_from_kernel("r1/releases/9.00", firmware, sizeof(firmware)) && !strcmp(firmware, "9.00"),
               "at the end of the text, one digit before the point: %s", firmware);
+        CHECK(!pc5_firmware_from_kernel("r1/releases/09.60:", firmware, sizeof(firmware)) && !strcmp(firmware, "9.60"),
+              "a leading zero, as libkernel's number reads: %s", firmware);
         CHECK(!pc5_firmware_from_kernel("releases/ releases/x releases/12.4000 releases/12.40", firmware, sizeof(firmware)) &&
               !strcmp(firmware, "12.40"), "the first one that is a version: %s", firmware);
         CHECK(pc5_firmware_from_kernel("FreeBSD 11.0 r1/head", firmware, sizeof(firmware)) &&
@@ -3453,6 +3455,17 @@ static void test_game(const char *fonts_path)
         pc5_controls_save(game_root, "liberty", &controls);
         pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
         CHECK(!getenv("PW_LARGE_ADDRESS_AWARE"), "and 4 GB again");
+        /* CPU sharing reaches Wine's server for any game, its profile written by PC5 or not. */
+        CHECK(!getenv("WINE_PS5_SCHED"), "the console's scheduling by default");
+        controls.cpu_sharing = 1;
+        pc5_controls_save(game_root, "liberty", &controls);
+        pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
+        env = getenv("WINE_PS5_SCHED");
+        CHECK(env && !strcmp(env, "1"), "CPU sharing on tells Wine");
+        controls.cpu_sharing = 0;
+        pc5_controls_save(game_root, "liberty", &controls);
+        pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
+        CHECK(!getenv("WINE_PS5_SCHED"), "and off again");
     }
 
     /* The light bar: the cover's colour, brought up to a light bar's brightness, once. */
