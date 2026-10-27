@@ -18,7 +18,7 @@ runs:
         body=$(sed -e 's/%/%25/g' "$RUNNER_TEMP/tail.txt" | sed -e ':a;N;$!ba;s/\n/%0A/g')
         echo "::error title=${{ inputs.name }}: $(basename "$log")::$body"
     - name: The logs
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: logs-${{ inputs.name }}
         path: ${{ env.PC5_BUILD_DIR }}/logs/

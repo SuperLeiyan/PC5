@@ -318,7 +318,7 @@ jobs:
         uses: actions/cache/restore@v5
         with: { path: "${{ needs.keys.outputs.radv_paths }}", key: "${{ needs.keys.outputs.radv }}", fail-on-cache-miss: true }
       - run: tools/build.sh bundle
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: sources
           path: ${{ env.PC5_RELEASE }}/PPSA11018-sources.tar.xz
@@ -355,7 +355,7 @@ jobs:
         run: tools/build.sh package
       - name: App
         run: tools/build.sh app
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: app
           path: |
@@ -377,9 +377,9 @@ jobs:
       VERSION: ${{ needs.keys.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with: { name: app, path: release }
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with: { name: sources, path: release }
 
       - name: The archives
@@ -396,8 +396,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/earlier"
           case $WITH in
-            *[!0-9]*) gh release download "$WITH" -p PPSA11018.zip -D "$RUNNER_TEMP/earlier" ;;
-            *) gh run download "$WITH" -D "$RUNNER_TEMP/earlier" ;;
+            *[!0-9]*) gh release download "$WITH" -p PPSA11018.zip -D "$RUNNER_TEMP/earlier" ||
+                        { echo "::error::No release $WITH with PPSA11018.zip to compare with (a deleted release has none)"; exit 1; } ;;
+            *) gh run download "$WITH" -D "$RUNNER_TEMP/earlier" ||
+                 { echo "::error::Run $WITH has no artifacts to compare with (they expire after a while)"; exit 1; } ;;
           esac
           earlier=$(find "$RUNNER_TEMP/earlier" -name PPSA11018.zip | head -1)
           [ -n "$earlier" ] || { echo "::error::$WITH has no PPSA11018.zip"; exit 1; }
