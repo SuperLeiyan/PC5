@@ -4,10 +4,13 @@
 # the pinned prospero-win the checks build against).
 #
 #   tests/test.sh [--shots]      --shots: also draws every screen into .build/tests/shots/
+#
+# PC5_BUILD_DIR names the build's folder when it isn't .build/, as for tools/build.sh.
 set -euo pipefail
 here=$(realpath -- "$(dirname -- "$0")/..")
-PW=$here/.build/prospero-win
-out=$here/.build/tests
+B=$(realpath -m -- "${PC5_BUILD_DIR:-$here/.build}")
+PW=$B/prospero-win
+out=$B/tests
 [[ -f $PW/native/pc5_ui.c ]] || { echo "run tools/build.sh sources first" >&2; exit 2; }
 rm -rf "$out" && mkdir -p "$out/work"
 cd "$here"
@@ -40,7 +43,7 @@ for kept in sys.argv[2:]: assert zipfile.ZipFile(kept).testzip() is None" "$out/
 
 # The HTTPS client, with mbedTLS built for this computer, against a local server: a
 # certificate from a test CA (trusted), one from nobody (refused), redirects, chunks.
-mbedtls=$(ls -d "$here"/.build/mbedtls-*/ | head -1)
+mbedtls=$(ls -d "$B"/mbedtls-*/ | head -1)
 config='-DMBEDTLS_USER_CONFIG_FILE="pc5_mbedtls_config.h"'
 mkdir -p "$out/mbedtls" "$out/tls"
 for source in "$mbedtls"/library/*.c; do
