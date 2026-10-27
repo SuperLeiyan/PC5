@@ -390,6 +390,7 @@ step_radv() {
 
 step_tools() {
     src_pw; src_wine
+    stage "Wine's tools"
     cd "$PW"
     tools/build_host_wine.sh --source "$PW/.deps/wine/source" --work "$PW/.deps/wine-tools" --jobs "$jobs" --tools-only
 }
@@ -398,7 +399,9 @@ step_hostwine() {
     src_pw; src_wine
     cd "$PW"
     local build=$PW/.deps/wine-host/build source=$PW/.deps/wine-host/source
+    stage "Wine's Windows side"
     tools/build_host_wine.sh --source "$PW/.deps/wine/source" --work "$PW/.deps/wine-host" --jobs "$jobs"
+    stage "the 32-bit CPUs' Windows halves"
     # The 32-bit CPUs' Windows halves, built against this Wine. The copy is made without
     # .git, and both scripts check the Wine commit there: it points at the checkout it came
     # from, which is at WINE_COMMIT.
@@ -409,10 +412,14 @@ step_hostwine() {
 }
 
 step_wineps5() {
-    src_pw; src_wine; src_ffmpeg; src_framegen; src_vulkan; src_venv; need_sdk; need_native_tool
+    stage "its sources"
+    src_pw; src_wine; src_ffmpeg; src_framegen; src_vulkan; src_venv
+    stage "the payload SDK"
+    need_sdk; need_native_tool
     need tools; need radv
     cd "$PW"
     local sdk=$PW/.deps/ps5-native-app-boilerplate/.deps/native/ps5-payload-sdk work=$PW/.deps/wine-ps5
+    stage "Wine for the PS5"
     PATH="$B/venv/bin:$PATH" tools/build_wine_ps5.sh --source "$PW/.deps/wine/source" \
         --host-tools "$PW/.deps/wine-tools/build" --prx-foundation "$B/prx-foundation" \
         --radv "$B/PS5_Vulkan" --ffmpeg-source "$PW/.deps/ffmpeg/source" --framegen "$B/ps5-framegen" --jobs "$jobs"
@@ -431,6 +438,7 @@ step_wineps5() {
     rm -rf "$stubs" && mkdir -p "$stubs"
     find "$sdk/target/lib" -maxdepth 1 -name '*.so' ! -name libkernel_web.so ! -name libScePosixForWebKit.so \
         -exec cp {} "$stubs/" \;
+    stage "the native CPU's PS5 module"
     rm -rf "$PW/.deps/wow64native/ps5"
     tools/build_wow64native.sh --ps5-only --output "$PW/.deps/wow64native" --ps5-sdk "$sdk" --ps5-wine "$work" \
         --ps5-ntdll "$work/prx/ntdll.shared.elf" --ps5-foundation "$B/prx-foundation" --ps5-stubs "$stubs"
@@ -788,7 +796,8 @@ doing() { # piece
     case $1 in
     tools|hostwine)
         [[ $1 == tools ]] && w=$PW/.deps/wine-tools || w=$PW/.deps/wine-host
-        if newer "$w/install.log"; then now=installing
+        if [[ $now != "Wine's tools" && $now != "Wine's Windows side" ]]; then :
+        elif newer "$w/install.log"; then now=installing
         elif newer "$w/make.log"; then now=$(wine_count "$w")
         elif newer "$w/configure.log"; then now=configuring
         fi ;;
