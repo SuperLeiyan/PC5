@@ -675,6 +675,9 @@ step_bundle() {
 
 # ---- keys, paths and the work kept --------------------------------------------------
 
+# The commands of a piece, as its key takes them: the names of its stages are only what its
+# line a minute says, so changing them builds nothing again.
+commands() { declare -f "$@" | grep -v '^ *stage '; }
 # A file's or a folder's id in prospero-win as patched (git's own hash of its content).
 pwid() { git -C "$PW" rev-parse "HEAD:$1"; }
 # The patches in one of PC5's patch folders.
@@ -685,17 +688,17 @@ key_of() { # piece
     # Zink as GitHub's build has kept it since 1.6: Mesa and llvm-mingw as prospero-win pins them.
     zink) echo "zink-$(cat "$PW/tools/build_mesa_zink.sh" "$PW/tools/mesa_zink_manifest.py" | sha256sum | cut -c1-16)"; return ;;
     title) hash=$(printf '%s\n' "$(git -C "$PW" rev-parse 'HEAD^{tree}')" "$BOILERPLATE_URL" "$LAPY_URL" "$LAPY_COMMIT" \
-                  "$MBEDTLS_VERSION" "$(declare -f step_title need_sdk)") ;;
+                  "$MBEDTLS_VERSION" "$(commands step_title need_sdk)") ;;
     radv) hash=$(printf '%s\n' "$VULKAN_COMMIT" "$(patches_id radv)" "$(pwid tools/mesa_zink_requirements.txt)" \
-                 "$(declare -f step_radv)") ;;
-    tools) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(declare -f step_tools)") ;;
-    hostwine) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(declare -f step_hostwine)") ;;
+                 "$(commands step_radv)") ;;
+    tools) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(commands step_tools)") ;;
+    hostwine) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(commands step_hostwine)") ;;
     wineps5) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(key_of radv)" "$(key_of tools)" \
-                    "$BOILERPLATE_URL" "$(declare -f step_wineps5 need_sdk need_native_tool)") ;;
+                    "$BOILERPLATE_URL" "$(commands step_wineps5 need_sdk need_native_tool)") ;;
     dxvk) hash=$(printf '%s\n' "$DXVK_URL" "$DXVK_COMMIT" "$DXVK_NAME" "$(patches_id dxvk)" \
-                 "$(pwid tools/mesa_zink_requirements.txt)" "$(declare -f step_dxvk)") ;;
+                 "$(pwid tools/mesa_zink_requirements.txt)" "$(commands step_dxvk)") ;;
     vkd3d) hash=$(printf '%s\n' "$VKD3D_SOURCE_URL" "$VKD3D_SOURCE_COMMIT" "$VKD3D_VERSION" "$VKD3D_NAME" \
-                  "$(patches_id vkd3d-proton)" "$(pwid tools/mesa_zink_requirements.txt)" "$(declare -f step_vkd3d)") ;;
+                  "$(patches_id vkd3d-proton)" "$(pwid tools/mesa_zink_requirements.txt)" "$(commands step_vkd3d)") ;;
     *) echo "build.sh: $1 has no key (pieces with one: $KEYED)" >&2; return 2 ;;
     esac
     echo "$1-$(printf '%s\n' "$hash" "$(cat "$here/tools/packages.txt")" | sha256sum | cut -c1-16)"
