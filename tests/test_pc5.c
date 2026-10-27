@@ -687,11 +687,17 @@ static Pc5InstallPhase install_folder(const char *name, int cancel_after_copy_st
         phase = pc5_install_step(&install, 1);
         steps++;
         if (cancel_after_copy_steps && phase == PC5_INSTALL_COPY && --cancel_after_copy_steps == 0) pc5_install_cancel(&install);
-        if (corrupt && phase == PC5_INSTALL_VERIFY) {
+        /* The copy of level1.pak spoilt once it is whole and before it is read back. A step is
+         * a millisecond's work and the files come in the order the drive lists them, so the
+         * first step of checking may already have read it back: it is spoilt while the files
+         * are still copied (the other files, the 3 MB one among them, take more than a step). */
+        if (corrupt && (phase == PC5_INSTALL_COPY || phase == PC5_INSTALL_VERIFY)) {
             char copy[PC5_PATH];
             path(copy, sizeof(copy), "%s/drive_c/Games/%s/data/level1.pak", install.staging, name);
-            write_text(copy, "LEVEL ONE DATA\n");
-            corrupt = 0;
+            if (file_is(copy, "level one data\n")) {
+                write_text(copy, "LEVEL ONE DATA\n");
+                corrupt = 0;
+            }
         }
     } while (phase < PC5_INSTALL_DONE && steps < 100000);
     if (phase != PC5_INSTALL_DONE && install.error[0]) fprintf(stderr, "(install ended: %s)\n", install.error);
