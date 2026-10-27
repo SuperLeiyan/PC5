@@ -546,6 +546,13 @@ EOF_SOURCES
     fi
     stage "art, the tiles' program, fonts and sounds"
     cp "$here/sce_sys/param.json" "$here/art/icon0.png" "$here/art/pic0.png" "$app/sce_sys/"
+    # The home screen's background while PC5's tile is chosen (pic0) and while PC5 starts
+    # (pic1): the background at 4K as BC7 in a DDS (tools/make-dds.c), as the shell reads it.
+    mkdir -p "$B/art"
+    python3 "$here/art/make-art.py" "$B/art" --background-4k "$B/art/background-4k.ppm" >/dev/null
+    cc -std=c11 -O2 -o "$B/art/make-dds" "$here/tools/make-dds.c" -lm
+    "$B/art/make-dds" "$B/art/background-4k.ppm" "$app/sce_sys/pic0.dds" >/dev/null
+    cp "$app/sce_sys/pic0.dds" "$app/sce_sys/pic1.dds"
     # The music the home screen plays while PC5's tile is chosen (ATRAC9), when there is one.
     if [[ -f $here/art/snd0.at9 ]]; then cp "$here/art/snd0.at9" "$app/sce_sys/"; fi
     mkdir -p "$app/pc5"

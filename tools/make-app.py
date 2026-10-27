@@ -38,7 +38,8 @@ def main() -> int:
     param = json.loads((app / "sce_sys" / "param.json").read_text())
     if param.get("titleId") != TITLE:
         problems.append(f"sce_sys/param.json is {param.get('titleId')}, not {TITLE}")
-    for needed in ("eboot.bin", "lapy.elf", "sce_sys/icon0.png", "sce_sys/pic0.png", "sce_module/libc.prx",
+    for needed in ("eboot.bin", "lapy.elf", "sce_sys/icon0.png", "sce_sys/pic0.png", "sce_sys/pic0.dds",
+                   "sce_sys/pic1.dds", "sce_module/libc.prx",
                    "pc5/fonts.bin", "pc5/sounds/cheap chinese speaker.wav", "pc5/ca-certificates.crt", "pc5/prefix.list", "pc5/prefix/system.reg",
                    "pc5/prefix-media.reg", "win/wine/lib/wine/x86_64-unix/winedmo.prx",
                    "win/wine/lib/wine/x86_64-unix/winegstreamer.prx", "LICENSES/ps5-framegen/COPYING",
@@ -158,7 +159,8 @@ Built from <https://github.com/bornaradusin/PC5> at commit {repo_commit}:
   `sce_module/libc.prx`, <https://github.com/heydemoura/ps5-forwarder-format>, GNU GPL 3.0
   or later), unchanged, which PC5 copies into each home screen tile it makes; its library,
   psfwd, is built into the eboot.
-- The icon and the Home background are made by `art/make-art.py` in that repository, from the pictures beside it.
+- The icon and the Home background are made by `art/make-art.py` in that repository, from the pictures beside it;
+  `sce_sys/pic0.dds` and `pic1.dds`, the background as the home screen shows it, by `tools/make-dds.c`.
 - `pc5/sounds`: the startup sounds to choose from (`art/sounds` in that repository), played
   on the controller's speaker when PC5 is opened.
 

@@ -114,6 +114,28 @@ for name in ("icon0.png", "pic0.png"):
     if sum(off[65:]) or sum(off[5:]) * 100 > kept.size[0] * kept.size[1]:
         sys.exit(f"art/{name} isn't what art/make-art.py draws: run it and commit what it makes")
 ART
+# The home screen's background as the shell reads it (tools/make-dds.c): a DDS as the shell
+# wants it (one 2D surface of BC7_UNORM behind a DX10 header, no mipmaps), and the picture in
+# it, as Pillow decodes BC7, what went in (a corner of the background, so it is quick).
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o "$out/make-dds" tools/make-dds.c -lm
+python3 -c "from PIL import Image; Image.open('art/pic0.png').convert('RGB').crop((960, 300, 1216, 444)).save('$out/corner.ppm')"
+"$out/make-dds" "$out/corner.ppm" "$out/corner.dds" >/dev/null
+python3 - "$out" <<'DDS'
+import struct, sys
+from PIL import Image, ImageChops, ImageStat
+out = sys.argv[1]
+data = open(f"{out}/corner.dds", "rb").read()
+profile = (data[:4], struct.unpack_from("<I", data, 4)[0], struct.unpack_from("<II", data, 12), struct.unpack_from("<I", data, 28)[0],
+           data[84:88], struct.unpack_from("<5I", data, 128), len(data))
+if profile != (b"DDS ", 124, (144, 256), 1, b"DX10", (98, 3, 0, 1, 1), 148 + 64 * 36 * 16):
+    sys.exit(f"make-dds: not the DDS the home screen reads: {profile}")
+decoded = Image.open(f"{out}/corner.dds")
+if decoded.mode != "RGBA" or decoded.getchannel("A").getextrema() != (255, 255):
+    sys.exit("make-dds: the picture isn't opaque")
+rms = ImageStat.Stat(ImageChops.difference(decoded.convert("RGB"), Image.open(f"{out}/corner.ppm").convert("RGB"))).rms
+if max(rms) > 4:
+    sys.exit(f"make-dds: the picture decoded is far from what went in (rms {rms})")
+DDS
 python3 -m py_compile tools/make-prefix.py tools/make-app.py tools/make-font.py art/make-art.py \
     tests/make-test-programs.py tests/make-sample-covers.py
 bash -n tools/build.sh
