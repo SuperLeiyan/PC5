@@ -5,7 +5,7 @@
 A launcher for your own PC games on a PS5 that runs homebrew. PC5 shows your games as a row
 of covers, installs games from a USB drive in one copy each, updates them from a newer copy
 with their saves kept, and uninstalls them with or without their saves. It runs the games with [prospero-win](https://github.com/mpereiraesaa/prospero-win)
-(Wine on the PS5). The app is `PPSA11018`, its tile is called **PC5**. This is version 1.8.4.
+(Wine on the PS5). The app is `PPSA11018`, its tile is called **PC5**. This is version 1.8.5.
 Temporary hotfix for 1.8.3 
 
 **1. Open /data/prospero-win/pc5/settings.txt on the console (FTP).**
@@ -100,7 +100,7 @@ makes a draft release to check and publish.
 `tests/test.sh` runs the host checks (after `tools/build.sh sources`), `tests/test.sh --shots`
 also draws every screen, and `tests/PS5-CHECKLIST.md` is what to try on a console.
 
-**Releasing**: the update check reads the newest release's tag (`v1.8.4`). Raise `PC5_VERSION`
+**Releasing**: the update check reads the newest release's tag (`v1.8.5`). Raise `PC5_VERSION`
 in `title/pc5.h` and `contentVersion` in `sce_sys/param.json`, and attach `PPSA11018.zip`,
 `PPSA11018-sources.tar.xz` and `wine-mono-11.3.0-src.tar.xz` to the release. PC5's own
 updater (`title/pc5_upgrade.c`) installs the release's asset named `PPSA11018.zip`, checked

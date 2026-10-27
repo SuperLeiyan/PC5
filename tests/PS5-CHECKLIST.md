@@ -248,8 +248,8 @@ With ShadowMountPlus and elfldr running.
 | --- | --- | --- | --- |
 | 111 | Open PC5 with a few games; move left and right | covers stand on a floor that mirrors them, the side ones turned a little towards the middle; the chosen one framed and lit in its cover's colours; its name and a pill with its bits, graphics and size under it; "N GAMES" at the bottom right; moving stays smooth | |
 | 112 | Choose a game with a background, then one without | the background behind the covers, mirrored in the floor; for the other, a backdrop of its cover's colours | |
-| 113 | Settings: the first page; System | In games, Overlay, System, About; System has Startup sound, Keep all logs, Picture sources, Check when PC5 opens, Check now | |
-| 114 | Controller Speaker Volume at its middle, then its lowest; close PC5 and open it each time | the startup sound quieter, then silent | `PC5 startup sound … level=… speaker_volume(rc=… value=…)`: send the line with each volume |
+| 113 | Settings: the first page; System | In games, Overlay, System, About; System has Startup sound, Startup sound volume (while a sound is chosen), Keep all logs, Picture sources, Check when PC5 opens, Check now | |
+| 114 | System › Startup sound volume: 50 %, then 10 %; close PC5 and open it after each | the sound plays as the volume changes, quieter at 50 %, quiet at 10 %, and at that volume when PC5 opens; the console's Controller Speaker Volume doesn't change it | `PC5 settings … startup_volume=50`, `PC5 startup sound … volume=… percent=50 level=8192` (volume not negative) |
 | 115 | System › Picture sources: Steam off; △ › Appearance › Cover on a game | no Steam cover among those found; the screens don't say where a picture comes from | `PC5 settings … pictures_off=0x1` |
 | 116 | △ › Appearance › Cover on a game Steam's search misses but PCGamingWiki or Wikidata has | a cover found | `PC5 picture choices=…` |
 | 117 | A Java game that carries its own runtime (`runtime/bin/server/jvm.dll`), made with jpackage | it shows as OpenGL; it starts in one program (no "process creation is not supported" for its own program) | `PC5 Java launcher: C:\Games\…\app in PATH`, `Loaded … jvm.dll` |
@@ -265,7 +265,7 @@ With ShadowMountPlus and elfldr running.
 | 122 | △ › Graphics › CPU sharing On on a game; start it | it plays; for a game that stopped for seconds at a time (Ori and the Blind Forest in Xbox mode), it no longer stops | `PW_WINE64 runtime thread_scheduling=1` |
 | 123 | Open PC5 | the log names the firmware the console's Settings › System › System Software shows | `PC5 system firmware=13.60 …` (with `reported=…` when libkernel answers another): send the line |
 | 124 | A 4:3 game that draws its own pointer from DirectInput, Aspect ratio Keep (Sacred Underworld at 1024x768), Keyboard and mouse with the pointer on; push the pointer right and down | the game's pointer reaches the right and bottom edges | |
-| 125 | Open PC5 with a startup sound chosen, on a console whose own system is older (9.60, for one) | it opens and plays the sound (at full volume where the system doesn't give the controller speaker volume) | `PC5 startup sound … speaker_volume(none)` there, `speaker_volume(rc=…)` elsewhere: send the line |
+| 125 | Open PC5 with a startup sound chosen, on a console whose own system is older (9.60, for one) | it opens and plays the sound | `PC5 startup sound … percent=100 level=32768`, then `played=… output=0`: send the lines |
 
 A non-zero `rc=` on the light bar or triggers lines means the console refused that call; send
 that log. On the startup sound line, a negative `port=` means the console refused the

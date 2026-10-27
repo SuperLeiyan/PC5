@@ -34,7 +34,7 @@ When something doesn't work, PC5 usually says why in a message. This page lists 
 | *Game* stopped with an error | The game crashed. Try the newest PC5, then [report it](Reporting-a-problem): **△** on the message opens GitHub's issue form with a QR code; attach the zip PC5 names. |
 | *Game* had to be closed | The game didn't close when asked, so PC5 ended it. It may not have saved. |
 | PC5 ended unexpectedly last time | PC5 itself stopped. [Report it](Reporting-a-problem) with the log PC5 names. |
-| PC5 1.8.2 or 1.8.3 closes as soon as it opens, with error CE-108255-1 | Update to 1.8.4 or newer [by hand](Installing-and-updating#by-hand). Or open `/data/prospero-win/pc5/settings.txt` on the console, change the `startup_sound = …` line to `startup_sound = off` (add it if it isn't there), and open PC5: it opens, and can update itself. |
+| PC5 1.8.2, 1.8.3 or 1.8.4 closes as soon as it opens, with error CE-108255-1 | Update to 1.8.5 or newer [by hand](Installing-and-updating#by-hand). Or open `/data/prospero-win/pc5/settings.txt` on the console, change the `startup_sound = …` line to `startup_sound = off` (add it if it isn't there), and open PC5: it opens, and can update itself. |
 
 ## Playing a game
 

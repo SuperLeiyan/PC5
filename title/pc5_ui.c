@@ -78,17 +78,19 @@ typedef enum SettingRow {
     SR_INSTALL, SR_UNINSTALL, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
-    SR_STARTUP_SOUND, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
+    SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
 enum { PAGE_ROWS = 7, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, SETTING_PAGES = 5 };
 static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources" };
-/* Where each page's row is on the page that opens it (Back goes there). */
-enum { ROW_GAMES = 2, ROW_OVERLAY = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5, ROW_PICTURES = 2, ROW_CHECK_NOW = 4 };
+/* Where each page's row is on the first page (Back goes there); System's rows move with its
+ * startup sound (system_row). */
+enum { ROW_GAMES = 2, ROW_OVERLAY = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5 };
 
-/* A page's rows: the triggers' strengths only while they are used, Update now only
- * while there is a newer PC5 it can install (offer_update). */
+/* A page's rows: the triggers' strengths only while they are used, the startup sound's
+ * volume only while there is one, Update now only while there is a newer PC5 it can install
+ * (offer_update). */
 static int page_rows(const Pc5Settings *set, int page, int offer_update, SettingRow rows[PAGE_ROWS])
 {
     int n = 0;
@@ -111,6 +113,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
             rows[n++] = SR_TRIGGER_RESISTANCE;
     } else if (page == PAGE_SYSTEM) {
         rows[n++] = SR_STARTUP_SOUND;
+        if (strcmp(set->startup_sound, "off")) rows[n++] = SR_STARTUP_VOLUME;
         rows[n++] = SR_KEEP_LOGS;
         rows[n++] = SR_PICTURES;
         rows[n++] = SR_CHECK_ON_OPEN;
@@ -1880,6 +1883,11 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         pc5_copy(about, about_size, "On the controller's speaker when PC5 opens");
         pc5_copy(value, value_size, strcmp(set->startup_sound, "off") ? set->startup_sound : "Off");
         break;
+    case SR_STARTUP_VOLUME:
+        *label = "Startup sound volume";
+        pc5_copy(about, about_size, "How loud the startup sound plays");
+        percent_text(set->startup_volume, value, value_size);
+        break;
     case SR_UPDATE_NOW:
         *label = "Update now";
         snprintf(about, about_size, "Downloads PC5 %s from GitHub and installs it", ui->update.last.version);
@@ -1930,9 +1938,15 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
         if (next < -1) next = list.count - 1;
         if (next >= list.count) next = -1;
         pc5_copy(set->startup_sound, sizeof(set->startup_sound), next < 0 ? "off" : list.name[next]);
-        if (next >= 0 && ui->platform.sound) ui->platform.sound(ui->platform.context, set->startup_sound);
+        if (next >= 0 && ui->platform.sound)
+            ui->platform.sound(ui->platform.context, set->startup_sound, set->startup_volume);
         break;
     }
+    case SR_STARTUP_VOLUME:
+        /* The sound is played at the new volume. */
+        set->startup_volume = pc5_volume_next(set->startup_volume, step);
+        if (ui->platform.sound) ui->platform.sound(ui->platform.context, set->startup_sound, set->startup_volume);
+        break;
     default:
         if (row < SR_SOURCE || row >= SR_SOURCE + PC5_PICTURE_SOURCES) return 0;
         set->pictures_off ^= 1u << (row - SR_SOURCE);
@@ -1940,10 +1954,12 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
     }
     if (pc5_settings_save(ui->root, set)) say(ui, "PC5 problem settings: can't write them");
     say(ui, "PC5 settings fps=%d frame_time=%d cpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d vibration=%d light=%d "
-        "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s pictures_off=%#x",
+        "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s startup_volume=%d "
+        "pictures_off=%#x",
         set->fps, set->frame_time, set->cpu_usage, set->cpu_temperature, set->soc_temperature, set->memory,
         (int)set->fps_corner, set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
-        set->trigger_resistance, set->check_updates, set->keep_logs, set->startup_sound, (unsigned)set->pictures_off);
+        set->trigger_resistance, set->check_updates, set->keep_logs, set->startup_sound, set->startup_volume,
+        (unsigned)set->pictures_off);
     return 1;
 }
 
@@ -2042,6 +2058,16 @@ static int can_upgrade(const Pc5Ui *ui)
 static int offer_update(const Pc5Ui *ui)
 {
     return can_upgrade(ui) && ui->update.last.state == PC5_UPDATE_AVAILABLE;
+}
+
+/* Where that row is on the System page now (0 when it isn't there). */
+static int system_row(const Pc5Ui *ui, SettingRow row)
+{
+    SettingRow rows[PAGE_ROWS];
+    int count = page_rows(&ui->settings, PAGE_SYSTEM, offer_update(ui), rows);
+    for (int i = 0; i < count; i++)
+        if (rows[i] == row) return i;
+    return 0;
 }
 
 /* Asks GitHub (blocking, one request) and tells once per release, unless asked (quiet
@@ -2347,7 +2373,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             if (ui->page == PAGE_GAMES) settings_open(ui, 0, ROW_GAMES);
             else if (ui->page == PAGE_OVERLAY) settings_open(ui, 0, ROW_OVERLAY);
             else if (ui->page == PAGE_SYSTEM) settings_open(ui, 0, ROW_SYSTEM);
-            else if (ui->page == PAGE_PICTURES) settings_open(ui, PAGE_SYSTEM, ROW_PICTURES);
+            else if (ui->page == PAGE_PICTURES) settings_open(ui, PAGE_SYSTEM, system_row(ui, SR_PICTURES));
             else go(ui, S_LIBRARY);
         } else if (k & accept) {
             switch (row) {
@@ -2373,7 +2399,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_CHECKING:
         if (!ui->drawn) break;
         update_check_now(ui, 0);
-        settings_open(ui, PAGE_SYSTEM, ROW_CHECK_NOW + offer_update(ui));   /* on Update now when there is one */
+        /* on Update now when there is one */
+        settings_open(ui, PAGE_SYSTEM, system_row(ui, offer_update(ui) ? SR_UPDATE_NOW : SR_CHECK_NOW));
         break;
     case S_ABOUT:
         if (k & (back | accept)) settings_open(ui, 0, ROW_ABOUT);
@@ -3505,7 +3532,7 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
                                          "the way you added PC5. Your games, saves and settings stay.", 0);
     SettingRow row = rows[ui->menu < count ? ui->menu : 0];
     int changes = row == SR_KEEP_LOGS || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
-                  row == SR_STARTUP_SOUND || row >= SR_SOURCE;
+                  row == SR_STARTUP_SOUND || row == SR_STARTUP_VOLUME || row >= SR_SOURCE;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);
 }

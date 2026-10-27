@@ -406,6 +406,7 @@ int main(int argc, char **argv)
     step(ui, PC5_KEY_ACCEPT, 1);
     settle(ui);
     save("07c-settings-system");
+    step(ui, PC5_KEY_DOWN, 1);             /* Startup sound volume */
     step(ui, PC5_KEY_DOWN, 1);
     step(ui, PC5_KEY_DOWN, 1);             /* Picture sources */
     step(ui, PC5_KEY_ACCEPT, 1);

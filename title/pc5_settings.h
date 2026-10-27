@@ -48,6 +48,7 @@ typedef struct Pc5Settings {
     /* The sound on the controller's speaker when PC5 is opened: a sound's name
      * (pc5_sound.h), or "off". */
     char startup_sound[64];
+    int startup_volume;       /* how loud PC5 plays it: 10 to 100 %, in steps of 10 */
     /* The picture sources turned off (pc5_cover.h's PC5_PICTURES_*): "pictures_<key> = off". */
     uint32_t pictures_off;
 } Pc5Settings;
@@ -64,5 +65,7 @@ const char *pc5_triggers_name(Pc5Triggers triggers);
 /* The next step of a strength in percent: up (step 1) or down (-1), from
  * lowest (0 for Vibration's Off, else 25) to 100, round. */
 int pc5_strength_next(int percent, int lowest, int step);
+/* The startup sound's next volume: up (step 1) or down (-1) by 10, from 10 to 100 %, round. */
+int pc5_volume_next(int percent, int step);
 
 #endif

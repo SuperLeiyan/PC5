@@ -53,6 +53,7 @@ These follow the settings in every game, whatever its [controller mode](Controll
 | Row | Values | What it does |
 | --- | --- | --- |
 | Startup sound | Off, **cheap chinese speaker**, and the other sounds by name | The sound on the controller's speaker when you open PC5 from the home screen (not when you come back to it from a game). Choosing a sound plays it. See [Startup sound](#startup-sound). |
+| Startup sound volume | 10 to **100 %**, in steps of 10 | How loud the startup sound plays. Changing it plays the sound at the new volume. Shows while a startup sound is chosen. |
 | Keep all logs | **Off**, On | Off: the logs of sessions that went wrong are kept, and each game's newest session. On: every session's log is kept, PC5's own too. Either way, each is one zip, kept for 7 days. See [Reporting a problem](Reporting-a-problem). |
 | Picture sources › | the number turned on | Where PC5 looks for covers and backgrounds. See [Picture sources](#picture-sources). |
 | Check when PC5 opens | **On**, Off | On: PC5 asks GitHub for a newer release when it opens, at most once an hour. Off: only when you ask. |
@@ -63,7 +64,7 @@ When a newer PC5 is out, PC5 asks when it opens whether to update now or later. 
 
 ## Startup sound
 
-**Settings › System › Startup sound** chooses the sound PC5 plays on the controller's speaker when you open it, or **Off**. Choosing a sound with **✕** or left and right plays it, so you can hear it. It plays as loud as the console's controller speaker volume is set; with the volume at its lowest, it doesn't play. On a console whose system software doesn't give that volume, it plays at full volume.
+**Settings › System › Startup sound** chooses the sound PC5 plays on the controller's speaker when you open it, or **Off**. Choosing a sound with **✕** or left and right plays it, so you can hear it. **Startup sound volume**, under it, sets how loud the sound plays, from 10 to 100 %; changing it plays the sound at the new volume. PC5 sets this volume itself: the console's own Controller Speaker Volume doesn't change it.
 
 PC5 comes with **Beeper - Push**, **Cha-Ching**, **cheap chinese speaker** (the default), **fahh**, **funny message tone**, **rizz** and **System Activated**.
 

@@ -1424,7 +1424,7 @@ typedef struct FakeConsole {
     int notifications;
     int restarts;
     char sound[64];
-    int sounds;
+    int sounds, sound_volume;
     /* the on-screen keyboard: opened how often, its title and starting text, and what is typed
      * (cancelled when typed is NULL) */
     int keyboards;
@@ -1450,10 +1450,11 @@ static int fake_keyboard_close_text(void *context, char *out, size_t size)
     return console->typed != NULL;
 }
 
-static void fake_sound(void *context, const char *name)
+static void fake_sound(void *context, const char *name, int volume)
 {
     FakeConsole *console = context;
     pc5_copy(console->sound, sizeof(console->sound), name);
+    console->sound_volume = volume;
     console->sounds++;
 }
 
@@ -1587,6 +1588,7 @@ static void test_settings(void)
     CHECK(pc5_settings_load(dir, &set) == -1 && !set.fps && !set.frame_time && !set.cpu_usage && !set.cpu_temperature &&
           !set.soc_temperature && !set.memory && !pc5_game_overlay_lines(&set) && set.vibration == 100 &&
           set.check_updates && !set.keep_logs && !strcmp(set.startup_sound, "cheap chinese speaker") &&
+          set.startup_volume == 100 &&
           set.fps_corner == PC5_CORNER_TOP_RIGHT && set.light_bar == PC5_LIGHT_GAME && set.triggers == PC5_TRIGGERS_OFF &&
           set.trigger_rumble == 100 && set.trigger_resistance == 50,
           "defaults without a file");
@@ -1602,6 +1604,7 @@ static void test_settings(void)
     set.check_updates = 0;
     set.keep_logs = 1;
     pc5_copy(set.startup_sound, sizeof(set.startup_sound), "Chime Two");
+    set.startup_volume = 40;
     CHECK(!set.pictures_off, "every picture source on by default");
     set.pictures_off = PC5_PICTURES_GOG | PC5_PICTURES_WIKIDATA;
     CHECK(!pc5_settings_save(dir, &set), "saved");
@@ -1615,6 +1618,13 @@ static void test_settings(void)
     write_text(file, "pictures_steam = maybe\npictures_wikipedia = off\npictures_bing = off\n");
     CHECK(!pc5_settings_load(dir, &back) && back.pictures_off == PC5_PICTURES_WIKIPEDIA, "picture sources: %#x",
           (unsigned)back.pictures_off);
+    write_text(file, "startup_volume = 70\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.startup_volume == 70, "startup volume read: %d", back.startup_volume);
+    write_text(file, "startup_volume = 0\nstartup_volume = 105\nstartup_volume = 55\nstartup_volume = 7x\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.startup_volume == 100, "a startup volume off its steps is the default: %d",
+          back.startup_volume);
+    CHECK(pc5_volume_next(100, 1) == 10 && pc5_volume_next(10, -1) == 100 && pc5_volume_next(50, -1) == 40 &&
+          pc5_volume_next(90, 1) == 100, "the startup volume's steps go round");
     write_text(file, "vibration = on\n");
     CHECK(!pc5_settings_load(dir, &back) && back.vibration == 100, "an earlier PC5's vibration = on is 100 %%");
     write_text(file, "startup_sound = PC5\n");
@@ -4224,10 +4234,23 @@ static void test_screens(const char *fonts)
         pc5_settings_load(root, &set);
         CHECK(set.triggers == PC5_TRIGGERS_RUMBLE && set.trigger_rumble == 100 && set.trigger_resistance == 75 &&
               !strcmp(set.startup_sound, "cheap chinese speaker") && console.sounds == 2 &&
-              !strcmp(console.sound, "cheap chinese speaker"),
+              !strcmp(console.sound, "cheap chinese speaker") && console.sound_volume == 100,
               "a strength row only while it is used: triggers=%d rumble=%d resistance=%d sound=%s",
               (int)set.triggers, set.trigger_rumble, set.trigger_resistance, set.startup_sound);
     }
+    /* Its volume, under it while there is a sound: played at the new one. */
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Startup sound volume */
+    save_shot(&canvas, "settings-system-volume");
+    press(ui, PC5_KEY_LEFT, &canvas);        /* 100 % -> 90 % */
+    press(ui, PC5_KEY_LEFT, &canvas);        /* -> 80 % */
+    {
+        Pc5Settings set;
+        pc5_settings_load(root, &set);
+        CHECK(set.startup_volume == 80 && console.sounds == 4 && !strcmp(console.sound, "cheap chinese speaker") &&
+              console.sound_volume == 80, "startup volume: %d, played %d times at %d", set.startup_volume,
+              console.sounds, console.sound_volume);
+    }
+    press(ui, PC5_KEY_UP, &canvas);          /* Startup sound */
     /* Overlay: its lines, each on its own, and the corner. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page");
@@ -4256,7 +4279,7 @@ static void test_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on Overlay");
     press(ui, PC5_KEY_DOWN, &canvas);        /* System */
     press(ui, PC5_KEY_ACCEPT, &canvas);
-    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Check now */
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Check now, past the startup sound's volume */
     /* a release newer than any this test runs on */
     net.release = "{\"tag_name\":\"v99.0.0\",\"html_url\":\"https://github.com/bornaradusin/PC5/releases/tag/v99.0.0\"}";
     press(ui, PC5_KEY_ACCEPT, &canvas);
@@ -4554,7 +4577,7 @@ static void test_upgrade_screens(const char *fonts)
     press(ui, PC5_KEY_OPTIONS, &canvas);
     for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
-    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Update now */
+    for (int i = 0; i < 6; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Update now, the seventh row */
     pc5_ui_draw(ui, &canvas);
     save_shot(&canvas, "updates-page");
     net.gate = 1;

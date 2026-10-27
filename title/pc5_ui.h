@@ -28,8 +28,9 @@ typedef struct Pc5Platform {
     /* Starts the new PC5 in this one's place, after it updated itself; NULL where it
      * can't. */
     void (*restart)(void *context);
-    /* Plays a startup sound by name now, as Settings tries it; NULL where it can't. */
-    void (*sound)(void *context, const char *name);
+    /* Plays a startup sound by name now, at that volume (10 to 100 %), as Settings tries it;
+     * NULL where it can't. */
+    void (*sound)(void *context, const char *name, int volume);
     /* The console's on-screen keyboard over the screens, for typing a name to search for:
      * opened with its title and the text to start from (UTF-8), 0 or negative when it can't
      * be; its state, 1 while it is up and 2 once it is done; and closed, its text (UTF-8)

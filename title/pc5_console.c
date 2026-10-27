@@ -176,81 +176,29 @@ static pthread_t sound_thread;
 static int sound_started, sound_user = -1;
 static atomic_int sound_stop;
 
-/* The console's Controller Speaker Volume for the player, which libSceUserService holds. Its
- * arguments aren't published: asked first with a pointer where a player would go (a call
- * taking only the pointer reads it there; one taking the player first refuses it as no
- * player), then, refused and with nothing written there, with the player and a pointer.
- * The function is looked up in libSceUserService as the console loaded it, not imported: an
- * import the console's system doesn't have ended PC5 the moment it was called (1.8.2 and
- * 1.8.3 closed at start on a console whose own system is 9.60). Without it the sound plays
- * at full volume, as before 1.8.2. */
-typedef int (*PadSpeakerVolume)(intptr_t first, int32_t *second);
-int sceKernelGetModuleInfo(int32_t handle, void *info);
-int sceKernelDlsym(int32_t handle, const char *symbol, void **address);
+static int sound_volume = 100;   /* Settings › System › Startup sound volume, in percent */
 
-/* The console's modules are looked through by handle (they are small numbers: the keyboard's
- * is about 200) with only what PC5 1.8.1 already called, so this asks the system for nothing
- * new itself. */
-static PadSpeakerVolume pad_speaker_volume_function(void)
+/* The port's volume (sceAudioOut's, AUDIO_VOLUME_0DB the most) for that percent, on its square:
+ * 50 % is a quarter of the most, 10 % a hundredth, so the lower steps are quiet. PC5 sets only
+ * its own port's volume and asks the console's system for none (1.8.2 to 1.8.4 asked it for the
+ * Controller Speaker Volume, and closed at start on some consoles, CE-108255-1). */
+static int sound_level(int percent)
 {
-    enum { HANDLES = 1024, INFO_BYTES = 0x160, NAME_AT = 8, NAME_BYTES = 256 };
-
-    for (int32_t handle = 0; handle < HANDLES; handle++) {
-        /* SceKernelModuleInfo: its size first, the module's name at 8 (as wine/ps5/pw_wine_prx.h reads it). */
-        union { uint64_t size; uint8_t bytes[INFO_BYTES]; } info;
-        char name[NAME_BYTES + 1];
-        void *address = NULL;
-        memset(&info, 0, sizeof(info));
-        info.size = sizeof(info);
-        if (sceKernelGetModuleInfo(handle, &info)) continue;
-        memcpy(name, info.bytes + NAME_AT, NAME_BYTES);
-        name[NAME_BYTES] = 0;
-        if (strncmp(name, "libSceUserService", 17)) continue;
-        if (!sceKernelDlsym(handle, "sceUserServiceGetPadSpeakerVolume", &address) && address)
-            return (PadSpeakerVolume)(uintptr_t)address;
-        return NULL;
-    }
-    return NULL;
-}
-
-/* The sound's level (sceAudioOut's, AUDIO_VOLUME_0DB the most) from that setting: 0 to 10, 0
- * to 100 or 0 to 0x8000, as its size says. -1 when the console doesn't say (the most, as
- * before 1.8.2); what it said in *raw for the log. */
-static int pad_speaker_level(int32_t user, char *raw, size_t size)
-{
-    enum { UNSET = -0x5a5a };
-    int32_t a = UNSET, b = UNSET, c = UNSET, value = UNSET;
-    int first, second = 0;
-    PadSpeakerVolume get = pad_speaker_volume_function();
-
-    if (!get) {
-        snprintf(raw, size, "none");
-        return -1;
-    }
-    first = get((intptr_t)&a, &b);
-    if (first >= 0) value = a != UNSET ? a : b;
-    else if (a == UNSET && user >= 0) {
-        second = get((intptr_t)user, &c);
-        if (second >= 0) value = c;
-    }
-    snprintf(raw, size, "rc=%#x/%#x value=%d", (unsigned)first, (unsigned)second, value == UNSET ? -1 : value);
-    if (value == UNSET || value < 0) return -1;
-    if (value <= 10) return AUDIO_VOLUME_0DB * value / 10;
-    if (value <= 100) return AUDIO_VOLUME_0DB * value / 100;
-    return value <= AUDIO_VOLUME_0DB ? value : AUDIO_VOLUME_0DB;
+    if (percent < 10) percent = 10;
+    if (percent > 100) percent = 100;
+    return AUDIO_VOLUME_0DB * percent * percent / 10000;
 }
 
 static void *play_sound(void *argument)
 {
     PwAudioPs5Ops ops;
     int16_t grain[AUDIO_GRAIN];
-    char line[300], raw[96];
-    int init = -1, port = -1, volume = -1, output = 0, level = pad_speaker_level(sound_user, raw, sizeof(raw));
+    char line[200];
+    int init = -1, port = -1, volume = -1, output = 0, level = sound_level(sound_volume);
     size_t played = 0;
     (void)argument;
 
-    if (level < 0) level = AUDIO_VOLUME_0DB;
-    if (level > 0 && pw_audio_ps5_platform_ops(&ops) == PW_OK && (init = ops.init()) >= 0) {
+    if (pw_audio_ps5_platform_ops(&ops) == PW_OK && (init = ops.init()) >= 0) {
         port = ops.open(sound_user, AUDIO_PORT_PADSPK, 0, AUDIO_GRAIN, PC5_SOUND_RATE, AUDIO_FORMAT_S16_MONO);
         if (port >= 0) {
             int32_t volumes[8];
@@ -258,8 +206,8 @@ static void *play_sound(void *argument)
             volume = ops.volume(port, AUDIO_VOLUME_FLAG_CH0, volumes);
         }
     }
-    snprintf(line, sizeof(line), "PC5 startup sound user=%d init=%d port=%d volume=%d level=%d speaker_volume(%s) frames=%zu",
-             sound_user, init, port, volume, level, raw, startup_sound.frames);
+    snprintf(line, sizeof(line), "PC5 startup sound user=%d init=%d port=%d volume=%d percent=%d level=%d frames=%zu",
+             sound_user, init, port, volume, sound_volume, level, startup_sound.frames);
     plain_log(line);
     if (port >= 0) {
         while (played < startup_sound.frames && !atomic_load(&sound_stop)) {
@@ -288,8 +236,8 @@ static void sound_end(void)
     sound_started = 0;
 }
 
-/* The sound of that name (the default one when it is gone), from its start. */
-static void sound_play(const char *name)
+/* The sound of that name (the default one when it is gone), from its start, at that volume. */
+static void sound_play(const char *name, int percent)
 {
     char path[PC5_PATH], line[PC5_PATH + 80];
     Pc5Buf file = { 0 };
@@ -310,6 +258,7 @@ static void sound_play(const char *name)
         return;
     }
     pc5_buf_free(&file);
+    sound_volume = percent;
     atomic_store(&sound_stop, 0);
     sound_started = !pthread_create(&sound_thread, NULL, play_sound, NULL);
     if (!sound_started) pc5_sound_free(&startup_sound);
@@ -322,14 +271,14 @@ static void sound_start(const Pc5Console *config, int32_t user)
     sound_user = user;
     pc5_settings_load(config->root, &settings);
     if (!strcmp(settings.startup_sound, "off") || config->cycle || (config->start && config->start[0])) return;
-    sound_play(settings.startup_sound);
+    sound_play(settings.startup_sound, settings.startup_volume);
 }
 
 /* Settings tries a sound. */
-static void sound_try(void *context, const char *name)
+static void sound_try(void *context, const char *name, int volume)
 {
     (void)context;
-    sound_play(name);
+    sound_play(name, volume);
 }
 
 /* The console's on-screen keyboard over the screens (pc5_game_ps5.c), for a name to search for:
