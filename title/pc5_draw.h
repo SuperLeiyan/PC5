@@ -9,6 +9,9 @@
 typedef struct Pc5Canvas {
     uint32_t *px;      /* 0xAARRGGBB, the frame's BGRX */
     int w, h, stride;  /* stride in pixels */
+    /* Shapes and pictures are drawn only into columns clip_x0 to clip_x1 - 1 (so threads can
+     * draw beside each other); clip_x1 0: every column. Text isn't clipped. */
+    int clip_x0, clip_x1;
 } Pc5Canvas;
 
 /* ---- text ------------------------------------------------------------------------ */

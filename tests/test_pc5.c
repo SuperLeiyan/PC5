@@ -2356,7 +2356,7 @@ static void test_background_screen(const char *fonts)
     Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0,
                              NULL, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
-    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
     Pc5Image red = { 0 };
     char file[PC5_PATH];
@@ -3750,7 +3750,7 @@ static void test_tile_start(const char *fonts)
     Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
                              NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
-    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
     char file[PC5_PATH], tiles[PC5_PATH], tile_template[PC5_PATH];
 
@@ -3928,7 +3928,7 @@ static void test_screens(const char *fonts)
     path(tiles, sizeof(tiles), "%s/screens-homebrew", work);
     make_tile_template(tile_template, sizeof(tile_template));
     Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
-    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     Pc5Library library;
 
@@ -4389,7 +4389,7 @@ static void test_report(const char *fonts)
     Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
                              NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
-    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
     char logs[PC5_PATH], file[PC5_PATH], text[1024], kept[PC5_PATH];
     pc5_library_load(root, &library);
@@ -4454,7 +4454,7 @@ static void test_upgrade_screens(const char *fonts)
     const char *roots[] = { usb, NULL };
     char app[PC5_PATH], drive[PC5_PATH], folder[PC5_PATH], file[PC5_PATH], zip[PC5_PATH], digest[65];
     static char json[2048];
-    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     struct stat st;
 
     memset(&net, 0, sizeof(net));

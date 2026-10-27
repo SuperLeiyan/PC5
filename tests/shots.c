@@ -241,7 +241,7 @@ int main(int argc, char **argv)
 
     if (argc != 6) { fprintf(stderr, "usage: shots OUT WORK COVERS PROGRAMS FONTS\n"); return 2; }
     out_dir = argv[1]; work = argv[2]; covers = argv[3]; programs = argv[4]; fonts = argv[5];
-    canvas = (Pc5Canvas){ pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920 };
+    canvas = (Pc5Canvas){ pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     fmt(file, sizeof(file), "%s/titles.txt", covers);
     pc5_read_file(file, &names, 65536);
     for (char *line = (char *)names.data, *next; line && *line && title_count < 64; line = next) {

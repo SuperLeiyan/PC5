@@ -41,7 +41,7 @@ static uint32_t next_random(Pc5Matrix *m)
 static void make_masks(Pc5Matrix *m)
 {
     uint32_t cell[MASK];
-    Pc5Canvas c = { cell, CELL_W, CELL_H, CELL_W };
+    Pc5Canvas c = { cell, CELL_W, CELL_H, CELL_W, 0, 0 };
 
     for (int g = 0; g < GLYPHS; g++) {
         memset(cell, 0, sizeof(cell));
@@ -106,7 +106,7 @@ static void put_glyph(Pc5Matrix *m, int column, int row, int glyph, uint32_t col
 const uint32_t *pc5_matrix_step(Pc5Matrix *m)
 {
     const size_t n = (size_t)PC5_MATRIX_WIDTH * PC5_MATRIX_HEIGHT;
-    Pc5Canvas c = { m->px, PC5_MATRIX_WIDTH, PC5_MATRIX_HEIGHT, PC5_MATRIX_WIDTH };
+    Pc5Canvas c = { m->px, PC5_MATRIX_WIDTH, PC5_MATRIX_HEIGHT, PC5_MATRIX_WIDTH, 0, 0 };
 
     /* Everything fades by an eighth a step: a trail lasts about a second. */
     for (size_t i = 0; i < n; i++) {

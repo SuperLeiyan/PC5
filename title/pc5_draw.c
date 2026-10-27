@@ -48,6 +48,10 @@ void pc5_clear(Pc5Canvas *c, uint32_t color)
 
 static inline float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+/* The columns drawn into: the canvas's clip (clip_x0 to clip_x1 - 1), or all of them. */
+static inline int first_column(const Pc5Canvas *c) { return c->clip_x1 > 0 && c->clip_x0 > 0 ? c->clip_x0 : 0; }
+static inline int end_column(const Pc5Canvas *c) { return c->clip_x1 > 0 && c->clip_x1 < c->w ? c->clip_x1 : c->w; }
+
 /* ---- shapes --------------------------------------------------------------------------- */
 
 /* Signed distance from (px, py) to a rounded rectangle given by its centre,
@@ -73,9 +77,9 @@ static void rect_shape(Pc5Canvas *c, float x, float y, float w, float h, float r
     if (radius > hh) radius = hh;
     x0 = (int)floorf(x - 1); x1 = (int)ceilf(x + w + 1);
     y0 = (int)floorf(y - 1); y1 = (int)ceilf(y + h + 1);
-    if (x0 < 0) x0 = 0;
+    if (x0 < first_column(c)) x0 = first_column(c);
     if (y0 < 0) y0 = 0;
-    if (x1 > c->w) x1 = c->w;
+    if (x1 > end_column(c)) x1 = end_column(c);
     if (y1 > c->h) y1 = c->h;
     for (int py = y0; py < y1; py++) {
         uint32_t *row = c->px + (size_t)py * (size_t)c->stride;
@@ -128,9 +132,9 @@ typedef float (*DistanceFn)(float px, float py, const float *p);
 static void shape(Pc5Canvas *c, float bx0, float by0, float bx1, float by1, DistanceFn fn, const float *p, uint32_t color)
 {
     int x0 = (int)floorf(bx0), y0 = (int)floorf(by0), x1 = (int)ceilf(bx1), y1 = (int)ceilf(by1);
-    if (x0 < 0) x0 = 0;
+    if (x0 < first_column(c)) x0 = first_column(c);
     if (y0 < 0) y0 = 0;
-    if (x1 > c->w) x1 = c->w;
+    if (x1 > end_column(c)) x1 = end_column(c);
     if (y1 > c->h) y1 = c->h;
     for (int py = y0; py < y1; py++) {
         uint32_t *row = c->px + (size_t)py * (size_t)c->stride;
@@ -207,9 +211,9 @@ void pc5_shadow(Pc5Canvas *c, float x, float y, float w, float h, float radius, 
     float hw = w / 2, hh = h / 2, cx = x + hw, cy = y + hh;
     int x0 = (int)floorf(x - spread), y0 = (int)floorf(y - spread), x1 = (int)ceilf(x + w + spread),
         y1 = (int)ceilf(y + h + spread);
-    if (x0 < 0) x0 = 0;
+    if (x0 < first_column(c)) x0 = first_column(c);
     if (y0 < 0) y0 = 0;
-    if (x1 > c->w) x1 = c->w;
+    if (x1 > end_column(c)) x1 = end_column(c);
     if (y1 > c->h) y1 = c->h;
     for (int py = y0; py < y1; py++) {
         uint32_t *row = c->px + (size_t)py * (size_t)c->stride;
@@ -305,8 +309,8 @@ void pc5_draw_cover(Pc5Canvas *c, const Pc5Picture *picture, float x, float cy, 
     im = pick_level(picture, h_left > h_right ? h_left : h_right);
     x0 = (int)floorf(x);
     x1 = (int)ceilf(x + w);
-    if (x0 < 0) x0 = 0;
-    if (x1 > c->w) x1 = c->w;
+    if (x0 < first_column(c)) x0 = first_column(c);
+    if (x1 > end_column(c)) x1 = end_column(c);
     for (int px = x0; px < x1; px++) {
         float t = (px + 0.5f - x) / w;
         if (t < 0 || t > 1) continue;
@@ -371,11 +375,74 @@ static inline uint32_t lighten(uint32_t pixel, int amount)
     return (pixel & 0xff000000u) | rb | g;
 }
 
+/* One pixel of a card where it is only partly covered: its top and bottom rows, and its
+ * rounded corners. */
+static inline void card_edge_pixel(Pc5Canvas *c, const Pc5Image *im, int px, int py, int32_t u, float top, float ground,
+                                   float h, float w, float lx, float v_step, float edge, float radius, int bright,
+                                   int alpha, float sheen_rows, int gloss)
+{
+    float fy = py + 0.5f, ly = fy - top;
+    if (ly < 0) ly = 0;
+    float cover = clampf(fminf(fy + 0.5f - top, ground - (fy - 0.5f)), 0, 1) * edge;
+    if (radius > 0) cover *= corner_cover(lx, ly, w, h, radius);
+    if (cover <= 0) return;
+    uint32_t pixel = darken(sample(im, u, (int32_t)(ly * v_step * 65536.0f) - 32768), bright);
+    if (ly < sheen_rows) {
+        float s = 1 - ly / sheen_rows;
+        pixel = lighten(pixel, (int)((float)gloss * s * s));
+    }
+    blend(&c->px[(size_t)py * (size_t)c->stride + (size_t)px], pixel, (int)(cover * (float)alpha));
+}
+
+/* Bilinear sample down a column, its colour times bright/256 (0-256): x, x1 and fx are the
+ * column's, worked out once for it. */
+static inline uint32_t sample_down(const Pc5Image *im, int x, int x1, uint32_t fx, int32_t v, uint32_t bright)
+{
+    int y = v >> 16;
+    uint32_t fy = (uint32_t)(v >> 8) & 255;
+    if (y < 0) { y = 0; fy = 0; }
+    if (y > im->h - 1) y = im->h - 1;
+    int y1 = y + 1 < im->h ? y + 1 : y;
+    const uint32_t *r0 = im->px + (size_t)y * (size_t)im->w, *r1 = im->px + (size_t)y1 * (size_t)im->w;
+    uint32_t a = r0[x], b = r0[x1], c = r1[x], d = r1[x1];
+    uint32_t top_rb = ((a & 0xff00ffu) * (256 - fx) + (b & 0xff00ffu) * fx) >> 8 & 0xff00ffu;
+    uint32_t top_ag = (((a >> 8) & 0xff00ffu) * (256 - fx) + ((b >> 8) & 0xff00ffu) * fx) >> 8 & 0xff00ffu;
+    uint32_t bot_rb = ((c & 0xff00ffu) * (256 - fx) + (d & 0xff00ffu) * fx) >> 8 & 0xff00ffu;
+    uint32_t bot_ag = (((c >> 8) & 0xff00ffu) * (256 - fx) + ((d >> 8) & 0xff00ffu) * fx) >> 8 & 0xff00ffu;
+    uint32_t w0 = (256 - fy) * bright >> 8, w1 = fy * bright >> 8;
+    uint32_t rb = (top_rb * w0 + bot_rb * w1) >> 8 & 0xff00ffu;
+    uint32_t ag = (top_ag * w0 + bot_ag * w1) >> 8 & 0xff00ffu;
+    return rb | ag << 8;
+}
+
+/* dst towards src: src times w_src and dst times w_dst (each 0-256), added. */
+static inline void blend_weighted(uint32_t *dst, uint32_t src, uint32_t w_src, uint32_t w_dst)
+{
+    uint32_t d = *dst;
+    uint32_t rb = ((src & 0xff00ffu) * w_src + (d & 0xff00ffu) * w_dst) >> 8 & 0xff00ffu;
+    uint32_t g = ((src & 0x00ff00u) * w_src + (d & 0x00ff00u) * w_dst) >> 8 & 0x00ff00u;
+    *dst = 0xff000000u | rb | g;
+}
+
+/* Linear sample down a column of the picture's nearest column (for the soft reflection). */
+static inline uint32_t sample_line(const Pc5Image *im, int x, int32_t v)
+{
+    int y = v >> 16;
+    uint32_t fy = (uint32_t)(v >> 8) & 255;
+    if (y < 0) { y = 0; fy = 0; }
+    if (y > im->h - 1) y = im->h - 1;
+    int y1 = y + 1 < im->h ? y + 1 : y;
+    uint32_t a = im->px[(size_t)y * (size_t)im->w + (size_t)x], c = im->px[(size_t)y1 * (size_t)im->w + (size_t)x];
+    uint32_t rb = ((a & 0xff00ffu) * (256 - fy) + (c & 0xff00ffu) * fy) >> 8 & 0xff00ffu;
+    uint32_t ag = (((a >> 8) & 0xff00ffu) * (256 - fy) + ((c >> 8) & 0xff00ffu) * fy) >> 8 & 0xff00ffu;
+    return rb | ag << 8;
+}
+
 void pc5_draw_card(Pc5Canvas *c, const Pc5Picture *picture, float x, float ground, float w, float h_left, float h_right,
                    float radius, int bright, int alpha, int reflect, float fade, int gloss)
 {
     const Pc5Image *im, *soft;
-    int x0, x1;
+    int x0, x1, pic_end = (int)ceilf(ground);
 
     if (!picture->levels || w < 1 || alpha <= 0) return;
     im = pick_level(picture, h_left > h_right ? h_left : h_right);
@@ -383,61 +450,74 @@ void pc5_draw_card(Pc5Canvas *c, const Pc5Picture *picture, float x, float groun
     soft = pick_level(picture, (h_left > h_right ? h_left : h_right) * 0.5f);
     x0 = (int)floorf(x);
     x1 = (int)ceilf(x + w);
-    if (x0 < 0) x0 = 0;
-    if (x1 > c->w) x1 = c->w;
+    if (x0 < first_column(c)) x0 = first_column(c);
+    if (x1 > end_column(c)) x1 = end_column(c);
     for (int px = x0; px < x1; px++) {
         float t = (px + 0.5f - x) / w;
         if (t < 0 || t > 1) continue;
         float edge = clampf(fminf(px + 1 - x, x + w - px), 0, 1);   /* the outer columns, partly covered */
         float h = h_left + (h_right - h_left) * t, top = ground - h;
-        int32_t u = (int32_t)(t * im->w * 65536.0f) - 32768, su = (int32_t)(t * soft->w * 65536.0f) - 32768;
+        int32_t u = (int32_t)(t * im->w * 65536.0f) - 32768;
+        int ux = u >> 16, ux1;
+        uint32_t ufx = (uint32_t)(u >> 8) & 255;
+        if (ux < 0) { ux = 0; ufx = 0; }
+        if (ux > im->w - 1) ux = im->w - 1;
+        ux1 = ux + 1 < im->w ? ux + 1 : ux;
+        int sx = (int)(t * soft->w);
+        if (sx > soft->w - 1) sx = soft->w - 1;
         float v_step = im->h / h, sv_step = soft->h / h, lx = t * w;
         /* The sheen: lightest at the top left corner, gone by the middle. */
         float sheen_rows = gloss > 0 ? h * (0.5f - 0.6f * t) / 0.4f : 0;
-        int y0 = (int)floorf(top), y1 = (int)ceilf(ground + (reflect > 0 ? h * fade : 0));
         int corner = radius > 0 && (lx < radius || lx > w - radius);
-        float inner_top = top + (corner ? radius : 0), inner_bottom = ground - (corner ? radius : 0);
-        int fast0 = (int)ceilf(fmaxf(inner_top, top + (sheen_rows > 0 ? sheen_rows : 0))), fast1 = (int)floorf(inner_bottom);
-        int fast = edge >= 1 && alpha >= 256 && fast1 > fast0;
-        if (y0 < 0) y0 = 0;
-        if (y1 > c->h) y1 = c->h;
-        if (fast) {
-            int a = fast0 < 0 ? 0 : fast0, b = fast1 > c->h ? c->h : fast1;
-            int32_t v = (int32_t)(((float)a + 0.5f - top) * v_step * 65536.0f) - 32768, dv = (int32_t)(v_step * 65536.0f);
-            uint32_t *dst = c->px + (size_t)a * (size_t)c->stride + (size_t)px;
-            for (int py = a; py < b; py++, v += dv, dst += c->stride) {
-                uint32_t pixel = darken(sample(im, u, v), bright);
-                if ((pixel >> 24) == 255) *dst = pixel;
-                else blend(dst, pixel, 256);
+        float r = corner ? radius : 0;
+        int body0 = (int)ceilf(top + r), body1 = (int)floorf(ground - r), cover_all = (int)(edge * (float)alpha);
+        if (body1 < body0) body1 = body0;
+        /* the top rows and corners, a pixel at a time */
+        for (int py = (int)floorf(top) < 0 ? 0 : (int)floorf(top); py < body0 && py < c->h; py++)
+            card_edge_pixel(c, im, px, py, u, top, ground, h, w, lx, v_step, edge, radius, bright, alpha, sheen_rows, gloss);
+        /* the body: rows wholly inside; the sheen first, then the rest straight */
+        {
+            int a = body0 < 0 ? 0 : body0, b = body1 > c->h ? c->h : body1;
+            if (a < b) {
+                float ly = (float)a + 0.5f - top;
+                int32_t v = (int32_t)(ly * v_step * 65536.0f) - 32768, dv = (int32_t)(v_step * 65536.0f);
+                uint32_t *dst = c->px + (size_t)a * (size_t)c->stride + (size_t)px;
+                int py = a, sheen_end = sheen_rows > 0 ? (int)ceilf(top + sheen_rows) : a;
+                if (sheen_end > b) sheen_end = b;
+                uint32_t lit = bright >= 256 ? 256 : (uint32_t)bright;
+                for (; py < sheen_end; py++, v += dv, ly += 1, dst += c->stride) {
+                    float s = 1 - ly / sheen_rows;
+                    uint32_t pixel = lighten(sample_down(im, ux, ux1, ufx, v, lit), (int)((float)gloss * s * s));
+                    if (cover_all >= 256) *dst = pixel | 0xff000000u;
+                    else blend(dst, pixel | 0xff000000u, cover_all);
+                }
+                if (cover_all >= 256)
+                    for (; py < b; py++, v += dv, dst += c->stride) *dst = sample_down(im, ux, ux1, ufx, v, lit) | 0xff000000u;
+                else
+                    for (; py < b; py++, v += dv, dst += c->stride)
+                        blend_weighted(dst, sample_down(im, ux, ux1, ufx, v, lit), (uint32_t)cover_all, 256 - (uint32_t)cover_all);
             }
         }
-        for (int py = y0; py < y1; py++) {
-            float fy = py + 0.5f;
-            uint32_t pixel;
-            float cover;
-            if (fast && py >= fast0 && py < fast1) { py = fast1 - 1; continue; }
-            if (fy < ground + 0.5f) {
-                float ly = fy - top;
-                if (ly < 0) ly = 0;
-                cover = clampf(fminf(fy + 0.5f - top, ground - (fy - 0.5f)), 0, 1) * edge;
-                if (radius > 0) cover *= corner_cover(lx, ly, w, h, radius);
-                if (cover <= 0) continue;
-                pixel = darken(sample(im, u, (int32_t)(ly * v_step * 65536.0f) - 32768), bright);
-                if (ly < sheen_rows) {
-                    float s = 1 - ly / sheen_rows;
-                    pixel = lighten(pixel, (int)((float)gloss * s * s));
-                }
-                blend(&c->px[(size_t)py * (size_t)c->stride + (size_t)px], pixel, (int)(cover * (float)alpha));
-            } else {
-                /* The reflection: mirrored on the floor, fading out over fade of its height. */
-                float below = fy - ground, left = 1 - below / (h * fade);
-                if (left <= 0) break;
-                float ly = h - below;
-                if (ly < 0) break;
-                cover = (float)reflect / 256 * left * edge;
-                if (radius > 0) cover *= corner_cover(lx, ly, w, h, radius);
-                pixel = darken(sample(soft, su, (int32_t)(ly * sv_step * 65536.0f) - 32768), bright);
-                blend(&c->px[(size_t)py * (size_t)c->stride + (size_t)px], pixel, (int)(cover * (float)alpha));
+        /* the bottom rows and corners */
+        for (int py = body1 < 0 ? 0 : body1; py < pic_end && py < c->h; py++)
+            card_edge_pixel(c, im, px, py, u, top, ground, h, w, lx, v_step, edge, radius, bright, alpha, sheen_rows, gloss);
+        /* The reflection: mirrored on the floor, fading out over fade of its height, until it can't be seen. */
+        if (reflect > 0 && fade > 0) {
+            float span = h * fade, strength = (float)reflect / 256 * edge * (float)alpha;
+            int py = pic_end < 0 ? 0 : pic_end;
+            float below = (float)py + 0.5f - ground;
+            int32_t sv = (int32_t)((h - below) * sv_step * 65536.0f) - 32768, dsv = (int32_t)(sv_step * 65536.0f);
+            /* the strength falls by the same step each row: in 1/256ths, fixed point */
+            int32_t cover = (int32_t)(strength * (1 - below / span) * 256), dcover = (int32_t)(strength / span * 256);
+            uint32_t *dst = c->px + (size_t)py * (size_t)c->stride + (size_t)px;
+            int corner_rows = corner ? (int)ceilf(radius) : 0;
+            uint32_t lit = bright >= 256 ? 256 : (uint32_t)bright;
+            for (int n = 0; py < c->h && cover >= 8 * 256 && below < h; py++, n++, below += 1, sv -= dsv, cover -= dcover,
+                     dst += c->stride) {
+                uint32_t amount = (uint32_t)(cover >> 8);
+                if (n < corner_rows) amount = (uint32_t)((float)amount * corner_cover(lx, h - below, w, h, radius));
+                if (amount > 256) amount = 256;
+                blend_weighted(dst, sample_line(soft, sx, sv), amount * lit >> 8, 256 - amount);
             }
         }
     }
@@ -449,9 +529,9 @@ void pc5_draw_image(Pc5Canvas *c, const Pc5Image *image, float x, float y, float
     float us = image->w / w, vs = image->h / h;
 
     if (!image->px || w < 1 || h < 1) return;
-    if (x0 < 0) x0 = 0;
+    if (x0 < first_column(c)) x0 = first_column(c);
     if (y0 < 0) y0 = 0;
-    if (x1 > c->w) x1 = c->w;
+    if (x1 > end_column(c)) x1 = end_column(c);
     if (y1 > c->h) y1 = c->h;
     for (int py = y0; py < y1; py++) {
         int32_t v = (int32_t)((py + 0.5f - y) * vs * 65536.0f) - 32768;

@@ -542,7 +542,7 @@ void pc5_console_run(const Pc5Console *config)
         uint64_t now = now_ms();
         if (pc5_ui_update(ui, &input, now)) {
             const PwPresentView view = { (const uint8_t *)frame, 1920, 1080, 1920 * 4, (uint32_t)frame_bytes };
-            Pc5Canvas canvas = { frame, 1920, 1080, 1920 };
+            Pc5Canvas canvas = { frame, 1920, 1080, 1920, 0, 0 };
             uint64_t before = now_ms();
             pc5_ui_draw(ui, &canvas);
             int status = video_status == PW_OK ? pw_videoout_ps5_present(&video, &view) : video_status;

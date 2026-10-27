@@ -17,6 +17,7 @@
 
 #include <dirent.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,6 +218,17 @@ static void percent_text(int percent, char *out, size_t size)
     else snprintf(out, size, "%d%%", percent);
 }
 
+typedef struct BgJob {
+    pthread_t thread;
+    int running;                   /* a thread to join */
+    atomic_int done;
+    char key[PC5_ID + 64];         /* what it makes (Pc5Ui's bg_want then) */
+    char path[PC5_PATH];           /* the kept background, or "" to make it from cover */
+    Pc5Image cover;                /* a copy of the cover's smallest picture */
+    uint32_t *out;                 /* W x H, made there */
+    int ok;
+} BgJob;
+
 typedef struct Cover {
     Pc5Picture picture;
     uint32_t tint;
@@ -328,7 +340,10 @@ struct Pc5Ui {
     uint32_t *bg, *bg_old;         /* the background as drawn (W x H), and the one fading out */
     int bg_has, bg_old_has, bg_fading;
     int bg_cover_wait;             /* the chosen game has no background, and its cover isn't loaded yet */
-    int64_t bg_changed;            /* the shown background's file: its time and size */
+    /* What is wanted behind the library and what is shown ("<id>|file|<time>|<size>", "<id>|cover",
+     * "<id>|none" or ""), and the one being made. */
+    char bg_want[PC5_ID + 64], bg_key[PC5_ID + 64];
+    BgJob bg_job;
     uint64_t bg_fade_at;
 
     /* A game's cover or background chosen by hand (Appearance): the search, on the heap while
@@ -494,10 +509,11 @@ static void cover_load(Pc5Ui *ui, int index)
 /* The covers near the chosen game, two a frame. */
 static int covers_near(Pc5Ui *ui)
 {
-    int loaded = 0;
+    /* One a frame while the chosen one is there, so moving along stays smooth. */
+    int loaded = 0, most = ui->library.count && ui->covers[ui->selected].state ? 1 : 2;
 
-    for (int d = 0; d <= 6 && loaded < 2; d++)
-        for (int side = -1; side <= 1 && loaded < 2; side += 2) {
+    for (int d = 0; d <= 6 && loaded < most; d++)
+        for (int side = -1; side <= 1 && loaded < most; side += 2) {
             int i = ui->selected + d * side;
             if (i < 0 || i >= ui->library.count || ui->covers[i].state) continue;
             cover_load(ui, i);
@@ -660,6 +676,9 @@ void pc5_ui_destroy(Pc5Ui *ui)
         while (pc5_upgrade_busy(&ui->upgrade)) usleep(10000);
     }
     pc5_backgrounds_end(&ui->backgrounds, 1);
+    if (ui->bg_job.running) pthread_join(ui->bg_job.thread, NULL);
+    pc5_image_free(&ui->bg_job.cover);
+    pc5_free(ui->bg_job.out);
     if (ui->runtime_state == 1) pc5_runtime_end(&ui->runtime);
     covers_clear(ui);
     queue_free(ui);
@@ -933,9 +952,12 @@ static uint32_t from_hsv(float h, float s, float v, int alpha);
  * library: filling the screen, darker at the top where the clock is and at the sides; below
  * the floor, where the covers stand, its mirror image, stretched and blurred as on a wet
  * floor and darkening towards the hints. */
-static void background_prepare(const Pc5Image *small, uint32_t *out)
+static int background_prepare(const Pc5Image *small, uint32_t *out)
 {
-    static int vertical[H], horizontal[W], x0s[W], x1s[W], fxs[W];
+    /* its tables on the heap: it is made on a thread of its own as well */
+    int *tables = pc5_alloc(sizeof(int) * (H + 4 * W));
+    if (!tables) return -1;
+    int *vertical = tables, *horizontal = vertical + H, *x0s = horizontal + W, *x1s = x0s + W, *fxs = x1s + W;
     Pc5Image soft = { 0 };
     for (int y = 0; y < H; y++) {
         float v;
@@ -992,16 +1014,18 @@ static void background_prepare(const Pc5Image *small, uint32_t *out)
         out[(size_t)FLOOR_Y * W + (size_t)x] = pc5_mix(p, 0xffffffffu, (int)(a * 255));
     }
     pc5_image_free(&soft);
+    pc5_free(tables);
+    return 0;
 }
 
 /* A backdrop for a game with no background of its own: its cover, filling the screen,
  * blurred to its colours, fuller and a little darker (then drawn as a background is). */
-static int cover_backdrop(const Pc5Picture *cover, uint32_t *out)
+static int cover_backdrop(const Pc5Image *cover, uint32_t *out)
 {
     Pc5Image wide = { 0 }, small = { 0 };
+    int status;
 
-    if (!cover->levels || pc5_background_compose(&cover->level[cover->levels - 1], &wide) ||
-        pc5_image_resize(&wide, 192, 108, &small)) {
+    if (!cover->px || pc5_background_compose(cover, &wide) || pc5_image_resize(&wide, 192, 108, &small)) {
         pc5_image_free(&wide);
         pc5_image_free(&small);
         return -1;
@@ -1013,19 +1037,63 @@ static int cover_backdrop(const Pc5Picture *cover, uint32_t *out)
         hsv_of(small.px[i], &h, &s, &v);
         small.px[i] = from_hsv(h, fminf(1, s * 1.5f), v * 0.8f, 255);
     }
-    background_prepare(&small, out);
+    status = background_prepare(&small, out);
     pc5_image_free(&small);
-    return 0;
+    return status;
+}
+
+/* A background made on a thread of its own, so the library keeps moving meanwhile: from the
+ * game's kept file, or from (a copy of) its cover. */
+static void *bg_job_main(void *argument)
+{
+    BgJob *job = argument;
+    Pc5Image small = { 0 };
+
+    if (job->path[0])
+        job->ok = !pc5_cover_load(job->path, &small, NULL) && small.w == PC5_BACKGROUND_WIDTH &&
+                  small.h == PC5_BACKGROUND_HEIGHT && !background_prepare(&small, job->out);
+    else
+        job->ok = !cover_backdrop(&job->cover, job->out);
+    pc5_image_free(&small);
+    atomic_store(&job->done, 1);
+    return NULL;
+}
+
+/* What is shown now becomes picture (NULL: PC5's own backdrop), fading in. */
+static void bg_show(Pc5Ui *ui, uint32_t *picture, const char *key)
+{
+    pc5_copy(ui->bg_key, sizeof(ui->bg_key), key);
+    if (!picture && !ui->bg_has) return;
+    uint32_t *spare = ui->bg_old;
+    ui->bg_old = ui->bg;
+    ui->bg_old_has = ui->bg_has;
+    if (picture) {
+        ui->bg = picture;
+        ui->bg_has = 1;
+        ui->bg_job.out = spare;   /* the next one is made there */
+    } else {
+        ui->bg = spare;
+        ui->bg_has = 0;
+    }
+    ui->bg_fade_at = ui->now;
+    ui->dirty = 1;
 }
 
 /* The chosen game's background, looked for once it stays chosen a moment, and again when
- * the worker has saved one: for a game that had none, or a newer one (its file changed). A
- * game without one gets a backdrop made from its cover, once its cover is loaded. */
+ * the worker has saved one or its cover has loaded: its kept file, or a backdrop made from its
+ * cover. Either is made on a thread (bg_job_main); a finished one is shown if it is still the
+ * one wanted. */
 static void background_follow(Pc5Ui *ui)
 {
+    BgJob *job = &ui->bg_job;
     char path[PC5_PATH];
-    Pc5Image small = { 0 };
 
+    if (job->running && atomic_load(&job->done)) {
+        pthread_join(job->thread, NULL);
+        job->running = 0;
+        pc5_image_free(&job->cover);
+        if (job->ok && !strcmp(job->key, ui->bg_want)) bg_show(ui, job->out, job->key);
+    }
     if (ui->selected != ui->bg_selected) {
         ui->bg_selected = ui->selected;
         ui->bg_selected_at = ui->now;
@@ -1036,42 +1104,51 @@ static void background_follow(Pc5Ui *ui)
     int cover_ready = cover && cover->state && cover->picture.levels;
     int same = !strcmp(id, ui->bg_id) && ui->bg_id[0];
     int cover_late = same && ui->bg_cover_wait && cover_ready;   /* its cover loaded after it was chosen */
-    if (same && generation == ui->bg_generation && !cover_late) return;
-    if (!same && ui->now - ui->bg_selected_at < BG_SETTLE_MS && ui->bg_id[0]) return;
-    ui->bg_generation = generation;
-    struct stat st;
-    int64_t changed = 0;
-    int have = ui->library.count &&
-               !pc5_background_path(ui->root, ui->library.games[ui->selected].prefix, path, sizeof(path)) && !stat(path, &st);
-    if (have) changed = (int64_t)st.st_mtime * 1000000000 + (int64_t)st.st_size;
-    /* Another game's saved: the chosen one's file is as it was. */
-    if (same && !cover_late && (!have || (ui->bg_has && changed == ui->bg_changed))) return;
-    int ok = have && !pc5_cover_load(path, &small, NULL) && small.w == PC5_BACKGROUND_WIDTH &&
-             small.h == PC5_BACKGROUND_HEIGHT;
-    if (same && !ok && !cover_late) { pc5_image_free(&small); return; }
-    int from_cover = !ok && cover_ready;
-    ui->bg_cover_wait = !ok && !cover_ready && ui->library.count;
-    ui->bg_changed = ok ? changed : 0;
-    pc5_copy(ui->bg_id, sizeof(ui->bg_id), id[0] ? id : "-");
-    int any = ok || from_cover || ui->bg_has;
-    if (any && !ui->bg && !(ui->bg = pc5_alloc((size_t)W * H * 4))) ok = from_cover = 0;
-    if (any && !ui->bg_old && !(ui->bg_old = pc5_alloc((size_t)W * H * 4))) ok = from_cover = 0;
-    if (any && ui->bg && ui->bg_old) {
-        uint32_t *swap = ui->bg_old;
-        ui->bg_old = ui->bg;
-        ui->bg = swap;
-        ui->bg_old_has = ui->bg_has;
-        ui->bg_has = 0;
-        if (ok) {
-            background_prepare(&small, ui->bg);
-            ui->bg_has = 1;
-        } else if (from_cover && !cover_backdrop(&cover->picture, ui->bg)) {
-            ui->bg_has = 1;
+    if (!(same && generation == ui->bg_generation && !cover_late) &&
+        (same || ui->now - ui->bg_selected_at >= BG_SETTLE_MS || !ui->bg_id[0])) {
+        struct stat st;
+        ui->bg_generation = generation;
+        pc5_copy(ui->bg_id, sizeof(ui->bg_id), id[0] ? id : "-");
+        ui->bg_cover_wait = 0;
+        if (!ui->library.count) {
+            ui->bg_want[0] = 0;
+        } else if (!pc5_background_path(ui->root, ui->library.games[ui->selected].prefix, path, sizeof(path)) &&
+                   !stat(path, &st)) {
+            snprintf(ui->bg_want, sizeof(ui->bg_want), "%s|file|%lld|%lld", id, (long long)st.st_mtime, (long long)st.st_size);
+        } else if (cover_ready) {
+            snprintf(ui->bg_want, sizeof(ui->bg_want), "%s|cover", id);
+        } else {
+            snprintf(ui->bg_want, sizeof(ui->bg_want), "%s|none", id);
+            ui->bg_cover_wait = 1;
         }
-        ui->bg_fade_at = ui->now;
-        ui->dirty = 1;
     }
-    pc5_image_free(&small);
+    if (!strcmp(ui->bg_want, ui->bg_key) || job->running) return;
+    if (!ui->bg_want[0] || pc5_ends_with_ci(ui->bg_want, "|none")) {
+        bg_show(ui, NULL, ui->bg_want);
+        return;
+    }
+    /* Made anew: the file, or the cover now chosen. */
+    int from_file = !pc5_ends_with_ci(ui->bg_want, "|cover");
+    path[0] = 0;
+    if ((from_file && pc5_background_path(ui->root, ui->library.games[ui->selected].prefix, path, sizeof(path))) ||
+        (!from_file && (!cover_ready || image_copy(&job->cover, &cover->picture.level[cover->picture.levels - 1]))) ||
+        (!job->out && !(job->out = pc5_alloc((size_t)W * H * 4)))) {
+        pc5_image_free(&job->cover);
+        pc5_copy(ui->bg_key, sizeof(ui->bg_key), ui->bg_want);   /* not again for it */
+        return;
+    }
+    pc5_copy(job->key, sizeof(job->key), ui->bg_want);
+    pc5_copy(job->path, sizeof(job->path), from_file ? path : "");
+    job->ok = 0;
+    atomic_store(&job->done, 0);
+    if (!pthread_create(&job->thread, NULL, bg_job_main, job)) {
+        job->running = 1;
+    } else {
+        bg_job_main(job);   /* no thread: made here */
+        pc5_image_free(&job->cover);
+        if (job->ok) bg_show(ui, job->out, job->key);
+        else pc5_copy(ui->bg_key, sizeof(ui->bg_key), ui->bg_want);
+    }
 }
 
 /* ---- a game's cover or background, chosen by hand --------------------------------------------- */
@@ -1185,8 +1262,8 @@ static void none_preview(Pc5Ui *ui, const Pc5Game *game, Pc5Image *out)
 
     if (index < 0) return;
     if (!ui->covers[index].state) cover_load(ui, index);
-    if (!ui->covers[index].state || !(screen = pc5_alloc((size_t)W * H * 4))) return;
-    if (!cover_backdrop(&ui->covers[index].picture, screen)) {
+    if (!ui->covers[index].state || !ui->covers[index].picture.levels || !(screen = pc5_alloc((size_t)W * H * 4))) return;
+    if (!cover_backdrop(&ui->covers[index].picture.level[ui->covers[index].picture.levels - 1], screen)) {
         Pc5Image full = { .px = screen, .w = W, .h = H };
         pc5_image_resize(&full, PC5_BACKGROUND_WIDTH, PC5_BACKGROUND_HEIGHT, out);
     }
@@ -1265,6 +1342,7 @@ static void pick_use(Pc5Ui *ui, const Pc5Game *game)
                 ui->covers[index].state = 0;
             }
             ui->bg_id[0] = 0;   /* a backdrop made from the cover is made again */
+            ui->bg_key[0] = 0;
         }
     } else if (!failed) {
         /* The worker, waiting while the picker is open, is stopped first: it doesn't save over
@@ -3057,44 +3135,103 @@ static void progress_bar(Pc5Canvas *c, float x, float y, float w, double fractio
 
 /* The background with the glow in its current colour: made again only when
  * the colour moves, copied otherwise. */
+/* ---- drawing on several threads -------------------------------------------------------------
+ * The library's backdrop and covers are most of a frame's work: they are drawn in BANDS parts
+ * at once, each on a thread of its own (this one doing the first), each part its own share of
+ * the rows (the backdrop) or of the columns (the covers, through the canvas's clip). */
+enum { BANDS = 4 };
+typedef void (*BandFn)(Pc5Ui *ui, Pc5Canvas *c, int index, void *arg);
+typedef struct Band { Pc5Ui *ui; Pc5Canvas canvas; int index; BandFn fn; void *arg; } Band;
+
+static void *band_main(void *p)
+{
+    Band *band = p;
+    band->fn(band->ui, &band->canvas, band->index, band->arg);
+    return NULL;
+}
+
+/* fn for each band; a band whose thread can't start is drawn here once the others are done. */
+static void in_bands(Pc5Ui *ui, Pc5Canvas *c, BandFn fn, void *arg)
+{
+    Band bands[BANDS];
+    pthread_t threads[BANDS];
+    int started[BANDS] = { 0 };
+
+    for (int i = 0; i < BANDS; i++) {
+        bands[i] = (Band){ ui, *c, i, fn, arg };
+        bands[i].canvas.clip_x0 = c->w * i / BANDS;
+        bands[i].canvas.clip_x1 = c->w * (i + 1) / BANDS;
+    }
+    for (int i = 1; i < BANDS; i++) started[i] = !pthread_create(&threads[i], NULL, band_main, &bands[i]);
+    band_main(&bands[0]);
+    for (int i = 1; i < BANDS; i++) {
+        if (started[i]) pthread_join(threads[i], NULL);
+        else band_main(&bands[i]);
+    }
+}
+
+/* What the backdrop's rows are made of this frame. */
+typedef struct BackdropPlan {
+    const uint32_t *from, *to;   /* the picture fading out and the one fading in (the same when none fades) */
+    uint32_t a, b;               /* their shares, 0-256 */
+    int compose;                 /* PC5's own backdrop made again in the glow's new colour */
+    uint32_t add[256];
+} BackdropPlan;
+
+static void backdrop_rows(Pc5Ui *ui, Pc5Canvas *c, int index, void *arg)
+{
+    const BackdropPlan *k = arg;
+    int y0 = H * index / BANDS, y1 = H * (index + 1) / BANDS;
+
+    if (k->compose)
+        for (size_t i = (size_t)y0 * W; i < (size_t)y1 * W; i++) {
+            /* The backdrop is dark (every channel under 32) and the glow at most 255 * 0.62 + 64: no
+             * channel carries into the next. */
+            ui->composed[i] = ui->backdrop[i] + k->add[ui->falloff[i]];
+        }
+    for (int y = y0; y < y1; y++) {
+        const uint32_t *p = k->from + (size_t)y * W, *q = k->to + (size_t)y * W;
+        uint32_t *o = c->px + (size_t)y * (size_t)c->stride;
+        if (p == q) {
+            memcpy(o, q, (size_t)W * 4);
+            continue;
+        }
+        for (int x = 0; x < W; x++) {
+            uint32_t u = p[x], v = q[x];
+            uint32_t rb = (((u & 0xff00ffu) * k->b + (v & 0xff00ffu) * k->a) >> 8) & 0xff00ffu;
+            uint32_t g = (((u & 0x00ff00u) * k->b + (v & 0x00ff00u) * k->a) >> 8) & 0x00ff00u;
+            o[x] = 0xff000000u | rb | g;
+        }
+    }
+}
+
+/* The background with the glow in its current colour (PC5's own backdrop, made again only
+ * when the colour moves and it shows), or the chosen game's background faded in from what was
+ * there. */
 static void backdrop(Pc5Ui *ui, Pc5Canvas *c)
 {
     uint32_t glow = pc5_rgba((int)ui->glow[0], (int)ui->glow[1], (int)ui->glow[2], 255);
+    BackdropPlan plan;
 
     if (!ui->backdrop || !ui->composed || c->w != W || c->h != H) { pc5_clear(c, 0xff07080au); return; }
-    if (glow != ui->composed_glow || !ui->composed_ready) {
-        uint32_t add[256];
+    uint64_t since = ui->now - ui->bg_fade_at;
+    int fading = since < BG_FADE_MS;
+    plan.to = ui->bg_has ? ui->bg : ui->composed;
+    plan.from = fading && ui->bg_old_has ? ui->bg_old : fading ? ui->composed : plan.to;
+    plan.a = fading ? (uint32_t)(since * 256 / BG_FADE_MS) : 256;
+    plan.b = 256 - plan.a;
+    plan.compose = (plan.to == ui->composed || plan.from == ui->composed) && (glow != ui->composed_glow || !ui->composed_ready);
+    if (plan.compose) {
         for (int k = 0; k < 256; k++) {
             int r = (int)((glow >> 16) & 255) * k / 255, g = (int)((glow >> 8) & 255) * k / 255, b = (int)(glow & 255) * k / 255;
-            add[k] = (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+            plan.add[k] = (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
         }
-        for (size_t i = 0; i < (size_t)W * H; i++) {
-            /* The backdrop is dark (every channel under 32) and the glow at most 255 * 0.62 + 64: no
-             * channel carries into the next. */
-            ui->composed[i] = ui->backdrop[i] + add[ui->falloff[i]];
-        }
+    }
+    in_bands(ui, c, backdrop_rows, &plan);
+    if (plan.compose) {
         ui->composed_glow = glow;
         ui->composed_ready = 1;
     }
-    /* The chosen game's background over it, faded in from what was there. */
-    const uint32_t *to = ui->bg_has ? ui->bg : ui->composed, *from = ui->bg_old_has ? ui->bg_old : ui->composed;
-    uint64_t since = ui->now - ui->bg_fade_at;
-    if (from != to && since < BG_FADE_MS) {
-        uint32_t a = (uint32_t)(since * 256 / BG_FADE_MS), b = 256 - a;
-        for (int y = 0; y < H; y++) {
-            const uint32_t *p = from + (size_t)y * W, *q = to + (size_t)y * W;
-            uint32_t *o = c->px + (size_t)y * (size_t)c->stride;
-            for (int x = 0; x < W; x++) {
-                uint32_t u = p[x], v = q[x];
-                uint32_t rb = (((u & 0xff00ffu) * b + (v & 0xff00ffu) * a) >> 8) & 0xff00ffu;
-                uint32_t g = (((u & 0x00ff00u) * b + (v & 0x00ff00u) * a) >> 8) & 0x00ff00u;
-                o[x] = 0xff000000u | rb | g;
-            }
-        }
-        return;
-    }
-    for (int y = 0; y < H; y++)
-        memcpy(c->px + (size_t)y * (size_t)c->stride, to + (size_t)y * W, (size_t)W * 4);
 }
 
 /* A colour made bright and full: a cover's main colour as the light around it. */
@@ -3188,7 +3325,7 @@ static void carousel(Pc5Ui *ui, Pc5Canvas *c)
         }
         if (cover->state && cover->picture.levels) {
             pc5_draw_card(c, &cover->picture, left, FLOOR_Y, w, hl, hr, radius, (int)(bright * 256), 256, (int)(mirror * 256),
-                          0.58f, near > 0 ? 52 : 40);
+                          0.5f, near > 0 ? 52 : 40);
         } else {
             /* not loaded yet: a plain dark card */
             pc5_round_rect(c, left, FLOOR_Y - h, w, h, radius, pc5_rgba(28, 32, 40, (int)(255 * bright)));
@@ -3202,6 +3339,13 @@ static void carousel(Pc5Ui *ui, Pc5Canvas *c)
             pc5_line(c, x, FLOOR_Y - edge + radius * 0.6f, x, FLOOR_Y - radius * 0.6f, 1.5f, (uint32_t)(64 * bright) << 24 | 0xffffffu);
         }
     }
+}
+
+static void carousel_band(Pc5Ui *ui, Pc5Canvas *c, int index, void *arg)
+{
+    (void)index;
+    (void)arg;
+    carousel(ui, c);
 }
 
 /* text in capitals with letter spacing (ASCII letters only; others as they are), its centre
@@ -3256,7 +3400,7 @@ static void library_screen(Pc5Ui *ui, Pc5Canvas *c)
         hints(ui, c, MARGIN, 1012, list, 1);
         return;
     }
-    carousel(ui, c);
+    in_bands(ui, c, carousel_band, NULL);
     const Pc5Game *game = &ui->library.games[ui->selected];
     /* its name, a shadow behind it, and what it is in a pill */
     pc5_text(c, &ui->fonts, PC5_FACE_TITLE, 960, 834, 0x90000000u, game->title, 1500, 1);
@@ -4344,7 +4488,7 @@ int pc5_make_card(const Pc5Fonts *fonts, const char *title, const Pc5Image *icon
     uint32_t base;
 
     if (pc5_image_new(card, cw, ch)) return -1;
-    c = (Pc5Canvas){ card->px, cw, ch, cw };
+    c = (Pc5Canvas){ card->px, cw, ch, cw, 0, 0 };
     base = icon ? pc5_image_tint(icon) : C_DEFAULT_TINT;
     if (tint) *tint = base;
     for (int y = 0; y < ch; y++) {
