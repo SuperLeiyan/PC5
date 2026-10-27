@@ -612,6 +612,25 @@ int pc5_handoff_env(const char *root, const char *id, char *file, size_t file_si
     return 0;
 }
 
+/* The bits of a program a launcher hands off to, and what it draws with, as installing notes
+ * them for a game's program (pc5_folder_api): its own imports, then the libraries it names to
+ * load at run time, then the libraries beside it, then a Java runtime beside it (OpenGL). What
+ * it can't tell stays as the game's notes say: a launcher and its game may differ in both
+ * (a 32-bit launcher for a 64-bit game). */
+static void handed_program(const char *path, const char *dir, Pc5Info *program)
+{
+    Pc5PeInfo pe;
+    uint32_t drawing;
+
+    if (pc5_pe_read(path, &pe) || pe.dll) return;
+    if (pe.bits == 32 || pe.bits == 64) program->bits = pe.bits;
+    if ((drawing = pe.imports & PC5_IMPORT_DRAWING) || (drawing = pc5_pe_named_libraries(path) & PC5_IMPORT_DRAWING) ||
+        (dir[0] && (drawing = pc5_dll_imports_in(dir) & PC5_IMPORT_DRAWING)))
+        program->api = pc5_api_from_imports(drawing);
+    else if (dir[0] && pc5_java_beside(dir))
+        program->api = PC5_API_OPENGL;
+}
+
 int pc5_handoff_take(const char *root, const char *id, char *error, size_t size)
 {
     char file[PC5_PATH], dir[PC5_PATH], path[PC5_PATH], relative[PC5_PATH], cwd[PC5_PATH], arguments[512],
@@ -690,11 +709,12 @@ int pc5_handoff_take(const char *root, const char *id, char *error, size_t size)
     }
     snprintf(note, sizeof(note), "%d\n", count + 1);
     pc5_write_file(count_file, note, strlen(note));
-    /* The profile for it, for this start. */
+    /* The profile for it, for this start, with its own bits and drawing. */
     Pc5Info program = info;
     pc5_copy(program.exe, sizeof(program.exe), relative);
     pc5_controls_load(root, id, &controls);
     program_folder(root, id, &program, folder, sizeof(folder));
+    handed_program(path, folder, &program);
     pc5_own_dlls(folder, own, sizeof(own));
     if (pc5_profile_text_at(id, &program, arguments, &controls, own, work, text, sizeof(text)) ||
         pc5_format(path, sizeof(path), "%s/profiles/%s.profile", root, id)) {

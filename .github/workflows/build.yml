@@ -318,6 +318,10 @@ jobs:
         uses: actions/cache/restore@v5
         with: { path: "${{ needs.keys.outputs.radv_paths }}", key: "${{ needs.keys.outputs.radv }}", fail-on-cache-miss: true }
       - run: tools/build.sh bundle
+      # PC5's host checks (tests/test.sh) on the sources just fetched: a change that fails
+      # them makes no draft release.
+      - name: Tests
+        run: tests/test.sh
       - uses: actions/upload-artifact@v7
         with:
           name: sources

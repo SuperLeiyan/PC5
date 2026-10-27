@@ -939,6 +939,35 @@ static void test_install(void)
         CHECK(!pc5_profile_refresh(root, "neondrift", error, sizeof(error)), "and back");
         path(file, sizeof(file), "%s/neondrift/drive_c/Games/NeonDrift/bin/Real Game.exe", prefixes);
         unlink(file);
+        /* The program handed to starts with its own bits and drawing, not the launcher's (this
+         * game's is 64-bit Direct3D 11): a 32-bit OpenGL one, then a 32-bit Direct3D 9 one. */
+        path(file, sizeof(file), "%s/neondrift/drive_c/Games/NeonDrift/bin/Old Game.exe", prefixes);
+        path(other, sizeof(other), "%s/gl32.exe", programs);
+        copy_file(other, file);
+        write_text(handoff, "C:\\Games\\NeonDrift\\bin\\Old Game.exe\nOld Game.exe\nC:\\Games\\NeonDrift\\bin\n");
+        CHECK(pc5_handoff_take(root, "neondrift", error, sizeof(error)) == 1, "to a 32-bit OpenGL program: %s", error);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->app.architecture == PW_APP_ARCH_PE32 && profile->app.graphics == PW_APP_GRAPHICS_ZINK,
+              "it starts 32-bit with Zink: arch=%d graphics=%d", profile ? (int)profile->app.architecture : -1,
+              profile ? (int)profile->app.graphics : -1);
+        path(other, sizeof(other), "%s/game32.exe", programs);
+        copy_file(other, file);
+        write_text(handoff, "C:\\Games\\NeonDrift\\bin\\Old Game.exe\nOld Game.exe\nC:\\Games\\NeonDrift\\bin\n");
+        CHECK(pc5_handoff_take(root, "neondrift", error, sizeof(error)) == 1, "to a 32-bit Direct3D 9 program: %s", error);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->app.architecture == PW_APP_ARCH_PE32 && profile->app.graphics == PW_APP_GRAPHICS_DXVK,
+              "it starts 32-bit with DXVK: arch=%d graphics=%d", profile ? (int)profile->app.architecture : -1,
+              profile ? (int)profile->app.graphics : -1);
+        CHECK(!pc5_info_read(root, "neondrift", &info) && info.bits == 64 && info.api == PC5_API_D3D11,
+              "the game's notes unchanged: %d %d", info.bits, (int)info.api);
+        CHECK(!pc5_profile_refresh(root, "neondrift", error, sizeof(error)), "an ordinary start");
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->app.architecture == PW_APP_ARCH_PE64 && profile->app.graphics == PW_APP_GRAPHICS_DXVK,
+              "the game's own 64-bit program again");
+        unlink(file);
     }
     /* A batch file chosen as the game's program: the profile starts the program it starts,
      * with its options, then launch.txt's, in its folder. */

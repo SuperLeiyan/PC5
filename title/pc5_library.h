@@ -79,7 +79,8 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
  * (root/prefixes/<id>/pc5/handoff.txt) and the game's folder as Windows names it
  * (C:\Games\<folder>\), which Wine gets as PW_HANDOFF and PW_HANDOFF_DIR; 0, or -1 when
  * they don't fit. pc5_handoff_take: that file, taken: the profile written for that program,
- * its arguments and its working folder, for the game's next start (an ordinary start
+ * with its own bits and what it draws with, its arguments and its working folder, for the
+ * game's next start (an ordinary start
  * writes it for the game's own program again). 1 when it was written, 0 when there was
  * none, -1 when it was refused (why in error): a program outside the game's folder or not
  * there, or a fourth hand-off in a row. */
