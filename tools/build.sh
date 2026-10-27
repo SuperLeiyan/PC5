@@ -797,7 +797,11 @@ doing() { # piece
     tools|hostwine)
         [[ $1 == tools ]] && w=$PW/.deps/wine-tools || w=$PW/.deps/wine-host
         if [[ $now != "Wine's tools" && $now != "Wine's Windows side" ]]; then :
-        elif newer "$w/install.log"; then now=installing
+        elif newer "$w/install.log"; then
+            # make install's copies, then (its log quiet) build_host_wine.sh strips the modules.
+            if (( $(date +%s) - $(stat -c %Y "$w/install.log") > 20 )); then now="stripping the modules"
+            else now="installing  $(grep -c '^tools/install ' "$w/install.log") of $(grep -c "^$(printf '\t')tools/install " "$w/build/Makefile") copies"
+            fi
         elif newer "$w/make.log"; then now=$(wine_count "$w")
         elif newer "$w/configure.log"; then now=configuring
         fi ;;
