@@ -442,6 +442,7 @@ step_dxvk() {
     local arch out=$B/dxvk
     rm -rf "$out"
     for arch in 64 32; do
+        stage "DXVK $arch-bit ($([[ $arch == 64 ]] && echo 1 || echo 2) of 2)"
         rm -rf "$B/dxvk-build.w$arch"
         (cd "$B/dxvk-source" && "$B/venv/bin/meson" setup --cross-file "build-win$arch.txt" --buildtype release --strip \
             --prefix "$out" --bindir "x$arch" --libdir "x$arch" -Dbuild_id=false "$B/dxvk-build.w$arch")
@@ -466,6 +467,7 @@ step_vkd3d() {
     rm -rf "$out"
     stage=$out/vkd3d-proton-$VKD3D_VERSION
     for arch in 64 86; do
+        stage "VKD3D-Proton $([[ $arch == 64 ]] && echo '64-bit (1' || echo '32-bit (2') of 2)"
         rm -rf "$B/vkd3d-build.x$arch"
         (cd "$B/vkd3d-proton-source" && "$B/venv/bin/meson" setup --cross-file "build-win${arch/86/32}.txt" \
             --buildtype release --strip --prefix "$stage" --bindir "x$arch" --libdir "x$arch" "$B/vkd3d-build.x$arch")
@@ -799,7 +801,13 @@ doing() { # piece
             elif newer "$w/ffmpeg/make.log"; then now="FFmpeg: compiling $(grep -c '^CC' "$w/ffmpeg/make.log") files"
             fi
         fi ;;
-    radv) now="${now:-RADV}  $(ninja_count "$log" "$B"/PS5_Vulkan/.deps/work/*.log)" ;;
+    radv)
+        # build-radv.sh builds Mesa's shader compiler for this computer first, then RADV.
+        w=$(ls -t "$B"/PS5_Vulkan/.deps/work/*.log 2>/dev/null | head -1)
+        if [[ -n $w ]] && newer "$w"; then
+            [[ $w == *clc* ]] && now="Mesa's shader compiler (1 of 2)" || now="RADV (2 of 2)"
+            now="$now  $(ninja_count "$w")"
+        fi ;;
     dxvk|vkd3d|zink) now="${now:-$1}  $(ninja_count "$log")" ;;
     esac
     echo "${now:-starting}"
