@@ -9,6 +9,7 @@ with their saves kept, and uninstalls them with or without their saves. It runs 
 Temporary hotfix for 1.8.3 
 
 **1. Open /data/prospero-win/pc5/settings.txt on the console (FTP).**
+
 **2. Change the startup_sound = … line to startup_sound = off (add the line if it isn’t there), and save.**
 
 No game is part of PC5, and PC5 downloads none: you install the games you own.
