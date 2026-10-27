@@ -6,6 +6,13 @@ A launcher for your own PC games on a PS5 that runs homebrew. PC5 shows your gam
 of covers, installs games from a USB drive in one copy each, updates them from a newer copy
 with their saves kept, and uninstalls them with or without their saves. It runs the games with [prospero-win](https://github.com/mpereiraesaa/prospero-win)
 (Wine on the PS5). The app is `PPSA11018`, its tile is called **PC5**. This is version 1.8.3.
+Temporary hotfix for 1.8.3 
+
+1. Open /data/prospero-win/pc5/settings.txt on the console (FTP).
+2. Change the startup_sound = … line to startup_sound = off (add the line if it isn’t there), and save.
+
+
+thats gonna get you back up and running on 1.8.3
 
 No game is part of PC5, and PC5 downloads none: you install the games you own.
 
