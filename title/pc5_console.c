@@ -179,8 +179,39 @@ static atomic_int sound_stop;
 /* The console's Controller Speaker Volume for the player, which libSceUserService holds. Its
  * arguments aren't published: asked first with a pointer where a player would go (a call
  * taking only the pointer reads it there; one taking the player first refuses it as no
- * player), then, refused and with nothing written there, with the player and a pointer. */
-int sceUserServiceGetPadSpeakerVolume(intptr_t first, int32_t *second);
+ * player), then, refused and with nothing written there, with the player and a pointer.
+ * The function is looked up in libSceUserService as the console loaded it, not imported: an
+ * import the console's system doesn't have ended PC5 the moment it was called (1.8.2 and
+ * 1.8.3 closed at start on a console whose own system is 9.60). Without it the sound plays
+ * at full volume, as before 1.8.2. */
+typedef int (*PadSpeakerVolume)(intptr_t first, int32_t *second);
+int sceKernelGetModuleInfo(int32_t handle, void *info);
+int sceKernelDlsym(int32_t handle, const char *symbol, void **address);
+
+/* The console's modules are looked through by handle (they are small numbers: the keyboard's
+ * is about 200) with only what PC5 1.8.1 already called, so this asks the system for nothing
+ * new itself. */
+static PadSpeakerVolume pad_speaker_volume_function(void)
+{
+    enum { HANDLES = 1024, INFO_BYTES = 0x160, NAME_AT = 8, NAME_BYTES = 256 };
+
+    for (int32_t handle = 0; handle < HANDLES; handle++) {
+        /* SceKernelModuleInfo: its size first, the module's name at 8 (as wine/ps5/pw_wine_prx.h reads it). */
+        union { uint64_t size; uint8_t bytes[INFO_BYTES]; } info;
+        char name[NAME_BYTES + 1];
+        void *address = NULL;
+        memset(&info, 0, sizeof(info));
+        info.size = sizeof(info);
+        if (sceKernelGetModuleInfo(handle, &info)) continue;
+        memcpy(name, info.bytes + NAME_AT, NAME_BYTES);
+        name[NAME_BYTES] = 0;
+        if (strncmp(name, "libSceUserService", 17)) continue;
+        if (!sceKernelDlsym(handle, "sceUserServiceGetPadSpeakerVolume", &address) && address)
+            return (PadSpeakerVolume)(uintptr_t)address;
+        return NULL;
+    }
+    return NULL;
+}
 
 /* The sound's level (sceAudioOut's, AUDIO_VOLUME_0DB the most) from that setting: 0 to 10, 0
  * to 100 or 0 to 0x8000, as its size says. -1 when the console doesn't say (the most, as
@@ -190,11 +221,16 @@ static int pad_speaker_level(int32_t user, char *raw, size_t size)
     enum { UNSET = -0x5a5a };
     int32_t a = UNSET, b = UNSET, c = UNSET, value = UNSET;
     int first, second = 0;
+    PadSpeakerVolume get = pad_speaker_volume_function();
 
-    first = sceUserServiceGetPadSpeakerVolume((intptr_t)&a, &b);
+    if (!get) {
+        snprintf(raw, size, "none");
+        return -1;
+    }
+    first = get((intptr_t)&a, &b);
     if (first >= 0) value = a != UNSET ? a : b;
     else if (a == UNSET && user >= 0) {
-        second = sceUserServiceGetPadSpeakerVolume((intptr_t)user, &c);
+        second = get((intptr_t)user, &c);
         if (second >= 0) value = c;
     }
     snprintf(raw, size, "rc=%#x/%#x value=%d", (unsigned)first, (unsigned)second, value == UNSET ? -1 : value);

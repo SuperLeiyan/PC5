@@ -53,7 +53,7 @@ The answer is one of these:
 
 | Message | Meaning |
 | --- | --- |
-| You have the newest PC5 (1.8.3) | No newer release is published. |
+| You have the newest PC5 (1.8.4) | No newer release is published. |
 | PC5 1.x.y is available on GitHub | A newer release is out. When PC5 opens it asks whether to update; after Check now, the console shows a notification, once for each new release. |
 | GitHub didn't answer: is the console online? | The check failed. Check the console's internet connection and try again. |
 | Not checked yet | PC5 hasn't asked since it was installed. |

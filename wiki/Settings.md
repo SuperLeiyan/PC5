@@ -63,7 +63,7 @@ When a newer PC5 is out, PC5 asks when it opens whether to update now or later. 
 
 ## Startup sound
 
-**Settings › System › Startup sound** chooses the sound PC5 plays on the controller's speaker when you open it, or **Off**. Choosing a sound with **✕** or left and right plays it, so you can hear it. It plays as loud as the console's controller speaker volume is set; with the volume at its lowest, it doesn't play.
+**Settings › System › Startup sound** chooses the sound PC5 plays on the controller's speaker when you open it, or **Off**. Choosing a sound with **✕** or left and right plays it, so you can hear it. It plays as loud as the console's controller speaker volume is set; with the volume at its lowest, it doesn't play. On a console whose system software doesn't give that volume, it plays at full volume.
 
 PC5 comes with **Beeper - Push**, **Cha-Ching**, **cheap chinese speaker** (the default), **fahh**, **funny message tone**, **rizz** and **System Activated**.
 
