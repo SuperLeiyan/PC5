@@ -321,7 +321,9 @@ jobs:
       # PC5's host checks (tests/test.sh) on the sources just fetched: a change that fails
       # them makes no draft release.
       - name: Tests
-        run: tests/test.sh
+        shell: bash
+        # Its output kept with the build's logs, so a failure's end shows on the run's page.
+        run: mkdir -p "$PC5_BUILD_DIR/logs" && tests/test.sh 2>&1 | tee "$PC5_BUILD_DIR/logs/tests.log"
       - uses: actions/upload-artifact@v7
         with:
           name: sources

@@ -97,10 +97,23 @@ fi
 (cd "$PW" && python3 tests/test_title_identity.py && python3 tests/test_native_contract.py &&
     python3 tests/test_package_release.py)
 
-# The art is the one the script draws.
+# The art is the one the script draws. Pillow's versions smooth edges a little differently
+# (Ubuntu's 10.2 and a newer one from pip), so it is compared picture to picture, not byte
+# for byte: at most 1 % of the pixels a little off, as an edge drawn by another Pillow is,
+# and none far off, as a changed picture is.
 python3 art/make-art.py "$out/art" >/dev/null
-cmp art/icon0.png "$out/art/icon0.png"
-cmp art/pic0.png "$out/art/pic0.png"
+python3 - "$out/art" <<'ART'
+import sys
+from PIL import Image, ImageChops
+for name in ("icon0.png", "pic0.png"):
+    kept, made = (Image.open(f"{folder}/{name}").convert("RGB") for folder in ("art", sys.argv[1]))
+    if kept.size != made.size:
+        sys.exit(f"art/{name} is {kept.size[0]}x{kept.size[1]}; art/make-art.py draws it {made.size[0]}x{made.size[1]}")
+    r, g, b = ImageChops.difference(kept, made).split()
+    off = ImageChops.lighter(ImageChops.lighter(r, g), b).histogram()   # each pixel's largest difference
+    if sum(off[65:]) or sum(off[5:]) * 100 > kept.size[0] * kept.size[1]:
+        sys.exit(f"art/{name} isn't what art/make-art.py draws: run it and commit what it makes")
+ART
 python3 -m py_compile tools/make-prefix.py tools/make-app.py tools/make-font.py art/make-art.py \
     tests/make-test-programs.py tests/make-sample-covers.py
 bash -n tools/build.sh
