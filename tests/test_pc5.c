@@ -4029,7 +4029,8 @@ static void test_screens(const char *fonts)
     /* The covers the start fetched: Starfall had one; Orbital Nine looked online. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "settings");
-    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Game maintenance */
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Install games from USB */
     until_screen(ui, "sources", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "sources"), "usb list: %s", pc5_ui_screen(ui));
     press(ui, PC5_KEY_ACCEPT, &canvas);   /* NeonDrift */
@@ -4092,8 +4093,30 @@ static void test_screens(const char *fonts)
         CHECK(!strcmp(pc5_ui_screen(ui), "library"), "back in the library: %s", pc5_ui_screen(ui));
     }
 
+    /* Game maintenance › Game compatibility list: the wiki's list as a QR code; back on its row. */
+    press(ui, PC5_KEY_OPTIONS, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Game maintenance */
+    save_shot(&canvas, "settings-maintenance");
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Game compatibility list */
+    CHECK(!strcmp(pc5_ui_screen(ui), "compatibility"), "the compatibility list's code: %s", pc5_ui_screen(ui));
+    save_shot(&canvas, "compatibility");
+    press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* back on its row, two below Install games from USB */
+    until_screen(ui, "sources", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "sources"), "back on Game maintenance: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_BACK, &canvas);        /* Game maintenance, on Install */
+    press(ui, PC5_KEY_BACK, &canvas);        /* the first page, on Game maintenance */
+    CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "the first page: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_BACK, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "and the library: %s", pc5_ui_screen(ui));
+
     /* Uninstall: Cancel is chosen first, and a press that came too soon does nothing. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Game maintenance */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "uninstall-list"), "uninstall list: %s", pc5_ui_screen(ui));
@@ -4136,8 +4159,9 @@ static void test_screens(const char *fonts)
         Pc5Saves saves[4];
         CHECK(pc5_saves_list(root, saves, 4) == 1 && !strcmp(saves[0].name, gone), "its saves kept");
     }
-    /* Settings › Uninstall game lists them after the games. */
+    /* Settings › Game maintenance › Uninstall game lists them after the games. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
     for (int i = 0; i < 10; i++) press(ui, PC5_KEY_DOWN, &canvas);
@@ -4145,12 +4169,14 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "saves-confirm"), "kept saves chosen: %s", pc5_ui_screen(ui));
     save_shot(&canvas, "saves-confirm");
-    press(ui, PC5_KEY_BACK, &canvas);
-    press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_BACK, &canvas);        /* the list */
+    press(ui, PC5_KEY_BACK, &canvas);        /* Game maintenance */
+    press(ui, PC5_KEY_BACK, &canvas);        /* the first page */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "library"), "back in the library: %s", pc5_ui_screen(ui));
     /* Installed again: the saves are offered and put back. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
     until_screen(ui, "sources", &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* NeonDrift */
@@ -4172,6 +4198,7 @@ static void test_screens(const char *fonts)
     }
     /* And uninstalled for good: Delete all. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
@@ -4190,7 +4217,6 @@ static void test_screens(const char *fonts)
 
     /* Settings: In games, a value changed with Cross and with right; saved. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
-    press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* In games */
     press(ui, PC5_KEY_DOWN, &canvas);
@@ -4414,6 +4440,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_OPTIONS, &canvas);
     press(ui, PC5_KEY_UP, &canvas);
     press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Game maintenance */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     until_screen(ui, "sources", &canvas);
     press(ui, PC5_KEY_SQUARE, &canvas);      /* NeonDrift */
@@ -4604,7 +4631,7 @@ static void test_upgrade_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "library") && !net.downloads, "Later: %s", pc5_ui_screen(ui));
 
     press(ui, PC5_KEY_OPTIONS, &canvas);
-    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
     for (int i = 0; i < 6; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Update now, the seventh row */
     pc5_ui_draw(ui, &canvas);

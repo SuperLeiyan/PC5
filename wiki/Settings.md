@@ -1,4 +1,4 @@
-PC5's Settings hold installing and uninstalling games, the settings that apply in every game (the controller's rumble, light bar and triggers, and the overlay), PC5's own system settings (the startup sound, the logs, where covers and backgrounds come from, and updates) and the About screen. Settings that belong to one game (its controller, graphics, cover, background, home screen tile and program) are in that game's menu instead: see [Playing games](Playing-games#the-game-menu). The row chosen says what it does under its name.
+PC5's Settings hold installing and uninstalling games and the game compatibility list, the settings that apply in every game (the controller's rumble, light bar and triggers, and the overlay), PC5's own system settings (the startup sound, the logs, where covers and backgrounds come from, and updates) and the About screen. Settings that belong to one game (its controller, graphics, cover, background, home screen tile and program) are in that game's menu instead: see [Playing games](Playing-games#the-game-menu). The row chosen says what it does under its name.
 
 ## Opening Settings
 
@@ -21,12 +21,25 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 
 | Row | What it does |
 | --- | --- |
-| Install games from USB | Copies one game, or several in a row, from a USB drive to the console. See [Installing games](Installing-games). |
-| Uninstall game | Lists your games to uninstall one, keeping its saves or not, then the saves kept from games uninstalled before, to delete them. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
+| Game maintenance › | Installing and uninstalling games, and the game compatibility list. See [Game maintenance](#game-maintenance). |
 | In games › | Vibration, light bar and adaptive triggers. See [In games](#in-games). |
 | Overlay › | The overlay shown over every game. See [Overlay](#overlay). |
 | System › | The startup sound, the logs, the picture sources and updates. When a newer PC5 is out, the row says so. See [System](#system). |
 | About PC5 | The version, where games are kept, the free space on the console, and a QR code for Buy Me a Coffee. |
+
+## Game maintenance
+
+![The Game maintenance page of Settings](images/settings-maintenance.png)
+*Settings › Game maintenance.*
+
+| Row | What it does |
+| --- | --- |
+| Install games from USB | Copies one game, or several in a row, from a USB drive to the console. See [Installing games](Installing-games). |
+| Uninstall game | Lists your games to uninstall one, keeping its saves or not, then the saves kept from games uninstalled before, to delete them. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
+| Game compatibility list | Shows a QR code: scan it with your phone to open the [game compatibility list](Game-compatibility), the games players have tried, how each ran and the settings that helped. **Add a game** at the top of that page reports one of yours. |
+
+![The game compatibility list's QR code](images/compatibility-list.png)
+*Game maintenance › Game compatibility list.*
 
 ## In games
 

@@ -380,7 +380,6 @@ int main(int argc, char **argv)
     settle(ui);
     save("07-settings");
     step(ui, PC5_KEY_DOWN, 1);
-    step(ui, PC5_KEY_DOWN, 1);
     step(ui, PC5_KEY_ACCEPT, 1);           /* In games */
     step(ui, PC5_KEY_DOWN, 1);
     step(ui, PC5_KEY_DOWN, 1);
@@ -420,6 +419,16 @@ int main(int argc, char **argv)
     save("08-about");
     step(ui, PC5_KEY_BACK, 1);
     for (int i = 0; i < 4; i++) step(ui, PC5_KEY_UP, 1);
+    step(ui, PC5_KEY_ACCEPT, 1);           /* Game maintenance */
+    settle(ui);
+    save("07g-settings-maintenance");
+    step(ui, PC5_KEY_DOWN, 1);
+    step(ui, PC5_KEY_DOWN, 1);
+    step(ui, PC5_KEY_ACCEPT, 1);           /* Game compatibility list */
+    settle(ui);
+    save("07h-compatibility-list");
+    step(ui, PC5_KEY_BACK, 1);
+    step(ui, PC5_KEY_UP, 1);
     step(ui, PC5_KEY_ACCEPT, 1);           /* Uninstall game */
     settle(ui);
     for (int i = 0; i < 3; i++) { step(ui, PC5_KEY_DOWN, 1); step(ui, 0, 2); }
@@ -474,7 +483,8 @@ int main(int argc, char **argv)
     }
     ui = open_ui(root, 1);
     step(ui, PC5_KEY_OPTIONS, 1);
-    step(ui, PC5_KEY_ACCEPT, 1);
+    step(ui, PC5_KEY_ACCEPT, 1);           /* Game maintenance */
+    step(ui, PC5_KEY_ACCEPT, 1);           /* Install games from USB */
     until(ui, "sources");
     step(ui, PC5_KEY_SQUARE, 1);
     step(ui, PC5_KEY_DOWN, 1);

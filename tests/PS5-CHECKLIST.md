@@ -14,7 +14,7 @@ with `PC5 `.
 | 2 | Options › About PC5 | version 1.2.1 and the free space | |
 | 3 | Options › Updates | "No PC5 release is published on GitHub yet" (until there is one) | `PC5 update state=2` (2: none published) |
 | 4 | Options › In games: change Vibration, Light bar and Adaptive triggers; Options › Overlay: turn Show FPS on, pick a corner | the values change and stay after restarting PC5; Trigger rumble / Trigger resistance appear only with their effect on | `PC5 settings fps=1 …`; `/data/prospero-win/pc5/settings.txt` |
-| 5 | Options › Install games from USB, tick two folders with □, press Options | "Getting ready 1 of 2", then the list with covers | `PC5 folder=… queue=1/2`, `PC5 cover choices=… queue=…` |
+| 5 | Options › Game maintenance › Install games from USB, tick two folders with □, press Options | "Getting ready 1 of 2", then the list with covers | `PC5 folder=… queue=1/2`, `PC5 cover choices=… queue=…` |
 | 6 | ✕ on one, L1 / R1, ✕ (Done) | another cover; back to the list | |
 | 7 | Options (Install all) | "Game 1 of 2", "Step 1 of 3 …" with MB/s on every step, then a summary | `PC5 install id=… queue=1/2`, `PC5 queue done installed=2 of=2` |
 | 8 | Install again, press ○ during the copy, choose Stop this game | that game stops, the next one installs | `PC5 install ended cancelled=1` |
@@ -227,9 +227,9 @@ With ShadowMountPlus and elfldr running.
 | 99 | Play a game and save; put a newer copy of its folder (another file changed) on the USB drive; △ › Update, choose it, Update | "Updating …" through copying, checking and putting the files in place, then "… is updated"; the game starts with its save; the changed file is the new one | `PC5 update id=… from=…`, `PC5 updated id=… files=…` |
 | 99a | △ › Update, choose another game's folder | "… can't be updated: This folder doesn't have …" | `PC5 problem update …` |
 | 99b | △ › Update, then ○ while it copies, Stop | "Update stopped"; the game plays as before | `PC5 update ended cancelled=1` |
-| 100 | △ › Uninstall › Keep saves | "… is uninstalled", saves kept; Options › Uninstall game lists "Saves of …" after the games | `PC5 uninstall id=… keep_saves=1` |
+| 100 | △ › Uninstall › Keep saves | "… is uninstalled", saves kept; Options › Game maintenance › Uninstall game lists "Saves of …" after the games | `PC5 uninstall id=… keep_saves=1` |
 | 100a | Install the same game again | "Put back the saves of …?"; Put them back: the game starts with its save and its options | `PC5 install saves=…/saves/…` |
-| 100b | Keep saves again; Options › Uninstall game › Saves of … › Delete | "The saves of … are deleted"; the row is gone | `PC5 saves delete name=…` |
+| 100b | Keep saves again; Options › Game maintenance › Uninstall game › Saves of … › Delete | "The saves of … are deleted"; the row is gone | `PC5 saves delete name=…` |
 | 101 | A game with WebM or ASF movies | the movies play smoothly, in time with their sound | no `EBML` warnings from FFmpeg |
 | 102 | A game whose Back opens a menu, Xbox controller mode: press the touchpad | the game's Back menu, and no share menu from the console | |
 | 103 | Update PC5 from 1.8.0 to this version (Settings › Updates › Update now; from 1.8.2, Settings › System), then Restart PC5 | PC5 opens again by itself, the new version in About PC5, no CE-108255-1 | `PC5 restarting after its update eboot=/app0/eboot.bin` |
@@ -248,7 +248,7 @@ With ShadowMountPlus and elfldr running.
 | --- | --- | --- | --- |
 | 111 | Open PC5 with a few games; move left and right | covers stand on a floor that mirrors them, the side ones turned a little towards the middle; the chosen one framed and lit in its cover's colours; its name and a pill with its bits, graphics and size under it; "N GAMES" at the bottom right; moving stays smooth | |
 | 112 | Choose a game with a background, then one without | the background behind the covers, mirrored in the floor; for the other, a backdrop of its cover's colours | |
-| 113 | Settings: the first page; System | In games, Overlay, System, About; System has Startup sound, Startup sound volume (while a sound is chosen), Keep all logs, Picture sources, Check when PC5 opens, Check now | |
+| 113 | Settings: the first page; System | Game maintenance, In games, Overlay, System, About; System has Startup sound, Startup sound volume (while a sound is chosen), Keep all logs, Picture sources, Check when PC5 opens, Check now | |
 | 114 | System › Startup sound volume: 50 %, then 10 %; close PC5 and open it after each | the sound plays as the volume changes, quieter at 50 %, quiet at 10 %, and at that volume when PC5 opens; the console's Controller Speaker Volume doesn't change it | `PC5 settings … startup_volume=50`, `PC5 startup sound … volume=… percent=50 level=8192` (volume not negative) |
 | 115 | System › Picture sources: Steam off; △ › Appearance › Cover on a game | no Steam cover among those found; the screens don't say where a picture comes from | `PC5 settings … pictures_off=0x1` |
 | 116 | △ › Appearance › Cover on a game Steam's search misses but PCGamingWiki or Wikidata has | a cover found | `PC5 picture choices=…` |
@@ -270,3 +270,11 @@ With ShadowMountPlus and elfldr running.
 A non-zero `rc=` on the light bar or triggers lines means the console refused that call; send
 that log. On the startup sound line, a negative `port=` means the console refused the
 controller's speaker.
+
+## A launcher's game as itself, Game maintenance (1.8.6)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 126 | A game whose 32-bit launcher starts a 64-bit game (or a launcher and game that draw differently), installed on its launcher: start it | the launcher closes and the game starts, and plays as when it is chosen with △ › Manage › Change program | `PC5 hand-off: … starts the program its launcher started` |
+| 127 | Options: the first page; Game maintenance | Game maintenance, In games, Overlay, System, About; Game maintenance has Install games from USB, Uninstall game, Game compatibility list; ○ from Install's and Uninstall's lists comes back to their rows there | |
+| 128 | Game maintenance › Game compatibility list; scan the code with a phone | the phone opens the wiki's Game compatibility page; ○ comes back to the row | `PC5 compatibility list qr=…` (not 0) |

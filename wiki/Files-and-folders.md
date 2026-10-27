@@ -35,7 +35,7 @@ PC5 keeps everything where prospero-win keeps it, in `/data/prospero-win` on the
 | `covers/` | Your own covers for installed games. | Yes. See [Covers](Covers#for-a-game-already-installed). |
 | `backgrounds/` | Your own backgrounds for installed games. | Yes. See [Backgrounds](Covers#backgrounds). |
 | `sounds/` | Your own startup sounds. | Yes. See [Settings](Settings#startup-sound). |
-| `saves/<game>/` | A game's Windows (its saves, settings, registry and options) without the game, kept by **Keep saves** when it was uninstalled. Installing the game again can put it back. | Delete it in **Options › Uninstall game**. See [Keeping a game's saves](Installing-games#keeping-a-games-saves). |
+| `saves/<game>/` | A game's Windows (its saves, settings, registry and options) without the game, kept by **Keep saves** when it was uninstalled. Installing the game again can put it back. | Delete it in **Options › Game maintenance › Uninstall game**. See [Keeping a game's saves](Installing-games#keeping-a-games-saves). |
 | `pc5/settings.txt` | PC5's [Settings](Settings). | Change them in PC5. A missing file, or a line PC5 doesn't know, gives the default. |
 | `logs/` | Session logs: `session-N.log` while running, then one `issue-….zip` or `log-….zip` per session (with the game's own logs and crash files), kept for seven days. | Copy the zip off to [report a problem](Reporting-a-problem). |
 

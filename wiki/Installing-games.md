@@ -34,7 +34,7 @@ Good to know:
 
 ## Installing one game
 
-1. In the library, press **Options** to open Settings, and choose **Install games from USB**.
+1. In the library, press **Options** to open Settings, and choose **Game maintenance › Install games from USB**.
 2. PC5 lists the game folders it found on every USB drive plugged in. Choose one and press **✕**.
 3. PC5 reads the folder, finds its program and looks for its cover. The review screen opens.
 4. Check the review screen, then press **✕** to install.
@@ -159,7 +159,7 @@ PC5 needs the newer folder's size plus about 1 GB of free space. Update only wor
 There are two ways:
 
 - In the library, choose the game, press **△** and choose **Manage › Uninstall**.
-- Or press **Options**, choose **Uninstall game**, and choose the game from the list.
+- Or press **Options**, choose **Game maintenance › Uninstall game**, and choose the game from the list.
 
 PC5 asks first. **Cancel** is chosen by default. For a game PC5 installed there are two ways to go ahead:
 
@@ -182,7 +182,7 @@ When you install a game with the same folder name and program again, PC5 asks **
 
 When several games are installed in a row, kept saves are put back without asking when the game has one set of them.
 
-Kept saves are listed in **Options › Uninstall game**, after the games, as **Saves of** *game*. Choose one to delete it.
+Kept saves are listed in **Options › Game maintenance › Uninstall game**, after the games, as **Saves of** *game*. Choose one to delete it.
 
 ## What runs and what doesn't
 

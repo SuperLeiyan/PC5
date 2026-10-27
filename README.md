@@ -29,7 +29,7 @@ No game is part of PC5, and PC5 downloads none: you install the games you own.
    start **PC5** from Home.
 2. Put each game's installed folder (the one with its `.exe`) at the top of an **exFAT** USB
    drive, or in a `Games` folder there.
-3. In PC5 press **Options** › **Install games from USB**, then choose the game and press
+3. In PC5 press **Options** › **Game maintenance** › **Install games from USB**, then choose the game and press
    **✕** to play. Hold the **touchpad** and **Options** for two seconds to leave a game.
 
 Each game has a menu (**△**) for its controller mode, frame generation, resolution, aspect

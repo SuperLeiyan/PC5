@@ -45,7 +45,7 @@ typedef enum Screen {
     S_PROGRAMS, S_INSTALL, S_STOP, S_UNINSTALL_LIST, S_UNINSTALL_CONFIRM, S_REMOVING, S_MESSAGE, S_LAUNCH,
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
-    S_PICTURE_TYPING
+    S_PICTURE_TYPING, S_COMPATIBILITY
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -53,7 +53,8 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "uninstall-list", "uninstall-confirm", "removing", "message", "launch",
                                             "update", "checking", "game-menu", "game-reading", "queue-read", "queue",
                                             "buttons", "keys", "report", "upgrade-ask", "upgrading", "game-update-ask",
-                                            "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing" };
+                                            "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
+                                            "compatibility" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;
@@ -73,20 +74,27 @@ typedef struct QueueGame {
     char id[PC5_ID], error[PC5_ERROR];
 } QueueGame;
 
-/* Settings: its rows, on five pages. */
+/* The wiki's game compatibility list, which Game maintenance shows as a QR code. */
+#define PC5_COMPATIBILITY "https://github.com/bornaradusin/PC5/wiki/Game-compatibility"
+
+/* Settings: its rows, on six pages. */
 typedef enum SettingRow {
-    SR_INSTALL, SR_UNINSTALL, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
+    SR_INSTALL, SR_UNINSTALL, SR_COMPATIBILITY, SR_MAINTENANCE, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
-enum { PAGE_ROWS = 7, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, SETTING_PAGES = 5 };
-static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources" };
+enum { PAGE_ROWS = 7, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, PAGE_MAINTENANCE = 5,
+       SETTING_PAGES = 6 };
+static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources",
+                                                        "Game maintenance" };
 /* Where each page's row is on the first page (Back goes there); System's rows move with its
  * startup sound (system_row). */
-enum { ROW_GAMES = 2, ROW_OVERLAY = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5 };
+enum { ROW_MAINTENANCE = 0, ROW_GAMES = 1, ROW_OVERLAY = 2, ROW_SYSTEM = 3, ROW_ABOUT = 4 };
+/* Game maintenance's rows. */
+enum { ROW_INSTALL = 0, ROW_UNINSTALL = 1, ROW_COMPATIBILITY = 2 };
 
 /* A page's rows: the triggers' strengths only while they are used, the startup sound's
  * volume only while there is one, Update now only while there is a newer PC5 it can install
@@ -119,9 +127,12 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_CHECK_ON_OPEN;
         rows[n++] = SR_CHECK_NOW;
         if (offer_update) rows[n++] = SR_UPDATE_NOW;
-    } else {
+    } else if (page == PAGE_MAINTENANCE) {
         rows[n++] = SR_INSTALL;
         rows[n++] = SR_UNINSTALL;
+        rows[n++] = SR_COMPATIBILITY;
+    } else {
+        rows[n++] = SR_MAINTENANCE;
         rows[n++] = SR_GAMES;
         rows[n++] = SR_OVERLAY;
         rows[n++] = SR_SYSTEM;
@@ -304,6 +315,7 @@ struct Pc5Ui {
     char report_game[PC5_NAME], report_url[PC5_REPORT_URL];
     Pc5Qr report_qr;
     Pc5Qr coffee_qr;                  /* About PC5: Buy Me a Coffee's page, made once */
+    Pc5Qr compatibility_qr;           /* Game maintenance › Game compatibility list: the wiki's page, made once */
     char launch_id[PC5_ID];
     char start[PC5_ID];               /* a home screen tile's game, until it is started */
     int removing_tiles;               /* the game being uninstalled had a tile, deleted with it */
@@ -1769,6 +1781,15 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         *label = "Uninstall game";
         pc5_copy(about, about_size, "Deletes a game, or keeps its saves; deletes kept saves");
         break;
+    case SR_COMPATIBILITY:
+        *label = "Game compatibility list";
+        pc5_copy(about, about_size, "Games players have tried, on your phone with a QR code");
+        break;
+    case SR_MAINTENANCE:
+        *label = "Game maintenance";
+        pc5_copy(about, about_size, "Installing, uninstalling, the compatibility list");
+        pc5_copy(value, value_size, "\xe2\x80\xba");
+        break;
     case SR_GAMES:
         *label = "In games";
         pc5_copy(about, about_size, "Vibration, light bar and triggers");
@@ -2370,7 +2391,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         } else if (k & PC5_KEY_OPTIONS) {
             go(ui, S_LIBRARY);
         } else if (k & back) {
-            if (ui->page == PAGE_GAMES) settings_open(ui, 0, ROW_GAMES);
+            if (ui->page == PAGE_MAINTENANCE) settings_open(ui, 0, ROW_MAINTENANCE);
+            else if (ui->page == PAGE_GAMES) settings_open(ui, 0, ROW_GAMES);
             else if (ui->page == PAGE_OVERLAY) settings_open(ui, 0, ROW_OVERLAY);
             else if (ui->page == PAGE_SYSTEM) settings_open(ui, 0, ROW_SYSTEM);
             else if (ui->page == PAGE_PICTURES) settings_open(ui, PAGE_SYSTEM, system_row(ui, SR_PICTURES));
@@ -2383,6 +2405,12 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 ui->list_top = 0;
                 saves_load(ui);
                 go(ui, S_UNINSTALL_LIST);
+                break;
+            case SR_MAINTENANCE: settings_open(ui, PAGE_MAINTENANCE, 0); break;
+            case SR_COMPATIBILITY:
+                if (!ui->compatibility_qr.size) pc5_qr_make(PC5_COMPATIBILITY, &ui->compatibility_qr);
+                say(ui, "PC5 compatibility list qr=%d", ui->compatibility_qr.size);
+                go(ui, S_COMPATIBILITY);
                 break;
             case SR_GAMES: settings_open(ui, PAGE_GAMES, 0); break;
             case SR_OVERLAY: settings_open(ui, PAGE_OVERLAY, 0); break;
@@ -2404,6 +2432,9 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_ABOUT:
         if (k & (back | accept)) settings_open(ui, 0, ROW_ABOUT);
+        break;
+    case S_COMPATIBILITY:
+        if (k & (back | accept)) settings_open(ui, PAGE_MAINTENANCE, ROW_COMPATIBILITY);
         break;
     case S_SCAN:
         if (!ui->drawn) break;
@@ -2429,7 +2460,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             }
             break;
         }
-        if (k & back) settings_open(ui, 0, 0);
+        if (k & back) settings_open(ui, PAGE_MAINTENANCE, ROW_INSTALL);
         else if (k & PC5_KEY_TRIANGLE) go(ui, S_SCAN);
         else if ((k & PC5_KEY_SQUARE) && ui->source_count) {
             ui->ticked[ui->menu] = !ui->ticked[ui->menu];
@@ -2860,7 +2891,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_UNINSTALL_LIST:
         /* The games, then the saves kept when games were uninstalled. */
         if (list_move(&ui->menu, ui->library.count + ui->saves_count, k)) ui->dirty = 1;
-        if (k & back) settings_open(ui, 0, 1);
+        if (k & back) settings_open(ui, PAGE_MAINTENANCE, ROW_UNINSTALL);
         else if ((k & accept) && ui->menu < ui->library.count) {
             ui->button = 0;   /* Cancel first */
             ui->uninstall_back = S_UNINSTALL_LIST;
@@ -2951,7 +2982,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 if (failed) snprintf(body, sizeof(body), "%s PC5 finishes it the next time it starts.", ui->remove.error);
                 else if (ui->removing_kind == 1)
                     snprintf(body, sizeof(body), "Its saves and settings are kept: installing it again puts them back. "
-                             "Settings \xe2\x80\xba Uninstall game deletes them.%s", tile);
+                             "Settings \xe2\x80\xba Game maintenance \xe2\x80\xba Uninstall game deletes them.%s", tile);
                 else snprintf(body, sizeof(body), "The game, its saves and its settings were deleted.%s", tile);
             }
             if (failed && ui->removing_kind == 2) pc5_copy(body, sizeof(body), ui->remove.error);
@@ -3428,7 +3459,8 @@ static void library_screen(Pc5Ui *ui, Pc5Canvas *c)
     if (ui->clock[0]) pc5_text(c, &ui->fonts, PC5_FACE_LABEL, W - MARGIN, 88, C_TEXT, ui->clock, 0, 2);
     if (!ui->library.count) {
         pc5_text(c, &ui->fonts, PC5_FACE_TITLE, 960, 470, C_TEXT, "No games yet", 0, 1);
-        pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 540, C_DIM, "Press OPTIONS and choose Install games from USB.", 0, 1);
+        pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 540, C_DIM,
+                 "Press OPTIONS and choose Game maintenance \xe2\x80\xba Install games from USB.", 0, 1);
         Hint list[] = { { G_OPTIONS, "Settings" } };
         hints(ui, c, MARGIN, 1012, list, 1);
         return;
@@ -4153,6 +4185,29 @@ static void report_screen(Pc5Ui *ui, Pc5Canvas *c)
     hints(ui, c, tx, (int)(y + h - 48), list, 1);
 }
 
+/* Game maintenance › Game compatibility list: the wiki's list as a QR code, and what it holds. */
+static void compatibility_screen(Pc5Ui *ui, Pc5Canvas *c)
+{
+    float w = 1500, h = 700, x = (W - w) / 2, y = (H - h) / 2;
+    dim(c, 170);
+    panel(c, x, y, w, h);
+    pc5_text(c, &ui->fonts, PC5_FACE_HEAD, (int)x + 80, (int)y + 100, C_TEXT, "Game compatibility list", 0, 0);
+    int box = 560, qx = (int)(x + w) - box - 70, qy = (int)y + 70;
+    qr_draw(c, &ui->compatibility_qr, qx, qy, box);
+    int tx = (int)x + 80, tw = qx - tx - 60, at = (int)y + 190;
+    at += 42 * pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, tx, at, tw, 4, 42, C_DIM,
+                             ui->compatibility_qr.size
+                                 ? "Scan the code with your phone: PC5's wiki opens on the list of games players have "
+                                   "tried, how each ran and the settings that helped."
+                                 : "On your phone or computer, open github.com/bornaradusin/PC5/wiki/Game-compatibility: "
+                                   "the games players have tried, how each ran and the settings that helped.", 0) + 24;
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, tx, at, tw, 4, 42, C_DIM,
+                  "Got a game running? Add a game, at the top of the list's page: the form takes a minute. You need a GitHub "
+                  "account.", 0);
+    Hint list[] = { { back_glyph(ui), "Back" } };
+    hints(ui, c, tx, (int)(y + h - 48), list, 1);
+}
+
 /* PC5 updating itself: its steps, the download's and the unpacking's progress, then done. */
 static void upgrade_screen(Pc5Ui *ui, Pc5Canvas *c)
 {
@@ -4371,6 +4426,7 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         break;
     }
     case S_ABOUT: about_screen(ui, c); break;
+    case S_COMPATIBILITY: compatibility_screen(ui, c); break;
     case S_SCAN: busy_dialog(ui, c, "Looking at the USB drives", NULL, 0); break;
     case S_SOURCES: {
         if (ui->update_for) {
