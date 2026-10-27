@@ -328,6 +328,7 @@ step_sources() {
 }
 
 step_title() {
+    stage "its sources and the payload SDK"
     src_pw; src_lapy; src_mbedtls; need_sdk
     local foundation=$PW/.deps/ps5-native-app-boilerplate sources
     make -C "$foundation" libc
@@ -510,6 +511,7 @@ step_zink() {
 
 step_package() {
     src_pw
+    stage "putting the pieces together"
     need title; need hostwine; need wineps5; need zink
     cd "$PW"
     rm -rf "$B/package"
@@ -525,6 +527,7 @@ step_app() {
     need hostwine; need dxvk; need vkd3d
     local app=$release/$TITLE
     [[ -d $B/package/PPSA99995 ]] || { echo "build.sh: package is not built: run tools/build.sh package first" >&2; return 1; }
+    stage "copying the package"
     rm -rf "$app" "$release/$TITLE.zip"
     cp -a "$B/package/PPSA99995" "$app"
     # Built from a local FreeType copy (PROSPERO_FREETYPE_TARBALL): SOURCES.txt names it, as PARTS.txt does.
@@ -541,6 +544,7 @@ if count != 1:
 open(path, "w").write(text)
 EOF_SOURCES
     fi
+    stage "art, the tiles' program, fonts and sounds"
     cp "$here/sce_sys/param.json" "$here/art/icon0.png" "$here/art/pic0.png" "$app/sce_sys/"
     mkdir -p "$app/pc5"
     # The home screen tiles' program, which PC5 copies into each tile (pc5_home.c), and its licence.
@@ -581,6 +585,7 @@ EOF_SOURCES
     # XAudio2 and XACT come from the PS5 Wine build (its FAudio fix) with their debug data in,
     # five times their size: stripped as Wine's own install strips its modules. Wine's
     # builtin mark (the DOS stub's "Wine builtin DLL") stays.
+    stage "stripping XAudio2 and XACT"
     local dll format
     while IFS= read -r -d '' dll; do
         format=$(x86_64-w64-mingw32-objdump -f "$dll" | sed -n 's/.*file format //p')
@@ -592,6 +597,7 @@ EOF_SOURCES
         [[ $(head -c 80 "$dll" | tail -c 16) == "Wine builtin DLL" ]] ||
             { echo "build.sh: $dll lost Wine's builtin mark" >&2; return 1; }
     done < <(find "$app" -type f \( -name 'xaudio2_*.dll' -o -name 'xactengine*.dll' \) -print0)
+    stage "zipping the app"
     python3 "$here/tools/make-app.py" "$app" "$release/$TITLE.zip" --repo "$here" --pw "$PW"
     # Wine Mono's source (300 MB) is released beside the app, as it came: a file of its own.
     ln -f "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$release/" 2>/dev/null ||

@@ -170,8 +170,14 @@ PC5 is not made by or connected to Sony, Valve, GOG, GitHub or the Wikimedia Fou
 
     files = sorted(p for p in app.rglob("*") if p.is_file())
     part = args.zip.with_suffix(".zip.part")
+    # A "-- " line each tenth of the way, for tools/build.sh's line a minute.
+    total, done, shown = sum(p.stat().st_size for p in files), 0, -1
     with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in files:
+            if done * 10 // max(total, 1) > shown:
+                shown = done * 10 // max(total, 1)
+                print(f"-- zipping the app: {done >> 20} of {total >> 20} MB ({done * 100 // max(total, 1)}%)", flush=True)
+            done += path.stat().st_size
             info = zipfile.ZipInfo(f"{app.name}/{path.relative_to(app).as_posix()}", STAMP)
             info.create_system = 3
             info.external_attr = (0o100000 | (path.stat().st_mode & 0o777)) << 16

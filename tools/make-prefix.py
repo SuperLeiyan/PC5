@@ -202,6 +202,8 @@ def main() -> int:
     library = work / "library"
     os.makedirs(library)
     env = dict(os.environ, WINEDEBUG="-all", XDG_CACHE_HOME=str(work.parent / ".cache"))
+    # "-- " lines name the stage for tools/build.sh's line a minute.
+    print("-- the Windows template: Wine makes an empty Windows", flush=True)
     subprocess.run([sys.executable, str(args.pw / "tools" / "pw_install.py"), str(RECIPE),
                     "--library", str(library), "--wine", str(args.wine)], check=True, env=env)
     made = library / "prefixes" / SLUG
@@ -212,8 +214,11 @@ def main() -> int:
         if not (wow / dll).is_file() or not (system32 / dll).is_file():
             sys.exit(f"make-prefix: DXVK's {dll} is not in both system32 and syswow64")
 
+    print("-- the Windows template: video and sound", flush=True)
     media = media_fragment(args.wine, made, work, env)
+    print("-- the Windows template: Wine Mono (.NET)", flush=True)
     dotnet = install_mono(args.wine, args.mono, made, env)
+    print("-- the Windows template: font names", flush=True)
     fonts = name_fonts(args.wine, made, work, env)
 
     files, dirs, links = pw_prefix.local_tree(made)
@@ -251,6 +256,7 @@ def main() -> int:
             dirs.add(path)
     dirs.add("drive_c/Games")
 
+    print(f"-- the Windows template: writing its {len(files)} files", flush=True)
     target = args.out / "pc5" / "prefix"
     if target.exists():
         shutil.rmtree(target)
