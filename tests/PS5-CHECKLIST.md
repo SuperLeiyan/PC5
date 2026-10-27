@@ -264,6 +264,7 @@ With ShadowMountPlus and elfldr running.
 | 121 | A game that looks up kernel32's UTRegister (Brian Lara International Cricket 2007), without a krnl386 override | it doesn't close at once; no `i386_set_ldt: Invalid argument` | `process_attach failed for forward 'krnl386.exe16.UTRegister'` |
 | 122 | △ › Graphics › CPU sharing On on a game; start it | it plays; for a game that stopped for seconds at a time (Ori and the Blind Forest in Xbox mode), it no longer stops | `PW_WINE64 runtime thread_scheduling=1` |
 | 123 | Open PC5 | the log names the firmware the console's Settings › System › System Software shows | `PC5 system firmware=13.60 …` (with `reported=…` when libkernel answers another): send the line |
+| 124 | A 4:3 game that draws its own pointer from DirectInput, Aspect ratio Keep (Sacred Underworld at 1024x768), Keyboard and mouse with the pointer on; push the pointer right and down | the game's pointer reaches the right and bottom edges | |
 
 A non-zero `rc=` on the light bar or triggers lines means the console refused that call; send
 that log. On the startup sound line, a negative `port=` means the console refused the

@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 13:00:00 +0000
+Subject: [PATCH] PC5: the pointer's motion at a shown edge reaches raw input
+ (Wine patch 0930)
+
+In a display mode smaller than the screen, the stick's pointer stopped
+at the shown edge and no motion was sent past it. A game that moves a
+pointer of its own by DirectInput's motion stopped short of its far
+side (Sacred Underworld at 1024x768, a little before the right edge).
+The pointer still stops at the edge, and its motion still reaches raw
+input, as on Windows.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...eport-pointer-motion-at-a-shown-edge.patch | 70 +++++++++++++++++++
+ 3 files changed, 72 insertions(+)
+ create mode 100644 wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 61572ab..697d9ef 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -575,6 +575,7 @@ wine/patches/0926-xinput-windows-gaming-input-up-to-four-ps5-title-controllers.p
+ wine/patches/0927-dinput-the-ps5-title-s-controllers-as-directinput-joysticks.patch
+ wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
+ wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
++wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 01b0dbe..07ca6a5 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -133,6 +133,7 @@ before evaluating a candidate built from that cache.
+ | 0903 | `ntdll`: a signal frame keeps the FS base it was taken with when the thread resumes where it was; the host's is set only where the handler sends a context to Wine's 64-bit code (the exception dispatcher, a different 64-bit context). The native WoW64 CPU sets the guest FS just before it switches to 32-bit code, and a signal in that window used to send the thread into its 32-bit code with the host FS (GTA San Andreas' DXVK workers crashing at startup in `RtlEnterCriticalSection`) |
+ | 0928 | `ntdll`: a page fault in 32-bit code on the native WoW64 CPU whose `%fs:` operand missed the 32-bit TEB gets the TEB's base back in the signal frame and runs again. sysarch(AMD64_SET_FSBASE) sets the base the CPU uses but not the GDT descriptor of the kernel's user FS selector, which the kernel writes from the thread's saved base when it switches the thread in, often while it is on its 64-bit side with the host's FS; a program that loads FS again got the low half of the host thread pointer (Fallout 1 and 2 in `GetStdHandle`, reading `%fs:0x18` at FF81C098). Only an access violation `virtual_handle_fault` left alone, not an execute fault, and not one on the stack; the first repair, and every hundredfold after, is logged; 64 repairs in one state, each within a millisecond of the last, give the fault to the program |
+ | 0929 | `ntdll`, `krnl386`: `NtSetLdtEntries` returns `STATUS_NOT_IMPLEMENTED`, as for a 64-bit process: the console refuses I386_SET_LDT (EINVAL), and `ldt_set_entry` ended the process on that. krnl386.exe16 doesn't load without LDT entries, so a lookup of a forwarded 16-bit export (`kernel32.UTRegister`, Brian Lara International Cricket 2007) fails instead of ending the game |
++| 0930 | `win32u`: where a frame shows less than the screen (one window, or a display mode smaller than the desktop), the PS5 pointer still stops at the shown edge, but each motion goes to the server whole as raw input (`SEND_HWMSG_RAWINPUT` with a `struct raw_mouse`), as a mouse held against the screen's edge keeps reporting its motion on Windows. A game that moves a pointer of its own by `WM_INPUT` (DirectInput) stopped short of its far side once the system's pointer reached the edge first (Sacred Underworld at 1024x768) |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch b/wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+new file mode 100644
+index 0000000..88161e1
+--- /dev/null
++++ b/wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+@@ -0,0 +1,70 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Tue, 27 Oct 2026 13:00:00 +0000
++Subject: [PATCH] win32u: Report the PS5 pointer's motion at a shown edge as raw
++ input.
++
++Where a frame shows less than the screen (one window, or a display mode
++smaller than the desktop), the driver stops the pointer at what is shown
++and sent no motion at all past that edge. A game that moves a pointer of
++its own by the mouse's motion (DirectInput, which reads WM_INPUT) then
++stopped short of its far side once the system's pointer reached the
++shown edge first: Sacred Underworld at 1024x768, its pointer a little
++before the right edge.
++
++The pointer still stops at the shown edge, but each motion goes to the
++server whole as raw input (SEND_HWMSG_RAWINPUT), as a mouse held against
++the screen's edge keeps reporting its motion on Windows.
++---
++ dlls/win32u/ps5drv.c | 22 +++++++++++++++++++++-
++ 1 file changed, 21 insertions(+), 1 deletion(-)
++
++diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
++--- a/dlls/win32u/ps5drv.c
+++++ b/dlls/win32u/ps5drv.c
++@@ -467,6 +467,22 @@
++     NtUserSendHardwareInput( hwnd, 0, &input, 0 );
++ }
++ 
+++/* Pointer motion: dx, dy move the pointer, raw_dx, raw_dy are what raw input
+++ * (WM_INPUT, which DirectInput reads) reports, as a mouse held against the
+++ * screen's edge still reports its motion while its pointer stays. */
+++static void send_motion( HWND hwnd, INT dx, INT dy, INT raw_dx, INT raw_dy )
+++{
+++    INPUT input = {.type = INPUT_MOUSE};
+++    struct raw_mouse raw = {.count = 1};
+++
+++    input.mi.dx = dx;
+++    input.mi.dy = dy;
+++    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE;
+++    raw.data[0].x = raw_dx;
+++    raw.data[0].y = raw_dy;
+++    NtUserSendHardwareInput( hwnd, SEND_HWMSG_RAWINPUT, &input, (LPARAM)&raw );
+++}
+++
++ /* The pointer's position as the server keeps it, in screen coordinates. */
++ static BOOL server_cursor_pos( POINT *pos )
++ {
++@@ -501,6 +517,7 @@
++ static void move_cursor( HWND hwnd, INT dx, INT dy )
++ {
++     static BOOL placed;
+++    INT raw_dx = dx, raw_dy = dy;
++     RECT shown;
++     POINT pos;
++ 
++@@ -518,7 +535,10 @@
++     if (!server_cursor_pos( &pos )) return;
++     dx = shown_motion( pos.x, dx, shown.left, shown.right, screen_width );
++     dy = shown_motion( pos.y, dy, shown.top, shown.bottom, screen_height );
++-    if (dx || dy) send_mouse( hwnd, MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, dx, dy );
+++    /* At a shown edge the pointer stops but its motion still reaches raw input:
+++     * a game that moves a pointer of its own by that motion, in a display mode
+++     * smaller than the screen, reaches its far side (Sacred Underworld in 4:3). */
+++    if (raw_dx || raw_dy) send_motion( hwnd, dx, dy, raw_dx, raw_dy );
++     if (!server_cursor_pos( &pos )) return;
++     pthread_mutex_lock( &screen_lock );
++     if (cursor.x != pos.x || cursor.y != pos.y)
++-- 
++2.43.0
++
+-- 
+2.43.0
+
