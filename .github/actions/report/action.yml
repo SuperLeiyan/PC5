@@ -1,0 +1,25 @@
+# What a failed job leaves: the end of the newest log of tools/build.sh as an annotation, which
+# the run's page and the API show, and every log as an artifact.
+name: Report a failure
+description: The end of the newest build log as an annotation, and the logs as an artifact
+inputs:
+  name:
+    description: The job, for the artifact's name
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Why it failed
+      shell: bash
+      run: |
+        log=$(ls -t "$PC5_BUILD_DIR"/logs/*.log 2>/dev/null | head -1)
+        [ -n "$log" ] || exit 0
+        tail -40 "$log" | cut -c1-300 > "$RUNNER_TEMP/tail.txt"
+        body=$(sed -e 's/%/%25/g' "$RUNNER_TEMP/tail.txt" | sed -e ':a;N;$!ba;s/\n/%0A/g')
+        echo "::error title=${{ inputs.name }}: $(basename "$log")::$body"
+    - name: The logs
+      uses: actions/upload-artifact@v6
+      with:
+        name: logs-${{ inputs.name }}
+        path: ${{ env.PC5_BUILD_DIR }}/logs/
+        retention-days: 14

@@ -81,9 +81,16 @@ tools/build.sh
 The app is `release/PPSA11018/` and `release/PPSA11018.zip`, with the source of everything in
 it as `release/PPSA11018-sources.tar.xz` and Wine Mono's own source archive beside it
 (`release/wine-mono-11.3.0-src.tar.xz`); `PC5_RELEASE` names another folder for them.
-Everything else stays in `.build/`. Each step prints one line and writes
-`.build/logs/<step>.log`; `tools/build.sh <step>` runs one again. Elsewhere the script runs
-itself in Docker (`tools/Dockerfile`). A first build takes a few hours, most of it Wine.
+Everything else stays in `.build/`. The build is in pieces (the script's first lines name
+them): each fetches what it is built from, prints a line a minute with what it is doing and
+writes `.build/logs/<piece>.log`, and `tools/build.sh <piece>` runs one on its own. A piece
+whose key (`tools/build.sh key <piece>`, a fingerprint of all it is built from) hasn't changed
+since it was built is skipped. Elsewhere the script runs itself in Docker (`tools/Dockerfile`).
+A first build takes a few hours, most of it Wine.
+
+GitHub's build (Actions › Build › Run workflow) runs the same pieces, each on a machine of its
+own in the build image, keeps each under its key and builds only those whose key changed, then
+makes a draft release to check and publish.
 
 `tests/test.sh` runs the host checks (after `tools/build.sh sources`), `tests/test.sh --shots`
 also draws every screen, and `tests/PS5-CHECKLIST.md` is what to try on a console.

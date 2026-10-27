@@ -1,6 +1,15 @@
-# Builds PC5 from source on GitHub's machines (tools/build.sh, every step) and, when asked,
-# makes a draft release with its three archives for the maintainer to check and publish.
+# Builds PC5 from source on GitHub's machines (tools/build.sh) and, when asked, makes a draft
+# release with its three archives for the maintainer to check and publish.
 # Run it from the Actions tab: Build › Run workflow.
+#
+# The build is in pieces (tools/build.sh names them). Each is kept under its key, a
+# fingerprint of everything it is built from, and built again only when its key changes:
+# Keys looks them up, and only the pieces it doesn't find are built, side by side, each on a
+# machine of its own. They run in the build image (tools/Dockerfile on GitHub's container
+# registry, made again only when it or tools/packages.txt changes), so no job installs
+# packages. Wine's pieces also keep their trees and objects, and build again only what a
+# change to Wine's patches reaches. Release puts the title and the pieces together into the
+# app while Sources archives the source, and Publish makes the draft release.
 name: Build
 
 on:
@@ -10,203 +19,392 @@ on:
         description: "Make a draft release v<PC5_VERSION> with the archives (otherwise they are kept as the run's artifacts)"
         type: boolean
         default: true
+      compare_with:
+        description: "Compare the app file by file with an earlier one: a release's tag (v1.8.3) or a run's id"
+        type: string
+        default: ""
 
 permissions:
-  contents: write
+  contents: write  # the draft release
+  packages: write  # the build image
+  actions: write   # an earlier run's archives, and the work kept by earlier runs
 
 concurrency:
-  group: build
+  group: pc5-build
   cancel-in-progress: false
 
+env:
+  PC5_BUILD_DIR: /mnt/pc5/build
+  PC5_RELEASE: /mnt/pc5/release
+
 jobs:
-  build:
+  keys:
+    name: Keys
     runs-on: ubuntu-24.04
-    timeout-minutes: 355
-    env:
-      PC5_RELEASE: /mnt/pc5/release
-      PC5_ZINK_JOBS: "2"
+    outputs:
+      version: ${{ steps.keys.outputs.version }}
+      image: ${{ steps.keys.outputs.image }}
+      image_made: ${{ steps.image.outputs.made }}
+      radv: ${{ steps.keys.outputs.radv }}
+      radv_paths: ${{ steps.keys.outputs.radv_paths }}
+      radv_hit: ${{ steps.radv.outputs.cache-hit }}
+      tools: ${{ steps.keys.outputs.tools }}
+      tools_work: ${{ steps.keys.outputs.tools_work }}
+      hostwine: ${{ steps.keys.outputs.hostwine }}
+      hostwine_paths: ${{ steps.keys.outputs.hostwine_paths }}
+      hostwine_work: ${{ steps.keys.outputs.hostwine_work }}
+      hostwine_hit: ${{ steps.hostwine.outputs.cache-hit }}
+      wineps5: ${{ steps.keys.outputs.wineps5 }}
+      wineps5_paths: ${{ steps.keys.outputs.wineps5_paths }}
+      wineps5_work: ${{ steps.keys.outputs.wineps5_work }}
+      wineps5_hit: ${{ steps.wineps5.outputs.cache-hit }}
+      dxvk: ${{ steps.keys.outputs.dxvk }}
+      dxvk_paths: ${{ steps.keys.outputs.dxvk_paths }}
+      dxvk_hit: ${{ steps.dxvk.outputs.cache-hit }}
+      vkd3d: ${{ steps.keys.outputs.vkd3d }}
+      vkd3d_paths: ${{ steps.keys.outputs.vkd3d_paths }}
+      vkd3d_hit: ${{ steps.vkd3d.outputs.cache-hit }}
+      zink: ${{ steps.keys.outputs.zink }}
+      zink_paths: ${{ steps.keys.outputs.zink_paths }}
+      zink_hit: ${{ steps.zink.outputs.cache-hit }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Room to build
-        # The build needs about 30 GB and Zink's link about 8 GB of memory: the machine's
-        # second disk (/mnt) holds the build and a swap file, and unused tools make room.
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo mkdir -p /mnt/pc5/build /mnt/pc5/release
-          sudo chown -R "$USER" /mnt/pc5
-          ln -s /mnt/pc5/build .build
-          sudo fallocate -l 8G /mnt/pc5/swap && sudo chmod 600 /mnt/pc5/swap
-          sudo mkswap /mnt/pc5/swap >/dev/null && sudo swapon /mnt/pc5/swap
-          df -h / /mnt; free -g
-
-      - name: Packages
-        timeout-minutes: 30
-        # Only Ubuntu's own sources (the machine's others, Microsoft's and the like, can stall a
-        # download), short timeouts with retries, and without man-db's index, which is rebuilt
-        # after every package.
-        run: |
-          mkdir -p .build/logs
-          {
-            sudo rm -f /var/lib/man-db/auto-update
-            sudo find /etc/apt/sources.list.d -type f ! -name 'ubuntu.sources' -delete
-            apt="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
-            sudo apt-get update -q $apt
-            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends $apt \
-              -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 $(cat tools/packages.txt)
-          } 2>&1 | tee .build/logs/packages.log
-          exit "${PIPESTATUS[0]}"
-
-      - name: Sources
-        run: bash tools/build.sh sources
-
-      - name: Cache keys
+      - name: The keys
         id: keys
-        # Each slow part is kept between runs under a fingerprint of what it is built from,
-        # and built again only when that changes. Wine (both), RADV and the 32-bit CPU: the
-        # build's pins and packages and patches/prospero-win and patches/radv (PC5's own code
-        # in title/ goes into the eboot only). Zink: Mesa and llvm-mingw as prospero-win pins
-        # them. DXVK: its commit with patches/dxvk. VKD3D-Proton: its commit with patches/vkd3d-proton.
+        # prospero-win is fetched and patched (seconds): the pieces' keys read it.
         run: |
-          pw=.build/prospero-win
-          echo "wine=wine-$(cat tools/build.sh tools/packages.txt patches/prospero-win/*.patch patches/radv/*.patch | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-          echo "zink=zink-$(cat "$pw/tools/build_mesa_zink.sh" "$pw/tools/mesa_zink_manifest.py" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-          echo "dxvk=dxvk-$(git -C .build/dxvk-source rev-parse HEAD)-$(sed -n 's/^DXVK_NAME=//p' tools/build.sh)" >> "$GITHUB_OUTPUT"
-          echo "vkd3d=vkd3d-$(git -C .build/vkd3d-proton-source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          sudo mkdir -p /mnt/pc5 && sudo chown "$USER" /mnt/pc5
+          tools/build.sh ci >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${{ github.repository_owner }}/pc5-build:$(cat tools/Dockerfile tools/packages.txt | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
-      # What packaging and the sources archive take from the Wine, RADV and CPU steps.
-      - name: Restore Wine
-        id: wine
-        uses: actions/cache/restore@v4
+      - name: The build image
+        id: image
+        env:
+          IMAGE: ${{ steps.keys.outputs.image }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then made=true; else made=false; fi
+          echo "made=$made" >> "$GITHUB_OUTPUT"
+
+      # Which pieces are kept (looked up, not fetched).
+      - { name: RADV, id: radv, uses: actions/cache/restore@v5,
+          with: { path: "${{ steps.keys.outputs.radv_paths }}", key: "${{ steps.keys.outputs.radv }}", lookup-only: true } }
+      - { name: "Wine's Windows side", id: hostwine, uses: actions/cache/restore@v5,
+          with: { path: "${{ steps.keys.outputs.hostwine_paths }}", key: "${{ steps.keys.outputs.hostwine }}", lookup-only: true } }
+      - { name: Wine for the PS5, id: wineps5, uses: actions/cache/restore@v5,
+          with: { path: "${{ steps.keys.outputs.wineps5_paths }}", key: "${{ steps.keys.outputs.wineps5 }}", lookup-only: true } }
+      - { name: DXVK, id: dxvk, uses: actions/cache/restore@v5,
+          with: { path: "${{ steps.keys.outputs.dxvk_paths }}", key: "${{ steps.keys.outputs.dxvk }}", lookup-only: true } }
+      - { name: VKD3D-Proton, id: vkd3d, uses: actions/cache/restore@v5,
+          with: { path: "${{ steps.keys.outputs.vkd3d_paths }}", key: "${{ steps.keys.outputs.vkd3d }}", lookup-only: true } }
+      - { name: Zink, id: zink, uses: actions/cache/restore@v5,
+          with: { path: "${{ steps.keys.outputs.zink_paths }}", key: "${{ steps.keys.outputs.zink }}", lookup-only: true } }
+
+      - name: What is built
+        run: |
+          {
+            echo "### PC5 ${{ steps.keys.outputs.version }}: the pieces"
+            echo '| Piece | Key | |'
+            echo '|---|---|---|'
+            for piece in radv hostwine wineps5 dxvk vkd3d zink; do
+              case $piece in
+                radv) key='${{ steps.keys.outputs.radv }}' hit='${{ steps.radv.outputs.cache-hit }}' ;;
+                hostwine) key='${{ steps.keys.outputs.hostwine }}' hit='${{ steps.hostwine.outputs.cache-hit }}' ;;
+                wineps5) key='${{ steps.keys.outputs.wineps5 }}' hit='${{ steps.wineps5.outputs.cache-hit }}' ;;
+                dxvk) key='${{ steps.keys.outputs.dxvk }}' hit='${{ steps.dxvk.outputs.cache-hit }}' ;;
+                vkd3d) key='${{ steps.keys.outputs.vkd3d }}' hit='${{ steps.vkd3d.outputs.cache-hit }}' ;;
+                zink) key='${{ steps.keys.outputs.zink }}' hit='${{ steps.zink.outputs.cache-hit }}' ;;
+              esac
+              [ "$hit" = true ] && what=kept || what=built
+              echo "| $piece | \`$key\` | $what |"
+            done
+            [ '${{ steps.image.outputs.made }}' = true ] && echo "Build image: kept." || echo "Build image: made."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Build image
+    needs: keys
+    if: needs.keys.outputs.image_made != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Make it and keep it
+        env:
+          IMAGE: ${{ needs.keys.outputs.image }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build -t "$IMAGE" tools
+          docker push "$IMAGE"
+
+  radv:
+    name: RADV
+    needs: [keys, image]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.image.result != 'failure' && needs.keys.outputs.radv_hit != 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
+    steps:
+      - uses: actions/checkout@v5
+      - run: tools/build.sh radv
+      - uses: actions/cache/save@v5
+        with: { path: "${{ needs.keys.outputs.radv_paths }}", key: "${{ needs.keys.outputs.radv }}" }
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: radv }
+
+  hostwine:
+    name: Wine's Windows side
+    needs: [keys, image]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.image.result != 'failure' && needs.keys.outputs.hostwine_hit != 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
+    steps:
+      - uses: actions/checkout@v5
+      - id: toolchain
+        run: echo "id=$(tools/build.sh toolchain)" >> "$GITHUB_OUTPUT"
+      # Its last tree and objects, made with the same compilers.
+      - name: Its last build
+        uses: actions/cache/restore@v5
         with:
-          path: |
-            /mnt/pc5/build/prospero-win/.deps/wine-host/install
-            /mnt/pc5/build/prospero-win/.deps/wine-host/build/dlls/wowprospero
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/prx
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/pe
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/report.json
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/source
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/freetype/src
-            /mnt/pc5/build/prospero-win/.deps/wow64native
-            /mnt/pc5/build/PS5_Vulkan/.deps/work/radv-src/subprojects/zlib-*
-          key: ${{ steps.keys.outputs.wine }}
-
-      - name: Restore Zink
-        id: zink
-        uses: actions/cache/restore@v4
+          path: ${{ needs.keys.outputs.hostwine_work }}
+          key: hostwine-work-${{ steps.toolchain.outputs.id }}-${{ needs.keys.outputs.hostwine }}
+          restore-keys: hostwine-work-${{ steps.toolchain.outputs.id }}-
+      - run: tools/build.sh hostwine
+      - uses: actions/cache/save@v5
+        with: { path: "${{ needs.keys.outputs.hostwine_paths }}", key: "${{ needs.keys.outputs.hostwine }}" }
+      - name: Keep this build
+        uses: actions/cache/save@v5
+        continue-on-error: true
         with:
-          path: /mnt/pc5/build/mesa-zink/artifacts
-          key: ${{ steps.keys.outputs.zink }}
+          path: ${{ needs.keys.outputs.hostwine_work }}
+          key: hostwine-work-${{ steps.toolchain.outputs.id }}-${{ needs.keys.outputs.hostwine }}
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: hostwine }
 
-      - name: Restore DXVK
-        id: dxvk
-        uses: actions/cache/restore@v4
-        with:
-          path: /mnt/pc5/build/dxvk
-          key: ${{ steps.keys.outputs.dxvk }}
-
-      - name: Restore VKD3D-Proton
-        id: vkd3d
-        uses: actions/cache/restore@v4
-        with:
-          path: /mnt/pc5/build/vkd3d
-          key: ${{ steps.keys.outputs.vkd3d }}
-
-      - name: Title
-        run: bash tools/build.sh title
-
+  wineps5:
+    name: Wine for the PS5
+    needs: [keys, image, radv]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.image.result != 'failure' && needs.radv.result != 'failure' && needs.keys.outputs.wineps5_hit != 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
+    steps:
+      - uses: actions/checkout@v5
+      - id: toolchain
+        run: echo "id=$(tools/build.sh toolchain)" >> "$GITHUB_OUTPUT"
       - name: RADV
-        if: steps.wine.outputs.cache-hit != 'true'
-        run: bash tools/build.sh radv
-
-      - name: Wine for this computer
-        if: steps.wine.outputs.cache-hit != 'true'
-        run: bash tools/build.sh hostwine
-
-      - name: Wine for the PS5
-        if: steps.wine.outputs.cache-hit != 'true'
-        run: bash tools/build.sh wineps5
-
-      - name: 32-bit games' CPU
-        if: steps.wine.outputs.cache-hit != 'true'
-        run: bash tools/build.sh cpu
-
-      - name: Keep Wine
-        if: steps.wine.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/restore@v5
+        with: { path: "${{ needs.keys.outputs.radv_paths }}", key: "${{ needs.keys.outputs.radv }}", fail-on-cache-miss: true }
+      # Wine's tools and the PS5 Wine on their last trees and objects, made with the same compilers.
+      - name: The tools' last build
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ needs.keys.outputs.tools_work }}
+          key: tools-work-${{ steps.toolchain.outputs.id }}-${{ needs.keys.outputs.tools }}
+          restore-keys: tools-work-${{ steps.toolchain.outputs.id }}-
+      - name: Its last build
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ needs.keys.outputs.wineps5_work }}
+          key: wineps5-work-${{ steps.toolchain.outputs.id }}-${{ needs.keys.outputs.wineps5 }}
+          restore-keys: wineps5-work-${{ steps.toolchain.outputs.id }}-
+      - run: tools/build.sh tools
+      - run: tools/build.sh wineps5
+      - uses: actions/cache/save@v5
+        with: { path: "${{ needs.keys.outputs.wineps5_paths }}", key: "${{ needs.keys.outputs.wineps5 }}" }
+      - name: Keep the tools' build
+        uses: actions/cache/save@v5
         continue-on-error: true
         with:
+          path: ${{ needs.keys.outputs.tools_work }}
+          key: tools-work-${{ steps.toolchain.outputs.id }}-${{ needs.keys.outputs.tools }}
+      - name: Keep this build
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: ${{ needs.keys.outputs.wineps5_work }}
+          key: wineps5-work-${{ steps.toolchain.outputs.id }}-${{ needs.keys.outputs.wineps5 }}
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: wineps5 }
+
+  dxvk:
+    name: DXVK
+    needs: [keys, image]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.image.result != 'failure' && needs.keys.outputs.dxvk_hit != 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
+    steps:
+      - uses: actions/checkout@v5
+      - run: tools/build.sh dxvk
+      - uses: actions/cache/save@v5
+        with: { path: "${{ needs.keys.outputs.dxvk_paths }}", key: "${{ needs.keys.outputs.dxvk }}" }
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: dxvk }
+
+  vkd3d:
+    name: VKD3D-Proton
+    needs: [keys, image]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.image.result != 'failure' && needs.keys.outputs.vkd3d_hit != 'true' }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
+    steps:
+      - uses: actions/checkout@v5
+      - run: tools/build.sh vkd3d
+      - uses: actions/cache/save@v5
+        with: { path: "${{ needs.keys.outputs.vkd3d_paths }}", key: "${{ needs.keys.outputs.vkd3d }}" }
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: vkd3d }
+
+  zink:
+    name: Zink
+    needs: keys
+    if: needs.keys.outputs.zink_hit != 'true'
+    # On the machine itself, not in the image: Zink's link wants about 8 GB of memory a job,
+    # more than the machine has without the swap file made here.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Memory and packages
+        run: |
+          sudo mkdir -p /mnt/pc5 && sudo chown "$USER" /mnt/pc5
+          sudo fallocate -l 8G /mnt/pc5/swap && sudo chmod 600 /mnt/pc5/swap
+          sudo mkswap /mnt/pc5/swap > /dev/null && sudo swapon /mnt/pc5/swap
+          sudo find /etc/apt/sources.list.d -type f ! -name 'ubuntu.sources' -delete
+          apt="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          sudo apt-get update -q $apt
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y -q --no-install-recommends $apt \
+            -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 $(cat tools/packages.txt)
+      - run: tools/build.sh zink
+        env: { PC5_ZINK_JOBS: "2" }
+      - uses: actions/cache/save@v5
+        with: { path: "${{ needs.keys.outputs.zink_paths }}", key: "${{ needs.keys.outputs.zink }}" }
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: zink }
+
+  sources:
+    name: Sources
+    # The source of everything in the app, archived on the machine itself (git, curl and xz
+    # are all it needs) while the app is put together.
+    needs: [keys, radv]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && needs.radv.result != 'failure' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo mkdir -p /mnt/pc5 && sudo chown "$USER" /mnt/pc5
+      - name: RADV
+        uses: actions/cache/restore@v5
+        with: { path: "${{ needs.keys.outputs.radv_paths }}", key: "${{ needs.keys.outputs.radv }}", fail-on-cache-miss: true }
+      - run: tools/build.sh bundle
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sources
+          path: ${{ env.PC5_RELEASE }}/PPSA11018-sources.tar.xz
+          compression-level: 0
+          retention-days: 7
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: sources }
+
+  release:
+    name: Release
+    needs: [keys, image, hostwine, wineps5, dxvk, vkd3d, zink]
+    if: ${{ !cancelled() && needs.keys.result == 'success' && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.keys.outputs.image }}
+      credentials: { username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      volumes: [/mnt/pc5:/mnt/pc5]
+    steps:
+      - uses: actions/checkout@v5
+      - { name: "Wine's Windows side", uses: actions/cache/restore@v5,
+          with: { path: "${{ needs.keys.outputs.hostwine_paths }}", key: "${{ needs.keys.outputs.hostwine }}", fail-on-cache-miss: true } }
+      - { name: Wine for the PS5, uses: actions/cache/restore@v5,
+          with: { path: "${{ needs.keys.outputs.wineps5_paths }}", key: "${{ needs.keys.outputs.wineps5 }}", fail-on-cache-miss: true } }
+      - { name: DXVK, uses: actions/cache/restore@v5,
+          with: { path: "${{ needs.keys.outputs.dxvk_paths }}", key: "${{ needs.keys.outputs.dxvk }}", fail-on-cache-miss: true } }
+      - { name: VKD3D-Proton, uses: actions/cache/restore@v5,
+          with: { path: "${{ needs.keys.outputs.vkd3d_paths }}", key: "${{ needs.keys.outputs.vkd3d }}", fail-on-cache-miss: true } }
+      - { name: Zink, uses: actions/cache/restore@v5,
+          with: { path: "${{ needs.keys.outputs.zink_paths }}", key: "${{ needs.keys.outputs.zink }}", fail-on-cache-miss: true } }
+      - name: Title
+        run: tools/build.sh title
+      - name: Package
+        run: tools/build.sh package
+      - name: App
+        run: tools/build.sh app
+      - uses: actions/upload-artifact@v6
+        with:
+          name: app
           path: |
-            /mnt/pc5/build/prospero-win/.deps/wine-host/install
-            /mnt/pc5/build/prospero-win/.deps/wine-host/build/dlls/wowprospero
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/prx
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/pe
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/report.json
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/source
-            /mnt/pc5/build/prospero-win/.deps/wine-ps5/freetype/src
-            /mnt/pc5/build/prospero-win/.deps/wow64native
-            /mnt/pc5/build/PS5_Vulkan/.deps/work/radv-src/subprojects/zlib-*
-          key: ${{ steps.keys.outputs.wine }}
+            ${{ env.PC5_RELEASE }}/PPSA11018.zip
+            ${{ env.PC5_RELEASE }}/wine-mono-*-src.tar.xz
+          compression-level: 0
+          retention-days: 7
+      - uses: ./.github/actions/report
+        if: failure()
+        with: { name: release }
 
-      - name: DXVK
-        run: bash tools/build.sh dxvk
-
-      - name: Keep DXVK
-        if: steps.dxvk.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        continue-on-error: true
-        with:
-          path: /mnt/pc5/build/dxvk
-          key: ${{ steps.keys.outputs.dxvk }}
-
-      - name: VKD3D-Proton
-        run: bash tools/build.sh vkd3d
-
-      - name: Keep VKD3D-Proton
-        if: steps.vkd3d.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        continue-on-error: true
-        with:
-          path: /mnt/pc5/build/vkd3d
-          key: ${{ steps.keys.outputs.vkd3d }}
-
-      - name: Zink
-        if: steps.zink.outputs.cache-hit != 'true'
-        run: bash tools/build.sh zink
-
-      - name: Keep Zink
-        if: steps.zink.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        continue-on-error: true
-        with:
-          path: /mnt/pc5/build/mesa-zink/artifacts
-          key: ${{ steps.keys.outputs.zink }}
-
-      - name: Package, app and sources
-        run: bash tools/build.sh package app bundle
+  publish:
+    name: Publish
+    needs: [keys, release, sources]
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.sources.result == 'success' }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.keys.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with: { name: app, path: release }
+      - uses: actions/download-artifact@v6
+        with: { name: sources, path: release }
 
       - name: The archives
-        id: archives
-        # The sources step (bundle) has already put Wine Mono's source beside the other two.
+        working-directory: release
         run: |
-          mono=$(sed -n 's/^MONO_VERSION=//p' tools/build.sh)
-          version=$(sed -n 's/^#define PC5_VERSION "\(.*\)"/\1/p' title/pc5.h)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          cd "$PC5_RELEASE"
-          ls -l PPSA11018.zip PPSA11018-sources.tar.xz "wine-mono-$mono-src.tar.xz"
-          sha256sum PPSA11018.zip PPSA11018-sources.tar.xz "wine-mono-$mono-src.tar.xz" | tee SHA256SUMS.txt
-          {
-            echo "### PC5 $version"
-            echo '```'
-            cat SHA256SUMS.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          ls -l
+          sha256sum PPSA11018.zip PPSA11018-sources.tar.xz wine-mono-*-src.tar.xz | tee SHA256SUMS.txt
+          { echo "### PC5 $VERSION"; echo '```'; cat SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare with ${{ inputs.compare_with }}
+        if: inputs.compare_with != ''
+        env:
+          WITH: ${{ inputs.compare_with }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/earlier"
+          case $WITH in
+            *[!0-9]*) gh release download "$WITH" -p PPSA11018.zip -D "$RUNNER_TEMP/earlier" ;;
+            *) gh run download "$WITH" -D "$RUNNER_TEMP/earlier" ;;
+          esac
+          earlier=$(find "$RUNNER_TEMP/earlier" -name PPSA11018.zip | head -1)
+          [ -n "$earlier" ] || { echo "::error::$WITH has no PPSA11018.zip"; exit 1; }
+          python3 tools/compare-app.py "$earlier" release/PPSA11018.zip --markdown "$GITHUB_STEP_SUMMARY" | tee compare.txt
+          echo "::notice title=Against $WITH::$(tail -1 compare.txt)"
+          # The files that differ, a notice of up to 3000 characters (the summary has them all).
+          list=$(head -n -1 compare.txt | cut -c1-200 | head -c 3000 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+          [ -z "$list" ] || echo "::notice title=What differs from $WITH::$list"
 
       - name: Draft release
         if: inputs.draft_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.archives.outputs.version }}
         # Notes from release-notes/<version>.md. A draft left by an earlier run is replaced;
         # a published release is never touched.
         run: |
@@ -219,37 +417,16 @@ jobs:
           [ "$state" = none ] || gh release delete "$tag" --yes
           notes="release-notes/$VERSION.md"
           [ -f "$notes" ] || { echo "PC5 $VERSION" > "$RUNNER_TEMP/notes.md"; notes=$RUNNER_TEMP/notes.md; }
-          mono=$(sed -n 's/^MONO_VERSION=//p' tools/build.sh)
           gh release create "$tag" --draft --target "$GITHUB_SHA" --title "PC5 $VERSION" --notes-file "$notes" \
-            "$PC5_RELEASE/PPSA11018.zip" "$PC5_RELEASE/PPSA11018-sources.tar.xz" "$PC5_RELEASE/wine-mono-$mono-src.tar.xz"
+            release/PPSA11018.zip release/PPSA11018-sources.tar.xz release/wine-mono-*-src.tar.xz
           echo "Draft release $tag is ready: check it and publish it from the Releases page." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Keep the archives
-        if: ${{ !inputs.draft_release }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: PC5-${{ steps.archives.outputs.version }}
-          path: |
-            /mnt/pc5/release/PPSA11018.zip
-            /mnt/pc5/release/PPSA11018-sources.tar.xz
-            /mnt/pc5/release/wine-mono-*-src.tar.xz
-          compression-level: 0
-          retention-days: 7
-
-      - name: Why it failed
-        if: failure()
-        # The end of the newest step log as an annotation, which the run's page and the API show.
+      - name: Only the newest work kept
+        # Each Wine piece's last build is what the next one starts from: older ones are left
+        # to nothing, so they don't push the pieces out of the 10 GB GitHub keeps.
+        continue-on-error: true
         run: |
-          log=$(ls -t /mnt/pc5/build/logs/*.log 2>/dev/null | head -1)
-          [ -n "$log" ] || exit 0
-          tail -40 "$log" | cut -c1-300 > "$RUNNER_TEMP/tail.txt"
-          body=$(sed -e 's/%/%25/g' "$RUNNER_TEMP/tail.txt" | sed -e ':a;N;$!ba;s/\n/%0A/g')
-          echo "::error title=$(basename "$log")::$body"
-
-      - name: The logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: /mnt/pc5/build/logs/
-          retention-days: 14
+          for prefix in tools-work- hostwine-work- wineps5-work-; do
+            gh cache list --key "$prefix" --sort created_at --order desc --limit 100 --json id --jq '.[1:][].id' |
+              while read -r id; do gh cache delete "$id"; done
+          done

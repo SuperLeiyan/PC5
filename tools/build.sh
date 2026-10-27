@@ -3,36 +3,50 @@
 # Builds PC5 (PPSA11018) from source: prospero-win at its v0.2.0 release with this repo's
 # patch and title/, its Wine, RADV and Mesa Zink for the console, VKD3D-Proton, and the app.
 #
-#   tools/build.sh [STEP...]
+#   tools/build.sh [PIECE...]      build these pieces, in the order below (default: all)
+#   tools/build.sh key PIECE...    each piece's key: a fingerprint of all it is built from
+#   tools/build.sh paths PIECE...  what each piece leaves for the pieces after it
+#   tools/build.sh work PIECE...   what a piece keeps to build again in less time
+#   tools/build.sh ci              every piece's key and paths, for GitHub's build ($GITHUB_OUTPUT)
+#   tools/build.sh toolchain       a fingerprint of the compilers installed here
 #
-# Steps, in order (default: all):
-#   sources   clone the pinned projects below into .build/, patch prospero-win, download
-#             the pinned archives (llvm-mingw for Zink, mbedTLS)
+# The pieces, in order. Each fetches what it is built from, so any one runs on its own once
+# the pieces it uses are there, and one whose key is the same as when it was built here is
+# skipped.
+#   sources   every project and archive the app is built from, fetched in parallel (what
+#             bundle archives)
 #   title     the PS5 payload SDK, the Lapy helper for PPSA11018, mbedTLS for the console,
 #             the eboot with PC5 in it
 #   radv      RADV, the console's Vulkan driver (PS5_Vulkan, PS5_Mesa with patches/radv)
-#   hostwine  Wine for this computer: the PE modules the console runs, and the Wine that
-#             makes PC5's empty Windows template
-#   wineps5   Wine's PS5 side (PRX modules)
-#   cpu       wowprospero and the native WoW64 CPU (32-bit games)
+#   tools     Wine's own tools for this computer (winebuild, widl, winegcc and the rest),
+#             which the PS5 Wine is built with: minutes, where the whole of hostwine is the
+#             longest piece
+#   hostwine  Wine's Windows side, built for this computer: the PE modules the console runs
+#             (every DLL, 32- and 64-bit), its NLS files, and the Wine that makes PC5's empty
+#             Windows template; the 32-bit CPUs' Windows halves (wowprospero.dll, wow64native.dll)
+#   wineps5   Wine's PS5 side (PRX modules), with FFmpeg and FreeType; the native WoW64 CPU's
+#             PS5 module (uses radv and tools)
 #   dxvk      DXVK 2.6.2-prospero2 with patches/dxvk, 64- and 32-bit, for the Windows template
 #   vkd3d     VKD3D-Proton 3.0.1 with patches/vkd3d-proton, 64- and 32-bit, for the Windows template
 #   zink      Mesa's WGL/Zink, OpenGL for the games that draw with it
-#   package   prospero-win's tools/package_release.sh, with Zink
-#   app       release/PPSA11018/ (art, fonts, the Windows template) and release/PPSA11018.zip
+#   package   prospero-win's tools/package_release.sh, with Zink (uses title and the pieces above)
+#   app       release/PPSA11018/ (art, fonts, the Windows template), release/PPSA11018.zip and
+#             Wine Mono's source archive beside it
 #   bundle    release/PPSA11018-sources.tar.xz: the source of everything in the app, at the
 #             commits it was built from (the GPL and LGPL ask for it beside the binaries)
 #
 # PC5_RELEASE=DIR puts the app there instead of release/ (on a shared build machine, say
-# /mnt/media/builder/releases/PC5). PC5_ZINK_JOBS sets Zink's jobs (default 2).
+# /mnt/media/builder/releases/PC5); PC5_BUILD_DIR=DIR builds there instead of .build/.
+# PC5_ZINK_JOBS sets Zink's jobs (default 2).
 #
 # On Debian 13 or Ubuntu 24.04 (x86-64) with tools/packages.txt installed it runs here, as
 # root or a user who can write the repo; anywhere else it runs itself inside
-# tools/Dockerfile's image (Docker needed). Each step writes its log to
-# .build/logs/<step>.log and prints one line. A step run again picks up where it was.
+# tools/Dockerfile's image (Docker needed), the image GitHub's build runs in. Each piece
+# writes its log to .build/logs/<piece>.log and prints one line.
 set -euo pipefail
 here=$(realpath -- "$(dirname -- "$0")/..")
 release=$(realpath -m -- "${PC5_RELEASE:-$here/release}")
+B=$(realpath -m -- "${PC5_BUILD_DIR:-$here/.build}")
 
 # ---- the projects, each at a fixed commit ------------------------------------------
 PW_URL=https://github.com/mpereiraesaa/prospero-win.git
@@ -45,7 +59,7 @@ BOILERPLATE_URL=https://github.com/mpereiraesaa/ps5-native-app-boilerplate.git
 LAPY_URL=https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon.git
 LAPY_COMMIT=b48b7d7236eca25c7b9dfd6c040c763ae05dde80      # v0.3.2-experimental
 WINE_URL=https://github.com/wine-mirror/wine.git
-# Read from the pinned projects themselves, after the sources step: Wine
+# Read from the pinned projects themselves, after prospero-win is fetched: Wine
 # (build_wine_ps5.sh), the title's boilerplate (build_native.sh), the PRX
 # boilerplate (build_wine_ps5.sh), PS5_Mesa for RADV (build-radv.sh) and for Zink
 # (build_mesa_zink.sh, with its llvm-mingw), the SDK fork (setup-native-dependencies.sh).
@@ -89,12 +103,16 @@ QRCODEGEN_URL=https://github.com/nayuki/QR-Code-generator.git
 QRCODEGEN_COMMIT=3c6d0b3cefb4e049dc337e82237c9644399716a8
 VKD3D_SOURCE_URL=https://github.com/HansKristian-Work/vkd3d-proton.git
 VKD3D_SOURCE_COMMIT=3b10bd7a7ec6a7347e616cf8bea59333afec2255   # tag v3.0.1, the release's build
-# Built here with patches/vkd3d-proton (step vkd3d); app/pc5/dxvk.txt names the result with
+# Built here with patches/vkd3d-proton (piece vkd3d); app/pc5/dxvk.txt names the result with
 # DXVK's, and PC5 gives installed games its DLLs when the name changes.
 VKD3D_NAME=3.0.1-pc5.1
 
 TITLE=PPSA11018
-STEPS="sources title radv hostwine wineps5 cpu dxvk vkd3d zink package app bundle"
+STEPS="sources title radv tools hostwine wineps5 dxvk vkd3d zink package app bundle"
+# The pieces with a key: built again only when it changes. GitHub's build keeps what each
+# leaves (paths) under its key, and builds only the pieces whose key it hasn't kept.
+KEYED="title radv tools hostwine wineps5 dxvk vkd3d zink"
+COMMANDS="key paths work ci toolchain"
 
 # ---- here on Debian 13 or Ubuntu 24.04, else in the build image ----------------------
 supported() {
@@ -104,27 +122,19 @@ supported() {
 }
 if [[ -z ${PC5_IN_IMAGE:-} ]] && ! supported; then
     command -v docker >/dev/null || { echo "build.sh: this is neither Debian 13 nor Ubuntu 24.04 (x86-64), and there is no Docker" >&2; exit 2; }
+    mkdir -p "$B" "$release"
     docker build -q -t pc5-build "$here/tools" >/dev/null
-    exec docker run --rm -v "$here:/PC5" -v "$release:$release" -w /PC5 -e PC5_IN_IMAGE=1 -e PC5_RELEASE="$release" \
-        -e PC5_ZINK_JOBS="${PC5_ZINK_JOBS:-2}" pc5-build tools/build.sh "$@"
+    exec docker run --rm -v "$here:/PC5" -v "$release:$release" -v "$B:$B" -w /PC5 -e PC5_IN_IMAGE=1 \
+        -e PC5_RELEASE="$release" -e PC5_BUILD_DIR="$B" -e PC5_ZINK_JOBS="${PC5_ZINK_JOBS:-2}" pc5-build tools/build.sh "$@"
 fi
-missing=$(for package in $(cat "$here/tools/packages.txt"); do dpkg -s "$package" >/dev/null 2>&1 || echo "$package"; done)
-[[ -z $missing ]] || { echo "build.sh: missing packages: $(echo $missing). Install them with: apt-get install -y \$(cat tools/packages.txt)" >&2; exit 2; }
 
 export LC_ALL=C TZ=UTC
-# Clang 18 for every PS5 build: the payload SDK otherwise takes the newest LLVM it finds
-# (Debian 13's default is 19), and the boilerplate's wrapper wants 18.
-export LLVM_CONFIG=/usr/lib/llvm-18/bin/llvm-config PS5_CLANG=/usr/lib/llvm-18/bin/clang
-[[ -x $LLVM_CONFIG && -x $PS5_CLANG ]] || { echo "build.sh: no Clang 18 in /usr/lib/llvm-18 (packages clang-18, llvm-18)" >&2; exit 2; }
-B=$here/.build
 PW=$B/prospero-win
 jobs=$(nproc)
-mkdir -p "$B/logs" "$B/downloads" "$release"
-steps=" ${*:-$STEPS} "
-for s in $steps; do [[ " $STEPS " == *" $s "* ]] || { echo "unknown step: $s (steps: $STEPS)" >&2; exit 2; }; done
-want() { [[ $steps == *" $1 "* ]]; }
+mkdir -p "$B/logs" "$B/downloads" "$B/stamps"
 pin() { sed -n "s/^$2=\\([0-9a-f]\\{40\\}\\).*/\\1/p" "$1" | head -1; }
 value() { sed -n "s/^$2=\\([^ ]*\\).*/\\1/p" "$1" | head -1; }
+wine_commit() { sed -n 's/^WINE_COMMIT=//p' "$PW/tools/build_wine_ps5.sh"; }
 
 # A clone of url in dir at commit (only that commit is fetched).
 fetch() { # dir url commit
@@ -142,32 +152,39 @@ download() { # file url sha256
         mv "$1.part" "$1"
     fi
 }
-# One step: its output in its log, one line on screen, the log's end when it fails.
-run() { # step command...
-    local step=$1 started=$SECONDS; shift
-    local status=0
-    printf '==> %-9s ' "$step"
-    # In a subshell of its own, so a failing command stops the step (set -e) and a cd stays in it.
-    set +e
-    ( set -euo pipefail; "$@" ) > "$B/logs/$step.log" 2>&1
-    status=$?
-    set -e
-    if (( status == 0 )); then
-        printf 'done (%d min)\n' $(( (SECONDS - started + 59) / 60 ))
-    else
-        printf 'FAILED, the end of .build/logs/%s.log:\n' "$step"
-        tail -25 "$B/logs/$step.log"
-        exit 1
-    fi
+# Functions run at once, each in the background with a log of its own; fails when one did.
+parallel() { # function...
+    local f i status=0 pids=()
+    for f; do
+        ( set -euo pipefail; "$f" ) > "$B/logs/fetch-$f.log" 2>&1 &
+        pids+=($!)
+    done
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            status=1
+            echo "${*:i+1:1} failed, the end of .build/logs/fetch-${*:i+1:1}.log:"
+            tail -20 "$B/logs/fetch-${*:i+1:1}.log"
+        fi
+    done
+    return $status
 }
 
-# ---- the steps ---------------------------------------------------------------------
+# ---- the sources, each fetched by the pieces built from it ---------------------------
 
-step_sources() {
+# prospero-win v0.2.0 + patches/prospero-win + title/: committed with fixed names and dates,
+# so the same repo gives the same prospero-win commit (SOURCES.txt names it). Made again only
+# when one of them changed or the tree was.
+src_pw() {
+    local id=(-c user.name="PC5 build" -c user.email="pc5@invalid") made want
+    want=$(cd "$here" && { echo "$PW_COMMIT"
+        sha256sum patches/prospero-win/*.patch title/pc5*.c title/pc5*.h title/third_party/stb_image.h \
+            title/third_party/stb_image_write.h $(find title/third_party/psfwd title/third_party/qrcodegen -type f | sort)
+    } | sha256sum | cut -c1-64)
+    made=$(git -C "$PW" rev-parse -q --verify HEAD 2>/dev/null || true)
+    if [[ -n $made && $(cat "$B/stamps/prospero-win" 2>/dev/null) == "$want $made" ]] && git -C "$PW" diff --quiet HEAD; then
+        return 0
+    fi
     fetch "$PW" "$PW_URL" "$PW_COMMIT"
-    # prospero-win v0.2.0 + patches/prospero-win + title/: committed with fixed names
-    # and dates, so the same repo gives the same prospero-win commit (SOURCES.txt names it).
-    local id=(-c user.name="PC5 build" -c user.email="pc5@invalid")
     git -C "$PW" reset -q --hard "$PW_COMMIT"
     git -C "$PW" clean -q -fd
     git -C "$PW" "${id[@]}" am -q --committer-date-is-author-date "$here"/patches/prospero-win/*.patch
@@ -179,75 +196,140 @@ step_sources() {
     GIT_AUTHOR_DATE="2026-10-22T17:00:00+0100" GIT_COMMITTER_DATE="2026-10-22T17:00:00+0100" \
         git -C "$PW" "${id[@]}" commit -q -m "PC5: its screens (title/ of the PC5 repo)"
     git -C "$PW" log --oneline -3
-
-    fetch "$PW/.deps/wine/source" "$WINE_URL" "$(sed -n 's/^WINE_COMMIT=//p' "$PW/tools/build_wine_ps5.sh")"
-    # FFmpeg for the games' videos and sound (winedmo.prx, winegstreamer.prx).
+    echo "$want $(git -C "$PW" rev-parse HEAD)" > "$B/stamps/prospero-win"
+}
+src_wine() { fetch "$PW/.deps/wine/source" "$WINE_URL" "$(wine_commit)"; }
+# FFmpeg for the games' videos and sound (winedmo.prx, winegstreamer.prx).
+src_ffmpeg() {
     fetch "$PW/.deps/ffmpeg/source" "$(value "$PW/tools/build_ffmpeg_ps5.sh" FFMPEG_URL)" \
         "$(pin "$PW/tools/build_ffmpeg_ps5.sh" FFMPEG_COMMIT)"
-    # ps5-framegen's interpolator, linked into libvulkan.prx for Frame generation.
-    fetch "$B/ps5-framegen" "$(value "$PW/tools/link_radv_prx.sh" FRAMEGEN_URL)" \
-        "$(pin "$PW/tools/link_radv_prx.sh" FRAMEGEN_COMMIT)"
-    fetch "$PW/.deps/ps5-native-app-boilerplate" "$BOILERPLATE_URL" "$(pin "$PW/tools/build_native.sh" pin)"
-    fetch "$B/prx-foundation" "$BOILERPLATE_URL" "$(pin "$PW/tools/build_wine_ps5.sh" MODULE_EXPORTS_COMMIT)"
+}
+# ps5-framegen's interpolator, linked into libvulkan.prx for Frame generation.
+src_framegen() {
+    fetch "$B/ps5-framegen" "$(value "$PW/tools/link_radv_prx.sh" FRAMEGEN_URL)" "$(pin "$PW/tools/link_radv_prx.sh" FRAMEGEN_COMMIT)"
+}
+src_foundation() { fetch "$PW/.deps/ps5-native-app-boilerplate" "$BOILERPLATE_URL" "$(pin "$PW/tools/build_native.sh" pin)"; }
+src_prxfoundation() { fetch "$B/prx-foundation" "$BOILERPLATE_URL" "$(pin "$PW/tools/build_wine_ps5.sh" MODULE_EXPORTS_COMMIT)"; }
+src_vulkan() {
     fetch "$B/PS5_Vulkan" "$VULKAN_URL" "$VULKAN_COMMIT"
     fetch "$B/PS5_Mesa" "$MESA_URL" "$(pin "$B/PS5_Vulkan/tools/build-radv.sh" mesa_revision)"
     fetch "$B/PS5_PayloadSDK" "$SDK_FORK_URL" "$(pin "$B/PS5_Vulkan/tools/setup-native-dependencies.sh" sdk_revision)"
-    fetch "$B/lapy" "$LAPY_URL" "$LAPY_COMMIT"
-    # DXVK with PC5's patch (step dxvk), committed with fixed names and dates.
-    fetch "$B/dxvk-source" "$DXVK_URL" "$DXVK_COMMIT"
-    git -C "$B/dxvk-source" reset -q --hard "$DXVK_COMMIT"
-    git -C "$B/dxvk-source" clean -q -fdx
-    git -C "$B/dxvk-source" submodule -q update --init --recursive
-    git -C "$B/dxvk-source" "${id[@]}" am -q --committer-date-is-author-date "$here"/patches/dxvk/*.patch
-    # The home screen tiles: psfwd in title/third_party must be the format's own, unchanged.
-    fetch "$B/ps5-forwarder-format" "$FORWARDER_URL" "$FORWARDER_COMMIT"
+}
+src_lapy() { fetch "$B/lapy" "$LAPY_URL" "$LAPY_COMMIT"; }
+# A project at a commit with PC5's patches on it, committed with fixed names and dates, with
+# its submodules: made again only when the commit or the patches changed, or the tree did.
+patched() { # dir url commit patches-dir
+    local id=(-c user.name="PC5 build" -c user.email="pc5@invalid") made want stamp
+    stamp=$B/stamps/$(basename "$1")
+    want=$( { echo "$3"; cat "$4"/*.patch; } | sha256sum | cut -c1-64)
+    made=$(git -C "$1" rev-parse -q --verify HEAD 2>/dev/null || true)
+    if [[ -n $made && $(cat "$stamp" 2>/dev/null) == "$want $made" ]] && git -C "$1" diff --quiet HEAD; then
+        return 0
+    fi
+    fetch "$1" "$2" "$3"
+    git -C "$1" reset -q --hard "$3"
+    git -C "$1" clean -q -fdx
+    git -C "$1" submodule -q update --init --recursive
+    git -C "$1" "${id[@]}" am -q --committer-date-is-author-date "$4"/*.patch
+    echo "$want $(git -C "$1" rev-parse HEAD)" > "$stamp"
+}
+src_dxvk() { patched "$B/dxvk-source" "$DXVK_URL" "$DXVK_COMMIT" "$here/patches/dxvk"; }
+src_vkd3d() { patched "$B/vkd3d-proton-source" "$VKD3D_SOURCE_URL" "$VKD3D_SOURCE_COMMIT" "$here/patches/vkd3d-proton"; }
+# The home screen tiles: psfwd in title/third_party must be the format's own, unchanged.
+src_forwarder() {
     local pair
+    fetch "$B/ps5-forwarder-format" "$FORWARDER_URL" "$FORWARDER_COMMIT"
     for pair in src/psfwd.c:psfwd.c include/psfwd.h:psfwd.h LICENSE:LICENSE; do
         cmp -s "$B/ps5-forwarder-format/${pair%%:*}" "$here/title/third_party/psfwd/${pair##*:}" ||
             { echo "title/third_party/psfwd/${pair##*:} differs from the PS5 Forwarder Format at $FORWARDER_COMMIT" >&2
               return 1; }
     done
-    # Report on GitHub's QR codes: qrcodegen in title/third_party must be Project Nayuki's, unchanged.
+}
+# Report on GitHub's QR codes: qrcodegen in title/third_party must be Project Nayuki's, unchanged.
+src_qrcodegen() {
+    local pair
     fetch "$B/qrcodegen" "$QRCODEGEN_URL" "$QRCODEGEN_COMMIT"
     for pair in c/qrcodegen.c:qrcodegen.c c/qrcodegen.h:qrcodegen.h; do
         cmp -s "$B/qrcodegen/${pair%%:*}" "$here/title/third_party/qrcodegen/${pair##*:}" ||
             { echo "title/third_party/qrcodegen/${pair##*:} differs from the QR Code generator at $QRCODEGEN_COMMIT" >&2
               return 1; }
     done
-    # Zink's Mesa and compiler, as tools/build_mesa_zink.sh pins them.
-    local zink=$PW/tools/build_mesa_zink.sh llvm
-    fetch "$B/mesa-zink-source" "$MESA_URL" "$(pin "$zink" MESA_COMMIT)"
-    llvm=$(value "$zink" LLVM_MINGW_VERSION)
-    download "$B/downloads/llvm-mingw-$llvm-ubuntu-22.04-x86_64.tar.xz" \
-        "https://github.com/mstorsjo/llvm-mingw/releases/download/${llvm%-ucrt}/llvm-mingw-$llvm-ubuntu-22.04-x86_64.tar.xz" \
-        "$(value "$zink" LLVM_MINGW_SHA256)"
+}
+# Zink's Mesa, as tools/build_mesa_zink.sh pins it.
+src_zink() { fetch "$B/mesa-zink-source" "$MESA_URL" "$(pin "$PW/tools/build_mesa_zink.sh" MESA_COMMIT)"; }
+src_mbedtls() {
     download "$B/downloads/mbedtls-$MBEDTLS_VERSION.tar.bz2" "$MBEDTLS_URL" "$MBEDTLS_SHA256"
-    download "$B/downloads/wine-mono-$MONO_VERSION-x86.msi" "$MONO_URL" "$MONO_SHA256"
-    # Its source, unchanged, for the source bundle (parts of Mono are under the LGPL and GPL).
+    [[ -f $B/mbedtls-$MBEDTLS_VERSION/include/mbedtls/ssl.h ]] || tar -xjf "$B/downloads/mbedtls-$MBEDTLS_VERSION.tar.bz2" -C "$B"
+}
+src_mono() { download "$B/downloads/wine-mono-$MONO_VERSION-x86.msi" "$MONO_URL" "$MONO_SHA256"; }
+# Its source, unchanged, released beside the app (parts of Mono are under the LGPL and GPL).
+src_mono_source() {
     download "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$MONO_SOURCE_URL" "$MONO_SOURCE_SHA256"
     download "$B/downloads/wine-mono-$MONO_VERSION-COPYING" "$MONO_COPYING_URL" "$MONO_COPYING_SHA256"
+}
+src_fonts() {
     download "$B/downloads/fonts-liberation_$LIBERATION_VERSION-3_all.deb" "$LIBERATION_URL" "$LIBERATION_SHA256"
     download "$B/downloads/liberation-fonts-$LIBERATION_VERSION-LICENSE" "$LIBERATION_LICENSE_URL" "$LIBERATION_LICENSE_SHA256"
     download "$B/downloads/DroidSansFallbackFull.ttf" "$DROID_FALLBACK_URL" "$DROID_FALLBACK_SHA256"
     download "$B/downloads/DroidSansFallbackFull-NOTICE" "$DROID_FALLBACK_NOTICE_URL" "$DROID_FALLBACK_NOTICE_SHA256"
-    # VKD3D-Proton at its release's commit with PC5's patch (step vkd3d), committed with fixed
-    # names and dates; the source bundle has it.
-    fetch "$B/vkd3d-proton-source" "$VKD3D_SOURCE_URL" "$VKD3D_SOURCE_COMMIT"
-    git -C "$B/vkd3d-proton-source" reset -q --hard "$VKD3D_SOURCE_COMMIT"
-    git -C "$B/vkd3d-proton-source" clean -q -fdx
-    git -C "$B/vkd3d-proton-source" submodule -q update --init --recursive
-    git -C "$B/vkd3d-proton-source" "${id[@]}" am -q --committer-date-is-author-date "$here"/patches/vkd3d-proton/*.patch
-    [[ -f $B/mbedtls-$MBEDTLS_VERSION/include/mbedtls/ssl.h ]] || tar -xjf "$B/downloads/mbedtls-$MBEDTLS_VERSION.tar.bz2" -C "$B"
-    # Python tools for Mesa's builds (meson 1.9 and the rest, as prospero-win pins them).
+}
+# FreeType's release archive, as build_wine_ps5.sh pins it (PROSPERO_FREETYPE_TARBALL names a
+# local copy), unpacked for the source bundle.
+src_freetype() {
+    local ft=$PW/tools/build_wine_ps5.sh version tarball
+    version=$(sed -n 's/^FREETYPE_VERSION=//p' "$ft")
+    tarball=${PROSPERO_FREETYPE_TARBALL:-$B/downloads/freetype-$version.tar.xz}
+    [[ -n ${PROSPERO_FREETYPE_TARBALL:-} ]] ||
+        download "$tarball" "$(sed -n 's/^FREETYPE_URL=//p' "$ft" | sed "s/\$FREETYPE_VERSION/$version/")" \
+            "$(sed -n 's/^FREETYPE_SHA256=//p' "$ft")"
+    rm -rf "$B/freetype-src" && mkdir -p "$B/freetype-src"
+    tar -xJf "$tarball" -C "$B/freetype-src" --strip-components=1
+}
+# Python tools for Mesa's builds (meson 1.9 and the rest, as prospero-win pins them).
+src_venv() {
     [[ -x $B/venv/bin/meson ]] || {
         python3 -m venv "$B/venv"
         "$B/venv/bin/pip" install -q -r "$PW/tools/mesa_zink_requirements.txt"
     }
 }
+# What bundle archives, besides prospero-win.
+SOURCES="src_wine src_ffmpeg src_framegen src_foundation src_prxfoundation src_vulkan src_lapy src_dxvk
+ src_vkd3d src_forwarder src_qrcodegen src_zink src_mbedtls src_freetype"
+
+# The PS5 payload SDK the title's boilerplate pins, and the module tool the Wine PS5 build
+# signs its PRX modules with (from the PRX boilerplate).
+need_sdk() {
+    src_foundation
+    bash "$PW/.deps/ps5-native-app-boilerplate/tools/setup-native-dependencies.sh"
+}
+need_native_tool() {
+    local native=$B/prx-foundation/tooling/native tool=$B/prx-foundation/build/host/ps5-native-tool
+    src_prxfoundation
+    if [[ ! -x $tool ]]; then
+        mkdir -p "${tool%/*}"
+        c++ -std=c++20 -O2 "$native/native_app_builder.cpp" "$native/self_container.cpp" \
+            "$native/elf_object.cpp" "$native/sce_module_writer.cpp" -lz -o "$tool"
+    fi
+}
+# Another piece's outputs, there before this one runs.
+need() { # piece
+    local path missing=
+    for path in $(paths_of "$1"); do
+        compgen -G "$path" >/dev/null || missing+=" $path"
+    done
+    [[ -z $missing ]] || { echo "build.sh: $1 is not built (missing:$missing): run tools/build.sh $1 first" >&2; return 1; }
+}
+
+# ---- the pieces ----------------------------------------------------------------------
+
+step_sources() {
+    src_pw
+    parallel $SOURCES
+}
 
 step_title() {
-    local foundation=$PW/.deps/ps5-native-app-boilerplate native tool sources
-    bash "$foundation/tools/setup-native-dependencies.sh"
+    src_pw; src_lapy; src_mbedtls; need_sdk
+    local foundation=$PW/.deps/ps5-native-app-boilerplate sources
     make -C "$foundation" libc
     local sdk=$foundation/.deps/native/ps5-payload-sdk
     # The /data helper, built for this title: a helper only elevates the title it was built for.
@@ -258,11 +340,15 @@ step_title() {
     # mbedTLS for the console, with PC5's settings (title/pc5_mbedtls_config.h).
     local tls=$B/mbedtls-ps5 mbedtls=$B/mbedtls-$MBEDTLS_VERSION config='-DMBEDTLS_USER_CONFIG_FILE="pc5_mbedtls_config.h"'
     rm -rf "$tls" && mkdir -p "$tls"
+    local pids=() pid
     for source in "$mbedtls"/library/*.c; do
         env PS5_PAYLOAD_SDK="$sdk" sh "$foundation/tooling/prospero-clang18" -std=c99 -O2 -ffunction-sections \
             -fdata-sections -I"$mbedtls/include" -I"$mbedtls/library" -I"$here/title" "$config" \
-            -c "$source" -o "$tls/$(basename "$source" .c).o"
+            -c "$source" -o "$tls/$(basename "$source" .c).o" &
+        pids+=($!)
+        if (( ${#pids[@]} >= jobs )); then wait "${pids[0]}"; pids=("${pids[@]:1}"); fi
     done
+    for pid in "${pids[@]}"; do wait "$pid"; done
     /usr/lib/llvm-18/bin/llvm-ar rcs "$tls/libmbedtls-pc5.a" "$tls"/*.o
     sources=$(cd "$PW" && ls native/pc5*.c | tr '\n' ' ')
     (cd "$PW" && PW_TITLE_ID=$TITLE PW_LAPY_DIR=$helper PW_EXTRA_SOURCES="$sources" \
@@ -278,16 +364,10 @@ step_title() {
     lacks=$(defined libkernel_sys libkernel_web libScePosixForWebKit)
     bad=$( (comm -12 <(sort -u "$imports") <(echo "$lacks") | comm -23 - <(echo "$gets"); grep -xE 'f?statv?fs|getfsstat|getmntinfo' "$imports") | sort -u || true)
     [[ -z $bad ]] || { echo "the eboot imports what a title doesn't get: $(echo $bad)" >&2; return 1; }
-    # The module tool the Wine PS5 build signs its PRX modules with, from the PRX boilerplate.
-    native=$B/prx-foundation/tooling/native tool=$B/prx-foundation/build/host/ps5-native-tool
-    if [[ ! -x $tool ]]; then
-        mkdir -p "${tool%/*}"
-        c++ -std=c++20 -O2 "$native/native_app_builder.cpp" "$native/self_container.cpp" \
-            "$native/elf_object.cpp" "$native/sce_module_writer.cpp" -lz -o "$tool"
-    fi
 }
 
 step_radv() {
+    src_pw; src_vulkan; src_venv
     cd "$B/PS5_Vulkan"
     bash tools/setup-native-dependencies.sh
     # PC5's patches/radv on the pinned revision, as a commit with fixed names and a fixed
@@ -308,36 +388,58 @@ step_radv() {
     MESON=$B/venv/bin/meson PATH="$B/venv/bin:$PATH" bash tools/build-radv-pc5.sh release
 }
 
-step_hostwine() {
+step_tools() {
+    src_pw; src_wine
     cd "$PW"
+    tools/build_host_wine.sh --source "$PW/.deps/wine/source" --work "$PW/.deps/wine-tools" --jobs "$jobs" --tools-only
+}
+
+step_hostwine() {
+    src_pw; src_wine
+    cd "$PW"
+    local build=$PW/.deps/wine-host/build source=$PW/.deps/wine-host/source
     tools/build_host_wine.sh --source "$PW/.deps/wine/source" --work "$PW/.deps/wine-host" --jobs "$jobs"
+    # The 32-bit CPUs' Windows halves, built against this Wine. The copy is made without
+    # .git, and both scripts check the Wine commit there: it points at the checkout it came
+    # from, which is at WINE_COMMIT.
+    [[ -e $source/.git ]] || echo "gitdir: $PW/.deps/wine/source/.git" > "$source/.git"
+    tools/build_wowprospero.sh --build "$build" --source "$source" --jobs "$jobs"
+    rm -rf "$PW/.deps/wow64native/x86_64-windows" "$PW/.deps/wow64native/x86_64-unix"
+    tools/build_wow64native.sh --source "$source" --build "$build" --output "$PW/.deps/wow64native"
 }
 
 step_wineps5() {
+    src_pw; src_wine; src_ffmpeg; src_framegen; src_vulkan; src_venv; need_sdk; need_native_tool
+    need tools; need radv
     cd "$PW"
+    local sdk=$PW/.deps/ps5-native-app-boilerplate/.deps/native/ps5-payload-sdk work=$PW/.deps/wine-ps5
     PATH="$B/venv/bin:$PATH" tools/build_wine_ps5.sh --source "$PW/.deps/wine/source" \
-        --host-tools "$PW/.deps/wine-host/build" --prx-foundation "$B/prx-foundation" \
+        --host-tools "$PW/.deps/wine-tools/build" --prx-foundation "$B/prx-foundation" \
         --radv "$B/PS5_Vulkan" --ffmpeg-source "$PW/.deps/ffmpeg/source" --framegen "$B/ps5-framegen" --jobs "$jobs"
     # The link is skipped, not failed, when something it needs is missing: check what it made.
     for module in ntdll win32u winevulkan libvulkan winedmo winegstreamer; do
-        [[ -f $PW/.deps/wine-ps5/prx/sce_module/$module.prx ]] ||
+        [[ -f $work/prx/sce_module/$module.prx ]] ||
             { echo "no $module.prx: see the prx section of .deps/wine-ps5/report.json" >&2; return 1; }
     done
-    grep -q '"framegen": "[0-9a-f]\{40\}"' "$PW/.deps/wine-ps5/report.json" ||
+    grep -q '"framegen": "[0-9a-f]\{40\}"' "$work/report.json" ||
         { echo "libvulkan.prx was linked without frame generation: see .deps/wine-ps5/prx/libvulkan.link.log" >&2; return 1; }
-    ls "$PW/.deps/wine-ps5/prx/sce_module"
+    ls "$work/prx/sce_module"
+    # The native WoW64 CPU's PS5 module, against this Wine, with the title's import stubs less
+    # the two WebKit libraries it must not import.
+    [[ -e $work/source/.git ]] || echo "gitdir: $PW/.deps/wine/source/.git" > "$work/source/.git"
+    local stubs=$B/title-stubs
+    rm -rf "$stubs" && mkdir -p "$stubs"
+    find "$sdk/target/lib" -maxdepth 1 -name '*.so' ! -name libkernel_web.so ! -name libScePosixForWebKit.so \
+        -exec cp {} "$stubs/" \;
+    rm -rf "$PW/.deps/wow64native/ps5"
+    tools/build_wow64native.sh --ps5-only --output "$PW/.deps/wow64native" --ps5-sdk "$sdk" --ps5-wine "$work" \
+        --ps5-ntdll "$work/prx/ntdll.shared.elf" --ps5-foundation "$B/prx-foundation" --ps5-stubs "$stubs"
 }
 
 step_dxvk() {
-    # 64- and 32-bit, each into $B/dxvk/x64 and $B/dxvk/x32, as DXVK's own releases lay them out;
-    # not again while the source (the release with patches/dxvk, step sources) is the same.
-    local arch out=$B/dxvk tree
-    tree=$(git -C "$B/dxvk-source" rev-parse HEAD)
-    if [[ -f $out/NAME && $(cat "$out/SOURCE" 2>/dev/null) == "$tree" ]]; then
-        echo "$DXVK_NAME" > "$out/NAME"   # the name may have changed without the source
-        echo "DXVK $(cat "$out/NAME") already built from $tree"
-        return 0
-    fi
+    # 64- and 32-bit, each into $B/dxvk/x64 and $B/dxvk/x32, as DXVK's own releases lay them out.
+    src_pw; src_dxvk; src_venv
+    local arch out=$B/dxvk
     rm -rf "$out"
     for arch in 64 32; do
         rm -rf "$B/dxvk-build.w$arch"
@@ -351,22 +453,16 @@ step_dxvk() {
         done
     done
     rm -f "$out"/x*/*.dll.a
-    echo "$tree" > "$out/SOURCE"
+    cp "$B/dxvk-source/LICENSE" "$out/LICENSE"
     echo "$DXVK_NAME" > "$out/NAME"
     ls -l "$out"/x64 "$out"/x32
 }
 
 step_vkd3d() {
     # 64- and 32-bit into $B/vkd3d/vkd3d-proton-<version>.tar.zst, laid out as VKD3D-Proton's own
-    # releases are (its package-release.sh: x64/ and x86/); not again while the source (the
-    # release with patches/vkd3d-proton, step sources) is the same.
-    local arch out=$B/vkd3d tree stage
-    tree=$(git -C "$B/vkd3d-proton-source" rev-parse HEAD)
-    if [[ -f $out/vkd3d-proton-$VKD3D_VERSION.tar.zst && $(cat "$out/SOURCE" 2>/dev/null) == "$tree" ]]; then
-        echo "$VKD3D_NAME" > "$out/NAME"   # the name may have changed without the source
-        echo "VKD3D-Proton $(cat "$out/NAME") already built from $tree"
-        return 0
-    fi
+    # releases are (its package-release.sh: x64/ and x86/).
+    src_pw; src_vkd3d; src_venv
+    local arch out=$B/vkd3d stage
     rm -rf "$out"
     stage=$out/vkd3d-proton-$VKD3D_VERSION
     for arch in 64 86; do
@@ -380,37 +476,21 @@ step_vkd3d() {
         done
     done
     tar -C "$out" --sort=name --owner=0 --group=0 --numeric-owner --mtime=2026-10-22 \
-        -c "vkd3d-proton-$VKD3D_VERSION" | zstd -q -19 -o "$out/vkd3d-proton-$VKD3D_VERSION.tar.zst"
+        -c "vkd3d-proton-$VKD3D_VERSION" | zstd -q -19 -T0 -o "$out/vkd3d-proton-$VKD3D_VERSION.tar.zst"
     rm -rf "$stage"
-    echo "$tree" > "$out/SOURCE"
     echo "$VKD3D_NAME" > "$out/NAME"
     ls -l "$out"
 }
 
-step_cpu() {
-    cd "$PW"
-    local build=$PW/.deps/wine-host/build sdk=$PW/.deps/ps5-native-app-boilerplate/.deps/native/ps5-payload-sdk tree
-    # The two Wine copies are made without .git, and both scripts check the Wine commit there:
-    # each copy points at the checkout it came from, which is at WINE_COMMIT.
-    for tree in "$PW/.deps/wine-host/source" "$PW/.deps/wine-ps5/source"; do
-        [[ -e $tree/.git ]] || echo "gitdir: $PW/.deps/wine/source/.git" > "$tree/.git"
-    done
-    tools/build_wowprospero.sh --build "$build" --source "$PW/.deps/wine-host/source" --jobs "$jobs"
-    # The title's import stubs, less the two WebKit libraries the native CPU must not import.
-    local stubs=$B/title-stubs
-    rm -rf "$stubs" && mkdir -p "$stubs"
-    find "$sdk/target/lib" -maxdepth 1 -name '*.so' ! -name libkernel_web.so ! -name libScePosixForWebKit.so \
-        -exec cp {} "$stubs/" \;
-    tools/build_wow64native.sh --source "$PW/.deps/wine-host/source" --build "$build" \
-        --output "$PW/.deps/wow64native" --ps5-sdk "$sdk" --ps5-wine "$PW/.deps/wine-ps5" \
-        --ps5-ntdll "$PW/.deps/wine-ps5/prx/ntdll.shared.elf" --ps5-foundation "$B/prx-foundation" \
-        --ps5-stubs "$stubs"
-}
-
 step_zink() {
+    src_pw; src_zink; src_venv
     cd "$PW"
     local llvm
     llvm=$(value tools/build_mesa_zink.sh LLVM_MINGW_VERSION)
+    # Its compiler, as tools/build_mesa_zink.sh pins it.
+    download "$B/downloads/llvm-mingw-$llvm-ubuntu-22.04-x86_64.tar.xz" \
+        "https://github.com/mstorsjo/llvm-mingw/releases/download/${llvm%-ucrt}/llvm-mingw-$llvm-ubuntu-22.04-x86_64.tar.xz" \
+        "$(value tools/build_mesa_zink.sh LLVM_MINGW_SHA256)"
     # Its own memory note: the release link wants about 8 GiB a job.
     MESON=$B/venv/bin/meson PATH="$B/venv/bin:$PATH" bash tools/build_mesa_zink.sh --work "$B/mesa-zink" \
         --mesa "$B/mesa-zink-source" --llvm-mingw "$B/downloads/llvm-mingw-$llvm-ubuntu-22.04-x86_64.tar.xz" \
@@ -419,7 +499,10 @@ step_zink() {
 }
 
 step_package() {
+    src_pw
+    need title; need hostwine; need wineps5; need zink
     cd "$PW"
+    rm -rf "$B/package"
     tools/package_release.sh --title "dist/$TITLE" --wine-ps5 .deps/wine-ps5 \
         --host-wine .deps/wine-host/install/usr \
         --cpu-dll .deps/wine-host/build/dlls/wowprospero/x86_64-windows/wowprospero.dll \
@@ -428,7 +511,10 @@ step_package() {
 }
 
 step_app() {
+    src_pw; src_forwarder; src_mono; src_mono_source; src_fonts
+    need hostwine; need dxvk; need vkd3d
     local app=$release/$TITLE
+    [[ -d $B/package/PPSA99995 ]] || { echo "build.sh: package is not built: run tools/build.sh package first" >&2; return 1; }
     rm -rf "$app" "$release/$TITLE.zip"
     cp -a "$B/package/PPSA99995" "$app"
     # Built from a local FreeType copy (PROSPERO_FREETYPE_TARBALL): SOURCES.txt names it, as PARTS.txt does.
@@ -469,7 +555,7 @@ EOF_SOURCES
     # DXVK and VKD3D-Proton by name: a game installed before either changed gets both again.
     printf '%s vkd3d-proton-%s\n' "$(cat "$B/dxvk/NAME")" "$(cat "$B/vkd3d/NAME")" > "$app/pc5/dxvk.txt"
     mkdir -p "$app/LICENSES/dxvk" "$app/LICENSES/wine-mono"
-    cp "$B/dxvk-source/LICENSE" "$app/LICENSES/dxvk/LICENSE"
+    cp "$B/dxvk/LICENSE" "$app/LICENSES/dxvk/LICENSE"
     cp "$B/downloads/wine-mono-$MONO_VERSION-COPYING" "$app/LICENSES/wine-mono/COPYING"
     # The fonts, beside Wine's own: Wine loads every font in that folder for every game.
     local fonts=$app/win/wine/share/wine/fonts unpacked=$B/fonts-liberation
@@ -497,10 +583,15 @@ EOF_SOURCES
             { echo "build.sh: $dll lost Wine's builtin mark" >&2; return 1; }
     done < <(find "$app" -type f \( -name 'xaudio2_*.dll' -o -name 'xactengine*.dll' \) -print0)
     python3 "$here/tools/make-app.py" "$app" "$release/$TITLE.zip" --repo "$here" --pw "$PW"
+    # Wine Mono's source (300 MB) is released beside the app, as it came: a file of its own.
+    ln -f "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$release/" 2>/dev/null ||
+        cp "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$release/"
 }
 
 step_bundle() {
     # Every part at the commit it was built from, as the build fetched it, in one archive.
+    step_sources
+    need radv
     local stage=$B/bundle/PPSA11018-sources out=$release/$TITLE-sources.tar.xz zink=$PW/tools/build_mesa_zink.sh
     rm -rf "$B/bundle" && mkdir -p "$stage"
     part() { # name repo commit [what]
@@ -518,7 +609,7 @@ step_bundle() {
         printf '%-28s %s\n' "PC5/" "https://github.com/bornaradusin/PC5 (this build's own folder)" >> "$stage/PARTS.txt"
     fi
     part prospero-win "$PW" HEAD "prospero-win v0.2.0 with PC5's patch and title/ (git log names them)"
-    part wine "$PW/.deps/wine/source" "$(sed -n 's/^WINE_COMMIT=//p' "$PW/tools/build_wine_ps5.sh")" "$WINE_URL"
+    part wine "$PW/.deps/wine/source" "$(wine_commit)" "$WINE_URL"
     part ps5-native-app-boilerplate "$PW/.deps/ps5-native-app-boilerplate" "$(pin "$PW/tools/build_native.sh" pin)" "$BOILERPLATE_URL"
     part prx-foundation "$B/prx-foundation" "$(pin "$PW/tools/build_wine_ps5.sh" MODULE_EXPORTS_COMMIT)" "$BOILERPLATE_URL"
     part ffmpeg "$PW/.deps/ffmpeg/source" "$(pin "$PW/tools/build_ffmpeg_ps5.sh" FFMPEG_COMMIT)" \
@@ -539,7 +630,7 @@ step_bundle() {
     printf '%-28s %s at %s (tag v%s), with its submodules and PC5'"'"'s patches/vkd3d-proton applied\n' \
         "vkd3d-proton/" "$VKD3D_SOURCE_URL" "$VKD3D_SOURCE_COMMIT" "$VKD3D_VERSION" >> "$stage/PARTS.txt"
     mkdir -p "$stage/freetype"
-    cp -a "$PW/.deps/wine-ps5/freetype/src/." "$stage/freetype/"
+    cp -a "$B/freetype-src/." "$stage/freetype/"
     local ft_from="its release archive"
     # A local copy in place of the release archive (PROSPERO_FREETYPE_TARBALL): named as it is.
     [[ -n ${PROSPERO_FREETYPE_TARBALL:-} ]] &&
@@ -549,9 +640,6 @@ step_bundle() {
     cp -a "$B/PS5_Vulkan/.deps/work/radv-src/subprojects/"zlib-*/. "$stage/zlib/"
     printf '%-28s %s\n' "zlib/" "zlib, the subproject RADV's shader cache was built with" >> "$stage/PARTS.txt"
     cp "$B/downloads/mbedtls-$MBEDTLS_VERSION.tar.bz2" "$stage/"
-    # Wine Mono's source (300 MB) is released beside this archive, as it came: a file of its own.
-    ln -f "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$release/" 2>/dev/null ||
-        cp "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$release/"
     printf '%-28s %s (the source of the app'"'"'s pc5/mono, Wine Mono %s: released beside this archive)\n' \
         "wine-mono-$MONO_VERSION-src.tar.xz" "$MONO_SOURCE_URL" "$MONO_VERSION" >> "$stage/PARTS.txt"
     printf '%-28s %s\n' "mbedtls-$MBEDTLS_VERSION.tar.bz2" "$MBEDTLS_URL" >> "$stage/PARTS.txt"
@@ -561,18 +649,213 @@ step_bundle() {
         "dxvk/" "$DXVK_URL" "$DXVK_COMMIT" >> "$stage/PARTS.txt"
     printf 'PC5/README.md says how to build the app from these with PC5/tools/build.sh.\n' >> "$stage/PARTS.txt"
     rm -f "$out" "$out.part"
+    # xz on every CPU, in the 24 MiB blocks it used on two (three times -6's dictionary).
     tar -C "$B/bundle" --sort=name --owner=0 --group=0 --numeric-owner --mtime=2026-10-22 -cf - PPSA11018-sources |
-        xz -6 -T2 > "$out.part"
+        xz -6 -T0 --block-size=$((24 << 20)) > "$out.part"
     mv "$out.part" "$out"
     rm -rf "$B/bundle"
     ls -l "$out"
 }
 
+# ---- keys, paths and the work kept --------------------------------------------------
+
+# A file's or a folder's id in prospero-win as patched (git's own hash of its content).
+pwid() { git -C "$PW" rev-parse "HEAD:$1"; }
+# The patches in one of PC5's patch folders.
+patches_id() { cat "$here/patches/$1"/*.patch | sha256sum | cut -c1-64; }
+key_of() { # piece
+    local hash
+    case $1 in
+    # Zink as GitHub's build has kept it since 1.6: Mesa and llvm-mingw as prospero-win pins them.
+    zink) echo "zink-$(cat "$PW/tools/build_mesa_zink.sh" "$PW/tools/mesa_zink_manifest.py" | sha256sum | cut -c1-16)"; return ;;
+    title) hash=$(printf '%s\n' "$(git -C "$PW" rev-parse 'HEAD^{tree}')" "$BOILERPLATE_URL" "$LAPY_URL" "$LAPY_COMMIT" \
+                  "$MBEDTLS_VERSION" "$(declare -f step_title need_sdk)") ;;
+    radv) hash=$(printf '%s\n' "$VULKAN_COMMIT" "$(patches_id radv)" "$(pwid tools/mesa_zink_requirements.txt)" \
+                 "$(declare -f step_radv)") ;;
+    tools) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(declare -f step_tools)") ;;
+    hostwine) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(declare -f step_hostwine)") ;;
+    wineps5) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(key_of radv)" "$(key_of tools)" \
+                    "$BOILERPLATE_URL" "$(declare -f step_wineps5 need_sdk need_native_tool)") ;;
+    dxvk) hash=$(printf '%s\n' "$DXVK_URL" "$DXVK_COMMIT" "$DXVK_NAME" "$(patches_id dxvk)" \
+                 "$(pwid tools/mesa_zink_requirements.txt)" "$(declare -f step_dxvk)") ;;
+    vkd3d) hash=$(printf '%s\n' "$VKD3D_SOURCE_URL" "$VKD3D_SOURCE_COMMIT" "$VKD3D_VERSION" "$VKD3D_NAME" \
+                  "$(patches_id vkd3d-proton)" "$(pwid tools/mesa_zink_requirements.txt)" "$(declare -f step_vkd3d)") ;;
+    *) echo "build.sh: $1 has no key (pieces with one: $KEYED)" >&2; return 2 ;;
+    esac
+    echo "$1-$(printf '%s\n' "$hash" "$(cat "$here/tools/packages.txt")" | sha256sum | cut -c1-16)"
+}
+# What a piece leaves for the pieces after it: GitHub's build keeps these under its key.
+paths_of() { # piece
+    local w=$PW/.deps/wine-ps5
+    case $1 in
+    title) printf '%s\n' "$PW/dist/$TITLE" "$PW/build/native/lapy-helper-release.json" ;;
+    radv) printf '%s\n' "$B/PS5_Vulkan/.deps/native" "$B/PS5_Vulkan/.deps/work/radv-src/subprojects/zlib-*" ;;
+    tools) printf '%s\n' "$PW/.deps/wine-tools/build" ;;
+    hostwine) printf '%s\n' "$PW/.deps/wine-host/install" "$PW/.deps/wine-host/build/dlls/wowprospero" \
+                  "$PW/.deps/wow64native/x86_64-windows" "$PW/.deps/wow64native/x86_64-unix" ;;
+    # The modules, and the licence texts packaging takes from Wine's and FreeType's sources.
+    wineps5) printf '%s\n' "$w/prx" "$w/pe" "$w/report.json" "$w/source/LICENSE" "$w/source/COPYING.LIB" \
+                 "$w/source/AUTHORS" "$w/source/NOTICES.md" "$w/source/libs/*/LICENSE*" "$w/source/libs/*/COPYING*" \
+                 "$w/source/libs/*/COPYRIGHT*" "$w/freetype/src/LICENSE.TXT" "$w/freetype/src/docs/FTL.TXT" \
+                 "$PW/.deps/wow64native/ps5" ;;
+    dxvk) printf '%s\n' "$B/dxvk" ;;
+    vkd3d) printf '%s\n' "$B/vkd3d" ;;
+    zink) printf '%s\n' "$B/mesa-zink/artifacts" ;;
+    *) echo "build.sh: $1 leaves nothing kept (pieces that do: $KEYED)" >&2; return 2 ;;
+    esac
+}
+# What a piece keeps to build again incrementally: Wine's trees and objects, which make
+# rebuilds only where a change of the series reaches (the scripts keep a file that is the
+# same as before at its old time). Wine's tools too: everything the PS5 Wine generates and
+# links depends on them, so a tool made again, even the same, would make it all again.
+work_of() { # piece
+    case $1 in
+    tools) printf '%s\n' "$PW/.deps/wine-tools/source" "$PW/.deps/wine-tools/build" ;;
+    hostwine) printf '%s\n' "$PW/.deps/wine-host/source" "$PW/.deps/wine-host/build" ;;
+    wineps5) printf '%s\n' "$PW/.deps/wine-ps5/source" "$PW/.deps/wine-ps5/build" "$PW/.deps/wine-ps5/ffmpeg" \
+                 "$PW/.deps/wine-ps5/freetype" ;;
+    *) ;;
+    esac
+}
+# The compilers installed: work made with others is not built on.
+toolchain() {
+    { dpkg-query -W -f '${Package} ${Version}\n' 'gcc*' 'g++*' 'binutils*' 'clang*' 'lld*' 'llvm*' 'mingw-w64*' \
+        2>/dev/null || true; } | awk 'NF == 2' | sort | sha256sum | cut -c1-16
+}
+# prospero-win as patched, quietly: the keys read it.
+quiet_pw() {
+    src_pw > "$B/logs/prospero-win.log" 2>&1 || { tail -25 "$B/logs/prospero-win.log" >&2; exit 1; }
+}
+
+case ${1:-} in
+key) shift; quiet_pw; for piece; do key_of "$piece"; done; exit 0 ;;
+paths) shift; for piece; do paths_of "$piece"; done; exit 0 ;;
+work) shift; for piece; do work_of "$piece"; done; exit 0 ;;
+toolchain) toolchain; exit 0 ;;
+ci)
+    quiet_pw
+    for piece in $KEYED; do
+        echo "$piece=$(key_of "$piece")"
+        printf '%s_paths<<EOF_PATHS\n%s\nEOF_PATHS\n' "$piece" "$(paths_of "$piece")"
+        printf '%s_work<<EOF_PATHS\n%s\nEOF_PATHS\n' "$piece" "$(work_of "$piece")"
+    done
+    echo "version=$(sed -n 's/^#define PC5_VERSION "\(.*\)"/\1/p' "$here/title/pc5.h")"
+    exit 0 ;;
+esac
+
+# ---- the build ------------------------------------------------------------------------
+steps=" ${*:-$STEPS} "
+for s in $steps; do [[ " $STEPS " == *" $s "* ]] || { echo "unknown piece: $s (pieces: $STEPS; commands: $COMMANDS)" >&2; exit 2; }; done
+want() { [[ $steps == *" $1 "* ]]; }
+# The packages, but for fetching and archiving the sources, which need only git, curl and xz.
+if [[ $steps != " sources " && $steps != " bundle " && $steps != " sources bundle " ]]; then
+    missing=$(for package in $(cat "$here/tools/packages.txt"); do dpkg -s "$package" >/dev/null 2>&1 || echo "$package"; done)
+    [[ -z $missing ]] || { echo "build.sh: missing packages: $(echo $missing). Install them with: apt-get install -y \$(cat tools/packages.txt)" >&2; exit 2; }
+    # Clang 18 for every PS5 build: the payload SDK otherwise takes the newest LLVM it finds
+    # (Debian 13's default is 19), and the boilerplate's wrapper wants 18.
+    export LLVM_CONFIG=/usr/lib/llvm-18/bin/llvm-config PS5_CLANG=/usr/lib/llvm-18/bin/clang
+    [[ -x $LLVM_CONFIG && -x $PS5_CLANG ]] || { echo "build.sh: no Clang 18 in /usr/lib/llvm-18 (packages clang-18, llvm-18)" >&2; exit 2; }
+fi
+mkdir -p "$release"
+
+# What a piece is doing now, for its line a minute: the stage it named last (stage), and the
+# count its build tool keeps where it keeps one: ninja's own, or the files Wine's make has
+# compiled out of the objects its makefile names (the share only when it started from none).
+stage() { echo "-- $*"; }
+newer() { [[ -f $1 && $(stat -c %Y "$1") -ge $started_at ]]; }
+wine_count() { # work dir
+    local made total
+    made=$(grep -c -- ' -c -o ' "$1/make.log" 2>/dev/null || true)
+    total=$(grep -c '^[^ #][^ ]*\.o:' "$1/build/Makefile" 2>/dev/null || true)
+    last=$(grep -- ' -c -o ' "$1/make.log" 2>/dev/null | tail -1 | sed -n 's/.* -c -o \([^ ]*\).*/\1/p' | cut -d/ -f1-2)
+    if [[ ${fresh_build:-0} == 1 && ${total:-0} -gt 0 ]]; then
+        printf 'compiling %6d of %d files (%d%%)  %s' "$made" "$total" $(( made * 100 / total )) "$last"
+    else
+        printf 'compiling %6d files  %s' "$made" "$last"
+    fi
+}
+ninja_count() { # log...
+    local log line
+    log=$(ls -t "$@" 2>/dev/null | head -1)
+    line=$(grep -ao '^\[[0-9]*/[0-9]*\]' "$log" 2>/dev/null | tail -1 | tr -d '[]')
+    [[ -n $line ]] && printf 'ninja %d of %d (%d%%)' "${line%/*}" "${line#*/}" $(( ${line%/*} * 100 / ${line#*/} ))
+}
+doing() { # piece
+    local log=$B/logs/$1.log now w
+    now=$(grep -a '^-- ' "$log" 2>/dev/null | tail -1 | cut -c4-)
+    case $1 in
+    tools|hostwine)
+        [[ $1 == tools ]] && w=$PW/.deps/wine-tools || w=$PW/.deps/wine-host
+        if newer "$w/install.log"; then now=installing
+        elif newer "$w/make.log"; then now=$(wine_count "$w")
+        elif newer "$w/configure.log"; then now=configuring
+        fi ;;
+    wineps5)
+        w=$PW/.deps/wine-ps5
+        if [[ $now == "Wine for the PS5" ]]; then
+            if newer "$w/make.log" && ! grep -q '\.prx: built=' "$log"; then now="Wine $(wine_count "$w")"
+            elif grep -q '\.prx: built=' "$log"; then now="linking $(grep -a '\.prx: built=' "$log" | tail -1 | cut -d: -f1)"
+            elif newer "$w/configure.log"; then now="Wine: configuring"
+            elif newer "$w/ffmpeg/make.log"; then now="FFmpeg: compiling $(grep -c '^CC' "$w/ffmpeg/make.log") files"
+            fi
+        fi ;;
+    radv) now="${now:-RADV}  $(ninja_count "$log" "$B"/PS5_Vulkan/.deps/work/*.log)" ;;
+    dxvk|vkd3d|zink) now="${now:-$1}  $(ninja_count "$log")" ;;
+    esac
+    echo "${now:-starting}"
+}
+# One piece: its output in its log, a line a minute on screen with what it is doing, and its
+# log's end when it fails.
+run() { # piece
+    local step=$1 started=$SECONDS status=0 pid minutes=0
+    started_at=$(date +%s) fresh_build=0
+    # Wine for this computer from nothing: its makefile's objects are what it will compile.
+    [[ $step != hostwine || -n $(find "$PW/.deps/wine-host/build" -name '*.o' -print -quit 2>/dev/null) ]] || fresh_build=1
+    printf '==> %-9s started %s\n' "$step" "$(date +%H:%M)"
+    # In a subshell of its own, so a failing command stops the piece (set -e) and a cd stays in it.
+    ( set -euo pipefail; "step_$step" ) > "$B/logs/$step.log" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        if (( SECONDS - started >= (minutes + 1) * 60 )) && kill -0 "$pid" 2>/dev/null; then
+            minutes=$(( (SECONDS - started) / 60 ))
+            printf '    %3d min  %s\n' "$minutes" "$(doing "$step" | cut -c1-110)"
+        fi
+    done
+    wait "$pid" || status=$?
+    if (( status == 0 )); then
+        printf '==> %-9s done (%d min)\n' "$step" $(( (SECONDS - started + 59) / 60 ))
+    else
+        printf '==> %-9s FAILED, the end of %s/logs/%s.log:\n' "$step" "$B" "$step"
+        tail -25 "$B/logs/$step.log"
+        exit 1
+    fi
+}
+# Whether a piece was built here from the key it has now, with what it leaves still there.
+current() { # piece key
+    local path
+    [[ $(cat "$B/stamps/$1" 2>/dev/null) == "$2" ]] || return 1
+    for path in $(paths_of "$1"); do compgen -G "$path" >/dev/null || return 1; done
+}
+
 for s in $STEPS; do
-    if want "$s"; then run "$s" "step_$s"; fi
+    want "$s" || continue
+    if [[ " $KEYED " == *" $s "* ]]; then
+        quiet_pw
+        key=$(key_of "$s")
+        if current "$s" "$key"; then
+            printf '==> %-9s up to date (%s)\n' "$s" "$key"
+            continue
+        fi
+        rm -f "$B/stamps/$s"
+        run "$s"
+        echo "$key" > "$B/stamps/$s"
+    else
+        run "$s"
+    fi
 done
 for made in "$TITLE.zip" "$TITLE-sources.tar.xz" "wine-mono-$MONO_VERSION-src.tar.xz"; do
-    if { [[ $made == *.zip ]] && want app; } || { [[ $made == *.xz ]] && want bundle; }; then
+    if { [[ $made != "$TITLE-sources.tar.xz" ]] && want app; } || { [[ $made == "$TITLE-sources.tar.xz" ]] && want bundle; }; then
         echo "==> $release/$made: $(du -h "$release/$made" | cut -f1), SHA-256 $(sha256sum "$release/$made" | cut -c1-16)…"
     fi
 done
