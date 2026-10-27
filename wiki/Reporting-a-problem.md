@@ -88,19 +88,7 @@ From PC5 1.3.0, when a game crashes its log has a crash report: lines starting w
 
 ## A more detailed log, for one game
 
-Sometimes the log doesn't show why a game stops, and the issue's answer asks for a more detailed one. Wine, which runs the games, can write more into the log, for one game:
-
-1. On the console, open the game's folder of notes, `/data/prospero-win/prefixes/<game>/pc5/` (`<game>` is the game's id, as for [launch options](Launch-options)).
-2. Make a text file called `winedebug.txt` there, and write in it the line you were asked for, for example:
-
-   ```text
-   err+all,+loaddll,+process,+seh,+mmdevapi
-   ```
-
-3. Start the game, and attach its log as usual.
-4. Delete `winedebug.txt` afterwards: a detailed log can make the game slower.
-
-The line takes the place of PC5's own (`err+all,+loaddll,+process`), so keep those three at its start. It can only have letters, digits and `_ + - , = .`, 127 characters at most; PC5 leaves out a line with anything else. Lines starting with `#` or `;` are notes.
+Sometimes the log doesn't show why a game stops, and the issue's answer asks for a more detailed one, or for the game to be started another way. [Logs and debugging](Logs-and-debugging) says how, with the lines most often asked for.
 
 ## Opening the issue
 

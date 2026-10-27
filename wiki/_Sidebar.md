@@ -19,6 +19,7 @@
 **Help**
 - [Troubleshooting](Troubleshooting)
 - [Reporting a problem](Reporting-a-problem)
+- [Logs and debugging](Logs-and-debugging)
 
 **Links**
 - [Game compatibility list](Game-compatibility)

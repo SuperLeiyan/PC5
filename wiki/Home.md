@@ -33,6 +33,7 @@ PC5 contains no games and downloads none. You install the games you own.
 | [Troubleshooting](Troubleshooting) | PC5's messages, and what to do about them |
 | [FAQ](FAQ) | Short answers to common questions |
 | [Reporting a problem](Reporting-a-problem) | How to report a problem, and which log to attach |
+| [Logs and debugging](Logs-and-debugging) | Where the logs are, a more detailed log for one game, starting a game another way |
 
 ## What you need
 
