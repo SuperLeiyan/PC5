@@ -158,7 +158,7 @@ Built from <https://github.com/bornaradusin/PC5> at commit {repo_commit}:
   `sce_module/libc.prx`, <https://github.com/heydemoura/ps5-forwarder-format>, GNU GPL 3.0
   or later), unchanged, which PC5 copies into each home screen tile it makes; its library,
   psfwd, is built into the eboot.
-- The icon and the Home background are drawn by `art/make-art.py` in that repository.
+- The icon and the Home background are made by `art/make-art.py` in that repository, from the pictures beside it.
 - `pc5/sounds`: the startup sounds to choose from (`art/sounds` in that repository), played
   on the controller's speaker when PC5 is opened.
 

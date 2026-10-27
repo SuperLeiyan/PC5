@@ -116,7 +116,7 @@ against the size and SHA-256 GitHub lists for it, so that name must stay.
   a message saying what it does.
 - `patches/dxvk/` and `patches/radv/`: PC5's patches to DXVK and RADV.
 - `tools/`: the build, the Windows template, the font atlas and the app; `art/make-art.py`
-  draws the icon and the Home background.
+  makes the icon and the Home background from the pictures beside it.
 
 ## Credits and licence
 

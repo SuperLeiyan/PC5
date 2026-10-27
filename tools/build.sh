@@ -546,6 +546,8 @@ EOF_SOURCES
     fi
     stage "art, the tiles' program, fonts and sounds"
     cp "$here/sce_sys/param.json" "$here/art/icon0.png" "$here/art/pic0.png" "$app/sce_sys/"
+    # The music the home screen plays while PC5's tile is chosen (ATRAC9), when there is one.
+    if [[ -f $here/art/snd0.at9 ]]; then cp "$here/art/snd0.at9" "$app/sce_sys/"; fi
     mkdir -p "$app/pc5"
     # The home screen tiles' program, which PC5 copies into each tile (pc5_home.c), and its licence.
     mkdir -p "$app/pc5/forwarder/sce_module" "$app/LICENSES/ps5-forwarder-format"
