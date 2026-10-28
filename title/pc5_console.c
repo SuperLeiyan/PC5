@@ -432,7 +432,7 @@ void pc5_console_run(const Pc5Console *config)
     plain_log(line);
     {
         /* What an update left, before anything reads the app's files. */
-        Pc5UpgradeConfig upgrade = { { NULL, NULL, NULL }, config->app, config->root, NULL, "/user", log_line, NULL };
+        Pc5UpgradeConfig upgrade = { { NULL, NULL, NULL, NULL }, config->app, config->root, NULL, "/user", log_line, NULL };
         pc5_upgrade_tidy(&upgrade, finished, sizeof(finished));
     }
 

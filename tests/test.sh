@@ -98,7 +98,9 @@ fi
 
 # Clang 18, as the console build uses it, finds nothing to warn about either.
 for file in title/pc5*.c; do
-    case $file in *_ps5.c|*console.c) continue ;; esac   # the console's own: built by tools/build.sh
+    # The console's own system calls (FreeBSD headers): built by tools/build.sh only. pc5_console.c,
+    # the rest of the console's side, is checked here too, as the console build's warnings stop it.
+    case $file in *_ps5.c) continue ;; esac
     clang-18 "${common[@]}" -I"$mbedtls/include" "$config" -O2 -fsyntax-only "$file"
 done
 
