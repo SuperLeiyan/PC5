@@ -46,7 +46,7 @@ When something doesn't work, PC5 usually says why in a message. This page lists 
 | The game stops for seconds at a time, then carries on (or carries on after the PS button) | Turn on **△ › Graphics › CPU sharing**: the game's threads then take turns on the console's CPUs, as on a PC. See [Graphics](Playing-games#graphics). |
 | The game runs below 30 fps with frame generation on | Frame generation only makes frames in between while the game keeps 30 fps. Below that, frames are shown as they come. See [Frame generation](Playing-games#frame-generation). |
 | The overlay is missing a line | A line the console can't read is left out. |
-| The overlay is too small to read | **Settings › Overlay › Size › Large** shows the lines twice the size, two at a time; **Extra large** twice as big again. |
+| The overlay is too small to read | **Settings › Overlay › Size › Large** shows the lines twice the size, two at a time; **Extra large** every line at once, twice the size. |
 | A Direct3D game crashes, shows black or draws wrongly | Try another **△ › Graphics › Graphics API**: **WineD3D** or **WineD3D on Vulkan**, or **Wine's VKD3D** for a Direct3D 12 game. See [Graphics API](Playing-games#graphics-api). |
 | The light bar or triggers don't follow PC5's settings | In **DualSense** mode, a game that sets its own light bar or trigger effects gets them instead. |
 | I can't leave the game | Hold the **touchpad** and **Options** together for a full two seconds. The controller buzzes when the hold is taken. |

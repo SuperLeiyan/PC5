@@ -2032,7 +2032,7 @@ static void test_settings(void)
     write_text(file, "fps = on\noverlay_size = extra-large\n");
     CHECK(!pc5_settings_load(dir, &back) && back.overlay_size == PC5_OVERLAY_EXTRA_LARGE && !pc5_settings_save(dir, &back) &&
           file_holds_text(file, "overlay_size = extra-large\n") &&
-          pc5_game_overlay_lines(&back) == (PW_PC5_HUD_FPS | PW_PC5_HUD_LARGE | PW_PC5_HUD_DOUBLE) &&
+          pc5_game_overlay_lines(&back) == (PW_PC5_HUD_FPS | PW_PC5_HUD_DOUBLE) &&
           !strcmp(pc5_overlay_size_name(back.overlay_size), "Extra large"), "Size: Extra large, read and saved");
     write_text(file, "fps = on\noverlay_size = giant\n");
     CHECK(!pc5_settings_load(dir, &back) && back.overlay_size == PC5_OVERLAY_NORMAL, "a size PC5 doesn't know: Normal");
@@ -4336,6 +4336,7 @@ static void test_game(const char *fonts_path)
             label += pad_seen.cursor_image[i] == 0xff9aa3afu;
         }
         CHECK(white > 150 && label > 100 && !pad_seen.cursor_image[60 * 64 + 32], "its lines drawn: %d %d", white, label);
+        int normal_labels = label;
         /* Large: two of the five lines at a time, their values twice the size, the next two every 3
          * seconds, then RAM alone, then the first two again. */
         game.settings.overlay_size = PC5_OVERLAY_LARGE;
@@ -4357,15 +4358,22 @@ static void test_game(const char *fonts_path)
               "taking turns: %d", large_white, white, turned);
         CHECK(pc5_game_overlay_lines(&game.settings) & PW_PC5_HUD_LARGE, "the large flag goes with the lines");
         CHECK(!pad_seen.magnify_calls, "Large: the cursor isn't magnified");
-        /* Extra large: the same, the cursor magnified once (twice the size by the display), placed by
-         * its 128x128 in the corner; refused, placed again by its own size, and not asked again. */
+        /* Extra large: every line at once (not two taking turns), the cursor magnified once (twice
+         * the size by the display), placed by its 128x128 in the corner; refused, placed again by
+         * its own size, and not asked again. */
         game.settings.overlay_size = PC5_OVERLAY_EXTRA_LARGE;
         pad_seen.cursors = 0;
         for (int second = 9; second < 12; second++) pc5_game_hud(&game, 3, 120 + (uint64_t)second * 30, 64000 + (uint64_t)second * 1000);
         CHECK(pad_seen.magnify_calls == 1 && pad_seen.magnified == 1 && pad_seen.cursor_x == 1920 - 128 - 24,
               "extra large: magnified once, at %u,%u", pad_seen.cursor_x, pad_seen.cursor_y);
-        CHECK(1080 - 24 - pad_seen.cursor_y == 2 * 64 || 1080 - 24 - pad_seen.cursor_y == 2 * 34,
-              "extra large: a box twice its height: %u", 1080 - 24 - pad_seen.cursor_y);
+        {
+            int labels = 0;
+            for (int i = 0; i < 64 * 64; i++) labels += pad_seen.cursor_image[i] == 0xff9aa3afu;
+            CHECK(1080 - 24 - pad_seen.cursor_y == 2 * 51 && labels == normal_labels,
+                  "extra large: the five lines of Normal, twice the height: %u, %d label pixels of %d",
+                  1080 - 24 - pad_seen.cursor_y, labels, normal_labels);
+        }
+        CHECK(!(pc5_game_overlay_lines(&game.settings) & PW_PC5_HUD_LARGE), "extra large: no taking turns");
         game.settings.overlay_size = PC5_OVERLAY_LARGE;
         pc5_game_hud(&game, 3, 120 + 12 * 30, 64000 + 12 * 1000);
         CHECK(pad_seen.magnify_calls == 2 && pad_seen.magnified == 0 && pad_seen.cursor_x == 1920 - 64 - 24,

@@ -15,7 +15,7 @@ typedef enum Pc5Corner {
 typedef enum Pc5OverlaySize {
     PC5_OVERLAY_NORMAL,       /* every line at once, in small text */
     PC5_OVERLAY_LARGE,        /* twice the size, two lines at a time, taking turns */
-    PC5_OVERLAY_EXTRA_LARGE,  /* Large, shown at twice its size by the display (its cursor magnified) */
+    PC5_OVERLAY_EXTRA_LARGE,  /* every line at once, shown at twice the size by the display (its cursor magnified) */
     PC5_OVERLAY_SIZES
 } Pc5OverlaySize;
 

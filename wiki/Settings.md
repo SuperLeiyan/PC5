@@ -105,7 +105,7 @@ The overlay is a small box over every game, updated every second. Each line can 
 | SoC temperature | The console chip's temperature, in degrees Celsius |
 | Memory | The memory the game uses, of what it has, in GB |
 | Corner | Where the overlay sits: Top left, **Top right**, Bottom left or Bottom right |
-| Size | **Normal**: every line at once, in small text. **Large** (from 1.9.2): twice the size, readable from the sofa, two lines at a time, the next two every 3 seconds when more are on. The memory then shows the GB in use. **Extra large** (from 1.9.5): Large, shown twice as big again by the console (its overlay image magnified by the display), at no cost to the game. If the console refuses that, the overlay stays Large and the game's log says `PC5 overlay magnified=1 rc=…`. |
+| Size | **Normal**: every line at once, in small text. **Large** (from 1.9.2): twice the size, readable from the sofa, two lines at a time, the next two every 3 seconds when more are on. The memory then shows the GB in use. **Extra large** (from 1.9.5): every line at once, as Normal, shown at twice the size by the console (its overlay image magnified by the display), at no cost to the game; nothing takes turns. If the console refuses that, the overlay stays at Normal's size and the game's log says `PC5 overlay magnified=1 rc=…`. |
 
 All lines are **Off** by default. A line the console can't read is left out. With [frame generation](Playing-games#frame-generation) on, the FPS counts every frame shown, the made ones too.
 

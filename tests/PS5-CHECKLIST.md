@@ -354,7 +354,7 @@ controller's speaker.
 
 | # | Do | Expect | Expect in the log |
 | --- | --- | --- | --- |
-| 170 | Settings › Overlay: FPS and CPU on, Size › Extra large; start a game drawn by PC5 (Direct3D 9 through DXVK) | the overlay twice as big as Large, in its corner, not cut at the screen's edge | `PC5 overlay magnified=1 rc=0` |
+| 170 | Settings › Overlay: FPS and CPU on, Size › Extra large; start a game drawn by PC5 (Direct3D 9 through DXVK) | every line at once (no taking turns), twice Normal's size, in its corner, not cut at the screen's edge | `PC5 overlay magnified=1 rc=0` |
 | 171 | The same in a Vulkan or Direct3D 12 game | the same | `pw_pc5_hud: overlay magnified=1 rc=0` |
 | 172 | Each corner (Settings › Overlay › Corner) | the overlay fully on screen in each | |
 | 173 | Size back to Large, then Normal | its own size again | `magnified=0 rc=0` |

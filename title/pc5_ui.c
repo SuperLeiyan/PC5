@@ -1872,7 +1872,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
     case SR_OVERLAY_SIZE:
         *label = "Size";
         pc5_copy(about, about_size,
-                 set->overlay_size == PC5_OVERLAY_EXTRA_LARGE ? "Large, shown twice as big again by the console"
+                 set->overlay_size == PC5_OVERLAY_EXTRA_LARGE ? "Every line at once, twice the size, by the console"
                  : set->overlay_size == PC5_OVERLAY_LARGE     ? "Twice the size, two lines at a time, taking turns"
                                                               : "Every line at once, in small text");
         pc5_copy(value, value_size, pc5_overlay_size_name(set->overlay_size));

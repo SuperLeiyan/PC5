@@ -687,10 +687,11 @@ unsigned pc5_game_overlay_lines(const Pc5Settings *settings)
     unsigned lines = (settings->fps ? PW_PC5_HUD_FPS : 0u) | (settings->frame_time ? PW_PC5_HUD_FRAME_TIME : 0u) |
                      (settings->cpu_usage ? PW_PC5_HUD_CPU : 0u) | (settings->cpu_temperature ? PW_PC5_HUD_CPU_TEMP : 0u) |
                      (settings->soc_temperature ? PW_PC5_HUD_SOC_TEMP : 0u) | (settings->memory ? PW_PC5_HUD_MEMORY : 0u);
-    /* Large: the same lines, twice the size (pw_pc5_hud.h), only with a line to show; Extra
-     * large: that, shown at twice its size again by the display. */
+    /* Large: the same lines in glyphs twice the size, two at a time (pw_pc5_hud.h); Extra large:
+     * every line at once, the whole overlay shown at twice its size by the display. Only with a
+     * line to show. */
     if (!lines || settings->overlay_size == PC5_OVERLAY_NORMAL) return lines;
-    return lines | PW_PC5_HUD_LARGE | (settings->overlay_size == PC5_OVERLAY_EXTRA_LARGE ? PW_PC5_HUD_DOUBLE : 0u);
+    return lines | (settings->overlay_size == PC5_OVERLAY_EXTRA_LARGE ? PW_PC5_HUD_DOUBLE : PW_PC5_HUD_LARGE);
 }
 
 /* A sensor's temperature, -1 when it can't be read; *rc what the console said. */
