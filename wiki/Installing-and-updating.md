@@ -18,13 +18,15 @@ The first time, the library is empty. Press **Options** and choose **Game mainte
 
 When PC5 opens and a newer release is out on GitHub, it asks: **Update now** or **Later**. Later leaves it for **Settings › System › Update now**.
 
-1. Choose **Update now**. PC5 downloads the new `PPSA11018.zip` from the release, unpacks it and checks every file, then puts the new files in place of its own. A progress bar shows the download and the unpacking; **○** stops it until the files are put in place, and PC5 is then as it was.
+1. Choose **Update now**. PC5 downloads the new version from the release, unpacks it and checks every file, then puts the new files in place of its own. A progress bar shows the download and the unpacking; **○** stops it until the files are put in place, and PC5 is then as it was.
 2. When it says the new version is installed, press **✕** (**Restart PC5**). PC5 starts again as the new version.
 3. Check the version in **Settings › About PC5**.
 
+From 1.9.0, PC5 downloads only what changed since the release before, when it can: each release has, beside the whole app (`PPSA11018.zip`), an update zip (`PPSA11018-update.zip`) with only the files that differ from the release before it and the new release's list of its files. PC5 uses it when every other file of the new release is on the console as it was released (it checks each against its list, `pc5/manifest.txt`). Otherwise, for example when you skipped a version or a file of PC5's was changed, it downloads the whole app as before. The first update to 1.9.0 downloads the whole app, as PC5 1.8.8 doesn't know the update zip; from 1.9.0 to the next version on, an update is usually a small download. The size PC5 shows when it offers an update is the one it will download.
+
 PC5 1.7.0 closes instead of restarting, and the console then shows error CE-108255-1; the update is installed all the same, so just open PC5 again. From 1.8.0 on, PC5 restarts by itself.
 
-PC5 needs room for the download and its unpacked files on the drive it is installed on: about four times the size of the zip, freed again when it is done. It finds its own folder on the console's drives (in `homebrew`, `etaHEN/games` or at the top of a USB or extended drive). The folder stays where it is and only PC5's own files in it change; files you added at the top of the folder stay. If PC5 is on the console more than once, it asks you to delete the copy you don't use first. If something goes wrong before the new files are put in place, PC5 says why and stays as it was; if the console turns off while they are being put in place, PC5 finishes the job the next time it opens, and then restarts as the new version.
+PC5 needs room for the download and its unpacked files on the drive it is installed on: about four times the size of the zip it downloads, freed again when it is done. It finds its own folder on the console's drives (in `homebrew`, `etaHEN/games` or at the top of a USB or extended drive). The folder stays where it is and only PC5's own files in it change; files you added at the top of the folder stay. If PC5 is on the console more than once, it asks you to delete the copy you don't use first. If something goes wrong before the new files are put in place, PC5 says why and stays as it was; if the console turns off while they are being put in place, PC5 finishes the job the next time it opens, and then restarts as the new version.
 
 ### By hand
 

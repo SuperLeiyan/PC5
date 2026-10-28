@@ -291,3 +291,14 @@ controller's speaker.
 | 134 | A game that crashes, then keeps logging (its own crash handler, or a game with a `winedebug.txt`) for a minute or more | its `issue-…zip` has `…-crash.log` with Wine's `Unhandled …` line in it | |
 | 135 | Brian Lara International Cricket 2007: △ › Manage › Change program | ICC2007.exe first, HardwareSetup.exe after it | |
 | 136 | After a game crashed: △ on PC5's message, scan the code with a phone | GitHub's form **A game doesn't run** opens, its title, Game, Program, PC5 version, Firmware and What PC5 saw filled in | `PC5 report log=… link=…` |
+
+## Updates that download only what changed (1.9.0)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 137 | Update PC5 1.8.8 to 1.9.0 (Settings › System › Update now) | the download is the whole app's size (about 400 MB); 1.9.0 then has `pc5/manifest.txt` in its folder | `PC5 update using PPSA11018.zip size=…` |
+| 138 | With 1.9.0 installed and the next version published: open PC5 | "PC5 x.y.z is available" gives the update zip's size (the release's `PPSA11018-update.zip`), not the whole app's; Later: Settings › System | `PC5 update state=4 latest=… zip=1` |
+| 139 | Update now, let it finish, Restart PC5 | the download is about the update zip's size and quick; then "PC5 x.y.z is installed"; the new version in About PC5; games, saves and settings as before | `PC5 update version=… update_zip=…`, `PC5 update using PPSA11018-update.zip size=…`, `download rc=0 status=200 bytes=…` (the update zip's size), `PC5 update the update zip holds … of the release's … files; the rest are in place`, `placed=…`, `done` |
+| 140 | Update now, then ○ while the update zip downloads | it stops; PC5 is as it was; it doesn't go on to the whole app | `PC5 update stopped: Cancelled.` |
+| 141 | Put 1.9.0 back, change one of its files that the next version doesn't change (add a line to `LICENSE` over FTP), then Update now | the update zip is downloaded first, then the whole app; the update is installed and `LICENSE` is the release's again | `PC5 update can't use the update zip (1 files aren't in the update zip or on the console as it needs them); downloading the whole app`, then `PC5 update using PPSA11018.zip size=…` |
+| 142 | Put 1.9.0 back and delete its `pc5/manifest.txt`, then Update now | only the whole app is downloaded; the dialog gave the whole app's size | `PC5 update: PC5's folder has no list of its files (pc5/manifest.txt), so the whole app is downloaded` |

@@ -19,6 +19,9 @@ PC5 keeps everything where prospero-win keeps it, in `/data/prospero-win` on the
   logs/                                     session logs (see Reporting a problem)
 
 /data/homebrew/PPSA99…/                     a game's home screen tile
+
+PPSA11018/                                  the app (where you installed it)
+  pc5/manifest.txt                          the list of the app's files, for updates
 ```
 
 - `<game>` is the game's id: the name of its folder on the USB drive, in lower case, with spaces and other signs turned into dashes (`neon-drift`). The easiest way to find it is to look in `prefixes/` for the folder named like the game.
@@ -37,6 +40,7 @@ PC5 keeps everything where prospero-win keeps it, in `/data/prospero-win` on the
 | `sounds/` | Your own startup sounds. | Yes. See [Settings](Settings#startup-sound). |
 | `saves/<game>/` | A game's Windows (its saves, settings, registry and options) without the game, kept by **Keep saves** when it was uninstalled. Installing the game again can put it back. | Delete it in **Options › Game maintenance › Uninstall game**. See [Keeping a game's saves](Installing-games#keeping-a-games-saves). |
 | `pc5/settings.txt` | PC5's [Settings](Settings). | Change them in PC5. A missing file, or a line PC5 doesn't know, gives the default. |
+| `PPSA11018/pc5/manifest.txt` | In the app's own folder (from 1.9.0): every file of the release, with its size and SHA-256. PC5's updater compares it with the new release's list to download only the files that changed. | No. If it is missing or a file differs from it, PC5 downloads the whole app when it updates. |
 | `logs/` | Session logs: `session-N.log` while running, then one `issue-….zip` or `log-….zip` per session (with the game's own logs and crash files), kept for seven days. | Copy the zip off to [report a problem](Reporting-a-problem). |
 
 ## Backing up a game's saves

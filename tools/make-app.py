@@ -9,9 +9,20 @@ Windows. Its PC5.md says what it is and where each part comes from; the package'
 LICENSE, THIRD_PARTY.md, LICENSES/ and SOURCES.txt stay as they are. The zip holds
 APP_DIR's name as its top folder, every file with its mode (eboot.bin and the .prx modules
 executable).
+
+Its PE modules (Wine's, DXVK's, VKD3D-Proton's: the ones not signed and not .NET) get one
+link time, STAMP's, with their checksum made again: the linker and strip write the time
+they ran, so each build of Wine would otherwise change every module.
+
+Before zipping it writes pc5/manifest.txt: every file of the app (but itself), sorted, a line
+each, "name<TAB>size<TAB>sha256". PC5's updater reads it to know which of its files a new
+release changes, so it can download only those (tools/make-update.py).
 """
 import argparse
+import calendar
+import hashlib
 import json
+import struct
 import subprocess
 import sys
 import zipfile
@@ -19,6 +30,115 @@ from pathlib import Path
 
 TITLE = "PPSA11018"
 STAMP = (2026, 10, 22, 0, 0, 0)
+MANIFEST = "pc5/manifest.txt"
+MANIFEST_HEADER = ("# PC5's files: name, size and SHA-256 of each, a line each; "
+                   "PC5's updater compares them with a new release's.\n")
+
+
+def pe_checksum(data: bytes, at: int) -> int:
+    """The PE checksum of data, whose own field (4 bytes) is at at: its 16-bit words added with
+    their carries, which is the whole as a number modulo 0xffff, and its length."""
+    whole = int.from_bytes(data[:at] + b"\0\0\0\0" + data[at + 4:] + b"\0" * (len(data) & 1), "little")
+    folded = whole % 0xffff or (0xffff if whole else 0)
+    return (folded + len(data)) & 0xffffffff
+
+
+def steady_pe(path: Path, stamp: int) -> bool:
+    """A PE module's link time set to stamp (and its checksum, if it has one, made again). False when it
+    isn't one to change: not a PE module, signed (the signature covers the time) or .NET (its strong
+    name does)."""
+    with path.open("rb") as source:
+        head = source.read(4096)
+    if len(head) < 0x40 or head[:2] != b"MZ":
+        return False
+    data = bytearray(path.read_bytes())
+    pe = struct.unpack_from("<I", data, 0x3c)[0]
+    if pe + 24 + 2 > len(data) or data[pe:pe + 4] != b"PE\0\0":
+        return False
+    optional = pe + 24
+    magic = struct.unpack_from("<H", data, optional)[0]
+    if magic not in (0x10b, 0x20b):
+        return False
+    count_at = optional + (92 if magic == 0x10b else 108)
+    directories = count_at + 4
+    if directories > len(data):
+        return False
+    count = struct.unpack_from("<I", data, count_at)[0]
+    for index in (4, 14):   # the certificate table, the .NET header
+        if count > index and directories + index * 8 + 8 <= len(data) and \
+                any(struct.unpack_from("<II", data, directories + index * 8)):
+            return False
+    struct.pack_into("<I", data, pe + 8, stamp)
+    # The tables that hold a time of their own: the exports', each debug entry's, and the
+    # resources' (each level), where it isn't 0.
+    sections = []
+    count_sections, optional_size = struct.unpack_from("<H", data, pe + 6)[0], struct.unpack_from("<H", data, pe + 20)[0]
+    for i in range(count_sections):
+        at = optional + optional_size + i * 40
+        if at + 40 <= len(data):
+            sections.append(struct.unpack_from("<IIII", data, at + 8))   # size, address, raw size, raw offset
+
+    def offset(rva: int):
+        for size, address, raw_size, raw in sections:
+            if address <= rva < address + max(size, raw_size) and raw + rva - address < len(data):
+                return raw + rva - address
+        return None
+
+    def restamp(at):
+        if at is not None and at + 4 <= len(data) and struct.unpack_from("<I", data, at)[0]:
+            struct.pack_into("<I", data, at, stamp)
+
+    def directory(index: int):
+        if count <= index or directories + index * 8 + 8 > len(data):
+            return None, 0
+        rva, size = struct.unpack_from("<II", data, directories + index * 8)
+        return (offset(rva), size) if rva else (None, 0)
+
+    exports, _ = directory(0)
+    if exports is not None:
+        restamp(exports + 4)
+    debug, debug_size = directory(6)
+    for entry in range(debug_size // 28 if debug is not None else 0):
+        restamp(debug + entry * 28 + 4)
+    resources, _ = directory(2)
+    tables, seen = [0] if resources is not None else [], set()
+    while tables:
+        table = tables.pop()
+        at = resources + table
+        if table in seen or at + 16 > len(data):
+            continue
+        seen.add(table)
+        restamp(at + 4)
+        named, numbered = struct.unpack_from("<HH", data, at + 12)
+        for item in range(named + numbered):
+            if at + 16 + item * 8 + 8 <= len(data):
+                target = struct.unpack_from("<I", data, at + 16 + item * 8 + 4)[0]
+                if target & 0x80000000:
+                    tables.append(target & 0x7fffffff)
+    checksum_at = optional + 64
+    if struct.unpack_from("<I", data, checksum_at)[0]:
+        struct.pack_into("<I", data, checksum_at, pe_checksum(bytes(data), checksum_at))
+    if bytes(data) != path.read_bytes():
+        path.write_bytes(bytes(data))
+    return True
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_manifest(app: Path) -> int:
+    """pc5/manifest.txt: every other file of the app, with its size and SHA-256. The number of files."""
+    target = app / MANIFEST
+    target.unlink(missing_ok=True)
+    files = sorted((p.relative_to(app).as_posix(), p) for p in app.rglob("*") if p.is_file())
+    target.write_text(MANIFEST_HEADER + "".join(f"{name}\t{path.stat().st_size}\t{sha256_of(path)}\n"
+                                                for name, path in files), encoding="utf-8")
+    return len(files)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -106,7 +226,7 @@ PC5 copies each once to /data/prospero-win, checks the copy, finds its cover onl
 adds it to the library. A game's menu (Triangle) sets its controller and Frame generation,
 changes its program or uninstalls it with its saves and settings. In a game, the touchpad and Options held for two seconds bring
 you back to PC5. When a newer PC5 is out on GitHub, PC5 offers to download and install it
-(Settings › Updates). No game is part of this app.
+(Settings › System). No game is part of this app.
 
 The app as a whole is under the GNU GPL 3.0 or later (the PS5 boilerplate's startup code
 and libc.prx are); PC5's own code and prospero-win are under the GNU LGPL 2.1 or later.
@@ -170,6 +290,10 @@ account; they are saved with each game on the console.
 PC5 is not made by or connected to Sony, Valve, GOG, GitHub or the Wikimedia Foundation.
 """)
 
+    stamp = calendar.timegm(STAMP)
+    steadied = sum(steady_pe(path, stamp) for path in sorted(app.rglob("*")) if path.is_file() and not path.is_symlink())
+    print(f"-- {steadied} PE modules dated {STAMP[0]}-{STAMP[1]:02}-{STAMP[2]:02}", flush=True)
+    write_manifest(app)
     files = sorted(p for p in app.rglob("*") if p.is_file())
     part = args.zip.with_suffix(".zip.part")
     # A "-- " line each tenth of the way, for tools/build.sh's line a minute.

@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: is there a newer PC5? GitHub's public API answers with the newest
  * release of the repository (no account, no key), with the app's zip
- * (PPSA11018.zip) that PC5 can install itself (pc5_upgrade.h). */
+ * (PPSA11018.zip) that PC5 can install itself (pc5_upgrade.h), and from 1.9.0 the
+ * update zip beside it (PPSA11018-update.zip): only the files that differ from the
+ * release before, and the new release's list of its files. */
 #ifndef PC5_UPDATE_H
 #define PC5_UPDATE_H
 #include "pc5.h"
@@ -29,6 +31,11 @@ typedef struct Pc5Update {
     char asset_url[512];
     uint64_t asset_size;
     char asset_sha256[65];
+    /* The update zip (PC5_TITLE_ID "-update.zip"), the same way; delta_url "" when the
+     * release has none. PC5 installs from it when the console has the rest of the release. */
+    char delta_url[512];
+    uint64_t delta_size;
+    char delta_sha256[65];
 } Pc5Update;
 
 /* <0, 0, >0 as version a is older, the same, newer than b ("1.2.0", "v1.10"). */

@@ -100,11 +100,15 @@ makes a draft release to check and publish.
 `tests/test.sh` runs the host checks (after `tools/build.sh sources`), `tests/test.sh --shots`
 also draws every screen, and `tests/PS5-CHECKLIST.md` is what to try on a console.
 
-**Releasing**: the update check reads the newest release's tag (`v1.8.7`). Raise `PC5_VERSION`
+**Releasing**: the update check reads the newest release's tag (`v1.9.0`). Raise `PC5_VERSION`
 in `title/pc5.h` and `contentVersion` in `sce_sys/param.json`, and attach `PPSA11018.zip`,
-`PPSA11018-sources.tar.xz` and `wine-mono-11.3.0-src.tar.xz` to the release. PC5's own
-updater (`title/pc5_upgrade.c`) installs the release's asset named `PPSA11018.zip`, checked
-against the size and SHA-256 GitHub lists for it, so that name must stay.
+`PPSA11018-update.zip`, `PPSA11018-sources.tar.xz` and `wine-mono-11.3.0-src.tar.xz` to the
+release (the build's draft has them). PC5's own updater (`title/pc5_upgrade.c`) installs the
+release's assets named `PPSA11018-update.zip` (only the files that differ from the newest
+published release, `tools/make-update.py`, when the console has the rest) or
+`PPSA11018.zip`, checked against the size and SHA-256 GitHub lists for them, so those names
+must stay. Two builds of one commit give the same files (`SOURCE_DATE_EPOCH` in
+`tools/build.sh`), so the update zip holds only what really changed.
 
 ## How it is made
 

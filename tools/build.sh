@@ -129,6 +129,11 @@ if [[ -z ${PC5_IN_IMAGE:-} ]] && ! supported; then
 fi
 
 export LC_ALL=C TZ=UTC
+# The time every build says it was made at (2026-10-22, tools/make-app.py's STAMP), so two
+# builds of one commit give the same files: strip and the linkers date the PE modules with
+# it, tools/make-prefix.py the Windows template's registry. An update downloads only the
+# files that changed (tools/make-update.py).
+export SOURCE_DATE_EPOCH=1792627200
 PW=$B/prospero-win
 jobs=$(nproc)
 mkdir -p "$B/logs" "$B/downloads" "$B/stamps"

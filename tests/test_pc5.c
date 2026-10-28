@@ -219,6 +219,9 @@ typedef struct FakeNet {
     uint64_t gate_bytes;     /* the download waits there while gate is set */
     volatile int gate, at_gate;
     int downloads;
+    /* the release's update zip, and how often each zip was downloaded */
+    char update_zip[PC5_PATH];
+    int zip_downloads, update_downloads;
 } FakeNet;
 
 static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int *status)
@@ -279,8 +282,9 @@ static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int
 }
 
 #define TEST_ZIP_URL "https://github.com/bornaradusin/PC5/releases/download/v99.0.0/PPSA11018.zip"
+#define TEST_UPDATE_URL "https://github.com/bornaradusin/PC5/releases/download/v99.0.0/PPSA11018-update.zip"
 
-/* GitHub's download of the release's zip: a piece at a time, as pc5_net_download gives it. */
+/* GitHub's download of the release's zip or update zip: a piece at a time, as pc5_net_download gives it. */
 static int fake_download(void *context, const char *url, const Pc5Sink *sink, int *status)
 {
     FakeNet *net = context;
@@ -290,7 +294,10 @@ static int fake_download(void *context, const char *url, const Pc5Sink *sink, in
     net->downloads++;
     *status = 0;
     if (net->offline) return -1;
-    if (strcmp(url, TEST_ZIP_URL) || pc5_read_file(net->zip, &zip, 64u << 20)) { *status = 404; return 0; }
+    const char *file = !strcmp(url, TEST_ZIP_URL) ? net->zip : !strcmp(url, TEST_UPDATE_URL) ? net->update_zip : NULL;
+    if (file == net->zip) net->zip_downloads++;
+    if (file && file == net->update_zip) net->update_downloads++;
+    if (!file || !file[0] || pc5_read_file(file, &zip, 64u << 20)) { *status = 404; return 0; }
     *status = net->download_status ? net->download_status : 200;
     if (*status != 200) goto out;
     if (net->corrupt && zip.len > 400) zip.data[zip.len / 3] ^= 0x5a;
@@ -302,6 +309,7 @@ static int fake_download(void *context, const char *url, const Pc5Sink *sink, in
         }
         if (sink->stop && sink->stop(sink->context)) { result = -1; goto out; }
         size_t n = zip.len - at < 7000 ? zip.len - at : 7000;
+        if (net->gate && at < net->gate_bytes && n > net->gate_bytes - at) n = (size_t)(net->gate_bytes - at);   /* up to the gate */
         if (sink->write(sink->context, zip.data + at, n)) { result = -1; goto out; }
         at += n;
     }
@@ -1741,17 +1749,30 @@ static void test_update(void)
 
 /* ---- PC5 updating itself ------------------------------------------------------------------- */
 
-/* A release's JSON with its zip: digest "" leaves it out. */
-static void release_json(char *out, size_t size, const char *tag, uint64_t zip_size, const char *digest)
+/* A release's JSON with its zip and, when update_size isn't 0, its update zip at update_url:
+ * a digest "" leaves it out. */
+static void release_json_with(char *out, size_t size, const char *tag, uint64_t zip_size, const char *digest,
+                              uint64_t update_size, const char *update_digest, const char *update_url)
 {
-    char extra[120] = "";
+    char extra[120] = "", update[1024] = "", update_extra[120] = "";
     if (digest && digest[0]) snprintf(extra, sizeof(extra), ",\"digest\":\"sha256:%s\"", digest);
+    if (update_digest && update_digest[0])
+        snprintf(update_extra, sizeof(update_extra), ",\"digest\":\"sha256:%s\"", update_digest);
+    if (update_size)
+        snprintf(update, sizeof(update), ",{\"name\":\"PPSA11018-update.zip\",\"size\":%llu%s,\"browser_download_url\":\"%s\"}",
+                 (unsigned long long)update_size, update_extra, update_url);
     snprintf(out, size,
              "{\"tag_name\":\"%s\",\"name\":\"PC5\",\"html_url\":\"https://github.com/bornaradusin/PC5/releases/tag/%s\","
              "\"assets\":[{\"name\":\"SHA256SUMS\",\"size\":10,\"browser_download_url\":\"https://github.com/x/y\"},"
              "{\"name\":\"PPSA11018.zip\",\"size\":%llu,\"uploader\":{\"login\":\"x\"}%s,"
-             "\"browser_download_url\":\"" TEST_ZIP_URL "\"}]}",
-             tag, tag, (unsigned long long)zip_size, extra);
+             "\"browser_download_url\":\"" TEST_ZIP_URL "\"}%s]}",
+             tag, tag, (unsigned long long)zip_size, extra, update);
+}
+
+/* A release's JSON with its zip: digest "" leaves it out. */
+static void release_json(char *out, size_t size, const char *tag, uint64_t zip_size, const char *digest)
+{
+    release_json_with(out, size, tag, zip_size, digest, 0, NULL, NULL);
 }
 
 static void file_sha256(const char *file, char *out)
@@ -1905,6 +1926,20 @@ static void test_upgrade(void)
         net.release = other;
         pc5_update_check(&config.http, PC5_VERSION, &update);
         CHECK(update.state == PC5_UPDATE_AVAILABLE && !update.asset_url[0], "a zip somewhere other than GitHub is ignored");
+        /* The update zip beside it, read the same way. */
+        release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, digest, TEST_UPDATE_URL);
+        pc5_update_check(&config.http, PC5_VERSION, &update);
+        CHECK(!strcmp(update.asset_url, TEST_ZIP_URL) && !strcmp(update.delta_url, TEST_UPDATE_URL) &&
+              update.delta_size == 1234 && !strcmp(update.delta_sha256, digest), "both zips: %s %llu %s", update.delta_url,
+              (unsigned long long)update.delta_size, update.delta_sha256);
+        release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "",
+                          "https://example.com/PPSA11018-update.zip");
+        pc5_update_check(&config.http, PC5_VERSION, &update);
+        CHECK(!strcmp(update.asset_url, TEST_ZIP_URL) && !update.delta_url[0] && !update.delta_size,
+              "an update zip somewhere other than GitHub is ignored: %s", update.delta_url);
+        release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
+        pc5_update_check(&config.http, PC5_VERSION, &update);
+        CHECK(!strcmp(update.delta_url, TEST_UPDATE_URL) && !update.delta_sha256[0], "one without a digest has none");
         net.release = json;
     }
 
@@ -2195,6 +2230,281 @@ static void test_upgrade(void)
         snprintf(command, sizeof(command), "mv '%s' '%s'", usb1, usb0);
         run(command);
     }
+}
+
+/* ---- updating with the update zip ------------------------------------------------------------- */
+
+/* A release's files, and the list of them (pc5/manifest.txt) as tools/make-app.py writes it. */
+typedef struct DeltaFile {
+    const char *name, *text;
+} DeltaFile;
+
+static const DeltaFile old_release[] = {
+    { "LICENSE", "licence v1" },
+    { "eboot.bin", "PC5 OLD EBOOT\n" },
+    { "pc5/fonts.bin", "the fonts" },
+    { "pc5/stale.txt", "only in the old release" },
+    { "sce_sys/param.json", "{\"titleId\":\"PPSA11018\",\"contentVersion\":\"01.009.000\"}" },
+    { "win/wine/changed.dll", "old dll" },
+    { "win/wine/same.dll", "the same dll" },
+};
+static const DeltaFile new_release[] = {
+    { "LICENSE", "licence v2" },                       /* changed, the same size */
+    { "eboot.bin", "PC5 DELTA EBOOT\n" },
+    { "pc5/added.txt", "a new file" },
+    { "pc5/fonts.bin", "the fonts" },
+    { "sce_sys/param.json", "{\"titleId\":\"PPSA11018\",\"contentVersion\":\"01.009.000\"}" },
+    { "win/wine/changed.dll", "a new dll" },
+    { "win/wine/same.dll", "the same dll" },
+};
+/* What the update zip holds besides the list: what differs from the old release. */
+static const char *const delta_names[] = { "LICENSE", "eboot.bin", "pc5/added.txt", "win/wine/changed.dll" };
+
+static void text_sha256(const char *text, char *out)
+{
+    Pc5Sha256 sha;
+    uint8_t digest[32];
+    pc5_sha256_init(&sha);
+    pc5_sha256_update(&sha, text, strlen(text));
+    pc5_sha256_final(&sha, digest);
+    hex(digest, out);
+}
+
+static void manifest_text(const DeltaFile *files, size_t count, char *out, size_t size)
+{
+    size_t at = (size_t)snprintf(out, size, "# PC5's files: name, size and SHA-256 of each.\n");
+    for (size_t i = 0; i < count && at < size; i++) {
+        char sha[65];
+        text_sha256(files[i].text, sha);
+        at += (size_t)snprintf(out + at, size - at, "%s\t%zu\t%s\n", files[i].name, strlen(files[i].text), sha);
+    }
+}
+
+/* The new release's zip: every file (only: the update zip's, NULL for all), the list, and extra. */
+static void make_delta_zip(const char *file, const char *const *only, size_t only_count, const char *changed_name,
+                           const char *changed_text, const char *extra_name)
+{
+    Pc5Zip zip;
+    char name[PC5_PATH], manifest[4096];
+    CHECK(!pc5_zip_open(&zip, file), "a zip to update with");
+    for (size_t i = 0; i < sizeof(new_release) / sizeof(new_release[0]); i++) {
+        int take = !only;
+        for (size_t j = 0; only && j < only_count; j++) take |= !strcmp(only[j], new_release[i].name);
+        if (!take) continue;
+        const char *text = changed_name && !strcmp(changed_name, new_release[i].name) ? changed_text : new_release[i].text;
+        path(name, sizeof(name), "PPSA11018/%s", new_release[i].name);
+        pc5_zip_add(&zip, name, text, strlen(text), 1792700000);
+    }
+    manifest_text(new_release, sizeof(new_release) / sizeof(new_release[0]), manifest, sizeof(manifest));
+    pc5_zip_add(&zip, "PPSA11018/pc5/manifest.txt", manifest, strlen(manifest), 1792700000);
+    if (extra_name) pc5_zip_add(&zip, extra_name, "extra", 5, 1792700000);
+    CHECK(!pc5_zip_close(&zip), "the zip written");
+}
+
+/* Lines the updater logged, for what it says it did. */
+static char delta_log[16384];
+static char delta_trap[PC5_PATH];   /* set: the trash's place taken once the update zip is checked */
+static void delta_note(void *context, const char *line)
+{
+    (void)context;
+    size_t at = strlen(delta_log);
+    snprintf(delta_log + at, sizeof(delta_log) - at, "%s\n", line);
+    if (delta_trap[0] && strstr(line, "PC5 update the update zip holds")) write_text(delta_trap, "in the trash's way");
+}
+
+static ino_t inode_of(const char *file)
+{
+    struct stat st;
+    return stat(file, &st) ? 0 : st.st_ino;
+}
+
+static void test_upgrade_delta(void)
+{
+    char base[PC5_PATH], app[PC5_PATH], data[PC5_PATH], usb0[PC5_PATH], folder[PC5_PATH], file[PC5_PATH],
+        full[PC5_PATH], small[PC5_PATH], bad[PC5_PATH], full_digest[65], small_digest[65], json[4096],
+        manifest[4096], command[3 * PC5_PATH];
+    FakeNet net = { 0 };
+    static Pc5Upgrade upgrade;
+    struct stat full_st, small_st;
+    const size_t delta_count = sizeof(delta_names) / sizeof(delta_names[0]);
+
+    path(base, sizeof(base), "%s/delta", work);
+    path(app, sizeof(app), "%s/app0", base);
+    path(data, sizeof(data), "%s/data", base);
+    path(usb0, sizeof(usb0), "%s/usb0", base);
+    path(folder, sizeof(folder), "%s/homebrew/PPSA11018", usb0);
+    path(full, sizeof(full), "%s/release/PPSA11018.zip", base);
+    path(small, sizeof(small), "%s/release/PPSA11018-update.zip", base);
+    path(bad, sizeof(bad), "%s/release/bad-update.zip", base);
+    const char *drives[] = { data, usb0, NULL };
+    Pc5UpgradeConfig config = { { &net, fake_get, fake_download }, app, NULL, drives, NULL, delta_note, NULL };
+
+    /* The running PC5 is the old release, with its list. */
+    for (size_t i = 0; i < sizeof(old_release) / sizeof(old_release[0]); i++) {
+        path(file, sizeof(file), "%s/%s", app, old_release[i].name);
+        write_text(file, old_release[i].text);
+    }
+    manifest_text(old_release, sizeof(old_release) / sizeof(old_release[0]), manifest, sizeof(manifest));
+    path(file, sizeof(file), "%s/pc5/manifest.txt", app);
+    write_text(file, manifest);
+    pc5_mkdirs(data);
+    path(file, sizeof(file), "%s/release", base);
+    pc5_mkdirs(file);
+    make_delta_zip(full, NULL, 0, NULL, NULL, NULL);
+    make_delta_zip(small, delta_names, delta_count, NULL, NULL, NULL);
+    file_sha256(full, full_digest);
+    file_sha256(small, small_digest);
+    stat(full, &full_st);
+    stat(small, &small_st);
+    release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest, (uint64_t)small_st.st_size,
+                      small_digest, TEST_UPDATE_URL);
+    net.release = json;
+    pc5_copy(net.zip, sizeof(net.zip), full);
+    pc5_copy(net.update_zip, sizeof(net.update_zip), small);
+    upgrade.config = config;
+
+    /* The update zip and the files on the console make the new release: only it is downloaded. */
+    make_installed(app, folder);
+    char same[PC5_PATH], fonts[PC5_PATH];
+    path(same, sizeof(same), "%s/win/wine/same.dll", folder);
+    path(fonts, sizeof(fonts), "%s/pc5/fonts.bin", folder);
+    ino_t same_inode = inode_of(same), fonts_inode = inode_of(fonts);
+    path(file, sizeof(file), "%s/mystuff/keep.txt", folder);
+    write_text(file, "mine too");
+    delta_log[0] = 0;
+    pc5_upgrade_run(&upgrade);
+    CHECK(atomic_load(&upgrade.step) == PC5_UPGRADE_DONE && net.update_downloads == 1 && net.zip_downloads == 0,
+          "updated from the update zip alone: %d %s (%d %d)", atomic_load(&upgrade.step), upgrade.error,
+          net.update_downloads, net.zip_downloads);
+    CHECK(strstr(delta_log, "PC5 update using PPSA11018-update.zip size=") && !strstr(delta_log, "using PPSA11018.zip"),
+          "the log names the zip used: %s", delta_log);
+    for (size_t i = 0; i < sizeof(new_release) / sizeof(new_release[0]); i++) {
+        path(file, sizeof(file), "%s/%s", folder, new_release[i].name);
+        CHECK(file_is(file, new_release[i].text), "the new release's %s in place", new_release[i].name);
+    }
+    CHECK(inode_of(same) == same_inode && inode_of(fonts) == fonts_inode, "the unchanged files untouched");
+    manifest_text(new_release, sizeof(new_release) / sizeof(new_release[0]), manifest, sizeof(manifest));
+    path(file, sizeof(file), "%s/pc5/manifest.txt", folder);
+    CHECK(file_is(file, manifest), "the new list in place");
+    path(file, sizeof(file), "%s/pc5/stale.txt", folder);
+    CHECK(!pc5_exists(file), "a file the new release doesn't have is gone");
+    path(file, sizeof(file), "%s/notes.txt", folder);
+    CHECK(file_is(file, "mine"), "the player's file at the top stays");
+    path(file, sizeof(file), "%s/mystuff/keep.txt", folder);
+    CHECK(file_is(file, "mine too"), "and the player's folder");
+    path(file, sizeof(file), "%s/pc5-update", usb0);
+    CHECK(!pc5_exists(file), "the work folder deleted");
+
+    /* Each way the update zip can't be used: the whole app instead, which updates as before. */
+    for (int kind = 0; kind < 5; kind++) {
+        static const char *const what[] = { "no installed list", "an installed file of another size",
+                                            "the lists differ for a file the update zip hasn't",
+                                            "a file in the update zip that isn't the list's",
+                                            "a file in the update zip the list doesn't have" };
+        make_installed(app, folder);
+        pc5_copy(net.update_zip, sizeof(net.update_zip), small);
+        if (kind == 0) {
+            path(file, sizeof(file), "%s/pc5/manifest.txt", folder);
+            unlink(file);
+        } else if (kind == 1) {
+            write_text(same, "the same dll, longer");
+        } else if (kind == 2) {
+            /* the console's list says same.dll is other bytes than the new release's */
+            Pc5Buf text = { 0 };
+            char sha[65], *at;
+            path(file, sizeof(file), "%s/pc5/manifest.txt", folder);
+            pc5_read_file(file, &text, 1u << 20);
+            text_sha256("the same dll", sha);
+            if ((at = strstr((char *)text.data, sha))) memset(at, '0', 64);
+            pc5_write_file(file, text.data, text.len);
+            pc5_buf_free(&text);
+        } else {
+            if (kind == 3) make_delta_zip(bad, delta_names, delta_count, "LICENSE", "licence v3", NULL);
+            else make_delta_zip(bad, delta_names, delta_count, NULL, NULL, "PPSA11018/pc5/extra.txt");
+            struct stat bad_st;
+            char bad_digest[65];
+            stat(bad, &bad_st);
+            file_sha256(bad, bad_digest);
+            release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest,
+                              (uint64_t)bad_st.st_size, bad_digest, TEST_UPDATE_URL);
+            pc5_copy(net.update_zip, sizeof(net.update_zip), bad);
+        }
+        net.zip_downloads = net.update_downloads = 0;
+        delta_log[0] = 0;
+        pc5_upgrade_run(&upgrade);
+        path(file, sizeof(file), "%s/eboot.bin", folder);
+        CHECK(atomic_load(&upgrade.step) == PC5_UPGRADE_DONE && file_is(file, "PC5 DELTA EBOOT\n") &&
+              net.zip_downloads == 1 && net.update_downloads == (kind == 0 ? 0 : 1),
+              "%s: the whole app: %d %s (%d %d)", what[kind], atomic_load(&upgrade.step), upgrade.error,
+              net.update_downloads, net.zip_downloads);
+        CHECK(file_is(same, "the same dll") && file_is(fonts, "the fonts"), "%s: every file the new one's", what[kind]);
+        path(file, sizeof(file), "%s/pc5/manifest.txt", folder);
+        CHECK(file_is(file, manifest), "%s: the new list", what[kind]);
+        CHECK(strstr(delta_log, "PC5 update using PPSA11018.zip size=") &&
+              (kind == 0 || strstr(delta_log, "can't use the update zip")), "%s: said why: %s", what[kind], delta_log);
+        release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest,
+                          (uint64_t)small_st.st_size, small_digest, TEST_UPDATE_URL);
+    }
+    pc5_copy(net.update_zip, sizeof(net.update_zip), small);
+
+    /* A download of the update zip that fails only falls back. */
+    make_installed(app, folder);
+    net.zip_downloads = net.update_downloads = 0;
+    net.update_zip[0] = 0;   /* GitHub answers 404 */
+    pc5_upgrade_run(&upgrade);
+    CHECK(atomic_load(&upgrade.step) == PC5_UPGRADE_DONE && net.zip_downloads == 1 && net.update_downloads == 1,
+          "the update zip not found: the whole app: %s", upgrade.error);
+    pc5_copy(net.update_zip, sizeof(net.update_zip), small);
+
+    /* Stopped while the update zip downloads: stopped, not the whole app. */
+    make_installed(app, folder);
+    net.zip_downloads = net.update_downloads = 0;
+    net.gate = 1;
+    net.gate_bytes = 100;
+    net.at_gate = 0;
+    CHECK(!pc5_upgrade_start(&upgrade, &config), "the worker started");
+    for (int i = 0; i < 20000 && !net.at_gate; i++) usleep(1000);
+    pc5_upgrade_cancel(&upgrade);
+    net.gate = 0;
+    wait_upgrade(&upgrade);
+    path(file, sizeof(file), "%s/eboot.bin", folder);
+    CHECK(atomic_load(&upgrade.step) == PC5_UPGRADE_CANCELLED && net.zip_downloads == 0 && file_is(file, "PC5 OLD EBOOT\n"),
+          "stopped while the update zip downloads: %d %s", atomic_load(&upgrade.step), upgrade.error);
+    net.gate_bytes = 0;
+
+    /* The console stopped while files from the update zip were being put in place (here: the
+     * trash's place taken once the zip is checked, so a file in a new file's way can't go):
+     * the next start finishes it, the unchanged files counted as in place. */
+    make_installed(app, folder);
+    upgrade.config = config;
+    atomic_store(&upgrade.cancel, 0);
+    snprintf(command, sizeof(command), "rm -f '%s/win/wine/changed.dll' && mkdir -p '%s/win/wine/changed.dll/sub'", folder,
+             folder);
+    run(command);
+    path(delta_trap, sizeof(delta_trap), "%s/pc5-update/old", usb0);
+    pc5_upgrade_run(&upgrade);
+    delta_trap[0] = 0;
+    path(file, sizeof(file), "%s/eboot.bin", folder);
+    char journal[PC5_PATH], licence[PC5_PATH], finished[32];
+    path(journal, sizeof(journal), "%s/pc5-update/replacing.txt", usb0);
+    path(licence, sizeof(licence), "%s/LICENSE", folder);
+    CHECK(atomic_load(&upgrade.step) == PC5_UPGRADE_FAILED && upgrade.partial && pc5_is_file(journal) &&
+          file_is(file, "PC5 OLD EBOOT\n") && file_is(licence, "licence v2"),
+          "stopped part way: %d %s", atomic_load(&upgrade.step), upgrade.error);
+    path(file, sizeof(file), "%s/pc5-update/old", usb0);
+    unlink(file);
+    CHECK(pc5_upgrade_tidy(&config, finished, sizeof(finished)) == 1 && !strcmp(finished, "99.0.0"),
+          "finished as PC5 opens: %s", finished);
+    for (size_t i = 0; i < sizeof(new_release) / sizeof(new_release[0]); i++) {
+        path(file, sizeof(file), "%s/%s", folder, new_release[i].name);
+        CHECK(file_is(file, new_release[i].text), "then the new release's %s in place", new_release[i].name);
+    }
+    path(file, sizeof(file), "%s/pc5/manifest.txt", folder);
+    CHECK(file_is(file, manifest), "and its list");
+    path(file, sizeof(file), "%s/pc5/stale.txt", folder);
+    CHECK(!pc5_exists(file), "and the stale file gone");
+    path(file, sizeof(file), "%s/pc5-update", usb0);
+    CHECK(!pc5_exists(file), "and the work folder");
 }
 
 static void test_sound(void)
@@ -4750,6 +5060,7 @@ int main(int argc, char **argv)
     test_update();
     test_sound();
     test_upgrade();
+    test_upgrade_delta();
     test_backgrounds();
     test_zip();
     test_logs();

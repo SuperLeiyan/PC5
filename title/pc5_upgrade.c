@@ -754,6 +754,101 @@ static void refresh_registered(const Pc5UpgradeConfig *config, const char *folde
     note(config, "PC5 update registration copies=%d failed=%d", copied, failed);
 }
 
+/* ---- the release's list of its files ---------------------------------------------------------- */
+
+/* pc5/manifest.txt (tools/make-app.py): every file of a release but itself, a line each,
+ * "name<TAB>size<TAB>sha256" after a first line that is a '#' comment. The installed one
+ * says what the console has; the new one, what the update zip's release is. */
+#define MANIFEST "pc5/manifest.txt"
+
+typedef struct Listed {
+    const char *name;
+    uint64_t size;
+    const char *sha256;            /* 64 lower-case hex digits */
+} Listed;
+
+typedef struct Manifest {
+    Pc5Buf text;
+    Listed *files;                 /* sorted by name */
+    size_t count;
+} Manifest;
+
+static int listed_compare(const void *a, const void *b)
+{
+    return strcmp(((const Listed *)a)->name, ((const Listed *)b)->name);
+}
+
+static void manifest_free(Manifest *m)
+{
+    pc5_buf_free(&m->text);
+    pc5_free(m->files);
+    memset(m, 0, sizeof(*m));
+}
+
+/* The list at path. 0; -1 when it is missing or isn't one: a line that isn't a name, a size
+ * and a SHA-256, a name that isn't safe inside the app, a name twice, or the list itself. */
+static int manifest_load(const char *path, Manifest *m)
+{
+    size_t lines = 0;
+    char *line;
+
+    memset(m, 0, sizeof(*m));
+    if (pc5_read_file(path, &m->text, 16u << 20) || !m->text.len || m->text.data[m->text.len - 1] != '\n') goto fail;
+    for (size_t i = 0; i < m->text.len; i++) lines += m->text.data[i] == '\n';
+    if (memchr(m->text.data, 0, m->text.len) || !(m->files = pc5_alloc(sizeof(Listed) * lines))) goto fail;
+    line = (char *)m->text.data;
+    if (*line == '#') line = strchr(line, '\n') + 1;   /* what the file is */
+    for (char *next; *line; line = next) {
+        char *size = strchr(line, '\t'), *sha = size ? strchr(size + 1, '\t') : NULL, *end;
+        next = strchr(line, '\n');
+        *next++ = 0;
+        if (!size || !sha || size == line || (size_t)(size - line) >= NAME_MAX_LENGTH || strlen(sha + 1) != 64 ||
+            strspn(sha + 1, "0123456789abcdef") != 64)
+            goto fail;
+        *size = *sha = 0;
+        unsigned long long bytes = strtoull(size + 1, &end, 10);
+        if (end == size + 1 || *end || size[1] == '-' || !safe_name(line) || size[-1] == '/' || !strcmp(line, MANIFEST))
+            goto fail;
+        m->files[m->count++] = (Listed){ line, bytes, sha + 1 };
+    }
+    if (!m->count) goto fail;
+    qsort(m->files, m->count, sizeof(Listed), listed_compare);
+    for (size_t i = 1; i < m->count; i++)
+        if (!strcmp(m->files[i - 1].name, m->files[i].name)) goto fail;
+    return 0;
+fail:
+    manifest_free(m);
+    return -1;
+}
+
+static const Listed *manifest_find(const Manifest *m, const char *name)
+{
+    Listed key = { name, 0, NULL };
+    return bsearch(&key, m->files, m->count, sizeof(Listed), listed_compare);
+}
+
+/* A file's SHA-256 as lower-case hex. 0, or -1 when it can't be read. */
+static int file_sha256(const char *path, char hex[65])
+{
+    enum { CHUNK = 1 << 20 };
+    uint8_t *chunk = pc5_alloc(CHUNK), digest[32];
+    Pc5Sha256 sha;
+    int fd = open(path, O_RDONLY), result = -1;
+    ssize_t n;
+
+    if (fd < 0 || !chunk) goto out;
+    pc5_sha256_init(&sha);
+    while ((n = read(fd, chunk, CHUNK)) > 0) pc5_sha256_update(&sha, chunk, (size_t)n);
+    if (n < 0) goto out;
+    pc5_sha256_final(&sha, digest);
+    for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    result = 0;
+out:
+    if (fd >= 0) close(fd);
+    pc5_free(chunk);
+    return result;
+}
+
 /* ---- the update ------------------------------------------------------------------------------- */
 
 typedef struct Saving {
@@ -800,12 +895,23 @@ static int fail(Pc5Upgrade *upgrade, const char *format, ...)
     return -1;
 }
 
-static int check_new(const char *fresh)
+/* The new version has PC5's eboot, fonts and param.json (and is PC5's title). With the
+ * update zip, installed (PC5's folder) gives each the zip doesn't have: it is the same
+ * file (the lists say so). NULL for the whole app's zip: all of them in fresh. */
+static int check_new(const char *fresh, const char *installed)
 {
+    static const char *const needed[] = { "eboot.bin", "pc5/fonts.bin", "sce_sys/param.json" };
     char path[PC5_PATH];
-    return pc5_format(path, sizeof(path), "%s/eboot.bin", fresh) || !pc5_is_file(path) ||
-           pc5_format(path, sizeof(path), "%s/pc5/fonts.bin", fresh) || !pc5_is_file(path) || !is_pc5_title(fresh)
-               ? -1 : 0;
+    const char *title = fresh;
+
+    for (size_t i = 0; i < sizeof(needed) / sizeof(needed[0]); i++) {
+        if (pc5_format(path, sizeof(path), "%s/%s", fresh, needed[i])) return -1;
+        if (pc5_is_file(path)) continue;
+        if (!installed || pc5_format(path, sizeof(path), "%s/%s", installed, needed[i]) || !pc5_is_file(path))
+            return -1;
+        if (i == 2) title = installed;   /* param.json: whichever folder has it */
+    }
+    return is_pc5_title(title) ? 0 : -1;
 }
 
 /* The work folder made empty, with its marker. */
@@ -820,6 +926,194 @@ static int make_work(const char *work)
     return 0;
 }
 
+/* url (size bytes, sha256 "" when GitHub lists none) downloaded to part, checked, and renamed
+ * to zip; the screens follow it (DOWNLOADING). 0, or -1 with error set ("Cancelled." when
+ * asked to stop). */
+static int download(Pc5Upgrade *upgrade, const char *url, uint64_t size, const char *sha256, const char *part,
+                    const char *zip)
+{
+    const Pc5UpgradeConfig *config = &upgrade->config;
+    Saving saving = { 0 };
+    int status = 0, rc;
+
+    atomic_store(&upgrade->total, size);
+    atomic_store(&upgrade->done, 0);
+    atomic_store(&upgrade->step, PC5_UPGRADE_DOWNLOADING);
+    saving.upgrade = upgrade;
+    saving.expected = size;
+    pc5_sha256_init(&saving.sha);
+    if ((saving.fd = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0666)) < 0)
+        return fail(upgrade, "The download can't be saved (%s).", strerror(errno));
+    {
+        Pc5Sink sink = { &saving, saving_begin, saving_write, saving_stop };
+        rc = config->http.download(config->http.context, url, &sink, &status);
+    }
+    if (fsync(saving.fd) && !rc) rc = -1;
+    if (close(saving.fd) && !rc) rc = -1;
+    note(config, "PC5 update download rc=%d status=%d bytes=%llu", rc, status, (unsigned long long)saving.got);
+    if (atomic_load(&upgrade->cancel)) return fail(upgrade, "Cancelled.");
+    if (rc || status != 200)
+        return fail(upgrade, status && status != 200 ? "GitHub answered the download with an error (HTTP %d)."
+                                                     : "The download stopped (%d). Is the console still online?", status);
+    if (saving.got != size) return fail(upgrade, "The download was cut short.");
+    if (sha256[0]) {
+        uint8_t digest[32];
+        char hex[65];
+        pc5_sha256_final(&saving.sha, digest);
+        for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+        if (strcmp(hex, sha256)) return fail(upgrade, "The download doesn't match the checksum GitHub lists for it.");
+    }
+    if (rename(part, zip)) return fail(upgrade, "The download can't be saved (%s).", strerror(errno));
+    return 0;
+}
+
+/* The update zip (PC5_TITLE_ID "-update.zip"): downloaded and unpacked into fresh when the
+ * release has one and PC5's folder has its list of files (MANIFEST), and used when the two
+ * make the whole new release: each file in the zip is the one the new list names (its size
+ * and SHA-256), and each file the zip doesn't have is in PC5's folder as the new list has it
+ * (the installed list's SHA-256, its size on the drive). Then list (files.txt) names every
+ * file of the new list, and the list itself, and the update goes on as with the whole app:
+ * a file not in fresh is one already in place (place_files). 1 when it is used; 0 when the
+ * whole app is to be downloaded instead (why is logged, and what it left is deleted); -1
+ * when asked to stop (error set). */
+static int use_update_zip(Pc5Upgrade *upgrade, const Pc5Update *update, const char *work, const char *fresh,
+                          const char *list)
+{
+    const Pc5UpgradeConfig *config = &upgrade->config;
+    char installed_list[PC5_PATH], zip[PC5_PATH] = "", part[PC5_PATH] = "", new_list[PC5_PATH], unpacked[PC5_PATH] = "",
+        path[PC5_PATH], hex[65], why[PC5_ERROR] = "";
+    Manifest installed = { 0 }, release = { 0 };
+    Pc5Buf names = { 0 }, files = { 0 };
+    char **in_zip = NULL;
+    size_t zipped = 0;
+    unsigned wrong = 0, missing = 0;
+    uint64_t room;
+    struct stat st;
+    int result = 0;
+
+    if (!update->delta_url[0]) return 0;
+    if (pc5_format(installed_list, sizeof(installed_list), "%s/" MANIFEST, upgrade->folder) ||
+        manifest_load(installed_list, &installed)) {
+        note(config, "PC5 update: PC5's folder has no list of its files (%s), so the whole app is downloaded", MANIFEST);
+        return 0;
+    }
+    if (pc5_format(zip, sizeof(zip), "%s/%s-update.zip", work, PC5_TITLE_ID) ||
+        pc5_format(part, sizeof(part), "%s/%s-update.zip.part", work, PC5_TITLE_ID) ||
+        pc5_format(new_list, sizeof(new_list), "%s/" MANIFEST, fresh) ||
+        pc5_format(unpacked, sizeof(unpacked), "%s/new", work)) {
+        /* never a cut-short path: fall_back deletes them */
+        note(config, "PC5 update can't use the update zip (a path is too long); downloading the whole app");
+        manifest_free(&installed);
+        return 0;
+    }
+    /* The zip, and its files unpacked: about four times the zip. */
+    if (!pc5_free_bytes(work, &room) && room < update->delta_size * 4 + MARGIN) {
+        snprintf(why, sizeof(why), "there isn't room for it");
+        goto fall_back;
+    }
+    if (atomic_load(&upgrade->cancel)) goto cancelled;
+    note(config, "PC5 update using %s-update.zip size=%llu", PC5_TITLE_ID, (unsigned long long)update->delta_size);
+    if (download(upgrade, update->delta_url, update->delta_size, update->delta_sha256, part, zip)) {
+        if (atomic_load(&upgrade->cancel)) goto cancelled;
+        pc5_copy(why, sizeof(why), upgrade->error);
+        goto fall_back;
+    }
+    atomic_store(&upgrade->done, 0);
+    atomic_store(&upgrade->total, 0);
+    atomic_store(&upgrade->step, PC5_UPGRADE_UNPACKING);
+    if (pc5_free_bytes(work, &room)) room = UINT64_MAX;
+    else room = room > MARGIN ? room - MARGIN : 0;
+    if (pc5_unzip(zip, PREFIX, fresh, &upgrade->done, &upgrade->total, &upgrade->cancel, room, &names, upgrade->error,
+                  sizeof(upgrade->error))) {
+        if (atomic_load(&upgrade->cancel)) goto cancelled;
+        pc5_copy(why, sizeof(why), upgrade->error);
+        goto fall_back;
+    }
+    unlink(zip);
+    if (manifest_load(new_list, &release)) {
+        snprintf(why, sizeof(why), "it has no list of the new release's files PC5 can read");
+        goto fall_back;
+    }
+    if (!manifest_find(&release, "eboot.bin") || !manifest_find(&release, "pc5/fonts.bin") ||
+        !manifest_find(&release, "sce_sys/param.json")) {
+        snprintf(why, sizeof(why), "its list of files doesn't have PC5's own");
+        goto fall_back;
+    }
+    /* Each file in the zip is the new release's. */
+    if (pc5_buf_terminate(&names) || !(in_zip = pc5_alloc(sizeof(char *) * (names.len / 2 + 1)))) {
+        snprintf(why, sizeof(why), "PC5 ran out of memory");
+        goto fall_back;
+    }
+    for (char *line = (char *)names.data, *next; line && *line; line = next) {
+        char *tab = strchr(line, '\t');
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!tab) continue;
+        *tab = 0;
+        if (!line[0] || line[strlen(line) - 1] == '/') continue;   /* a folder */
+        if (atomic_load(&upgrade->cancel)) goto cancelled;
+        in_zip[zipped++] = line;
+        if (!strcmp(line, MANIFEST)) continue;
+        const Listed *listed = manifest_find(&release, line);
+        if (!listed || strtoull(tab + 1, NULL, 10) != listed->size || pc5_join(path, sizeof(path), fresh, line) ||
+            file_sha256(path, hex) || strcmp(hex, listed->sha256))
+            wrong++;
+    }
+    if (wrong) {
+        snprintf(why, sizeof(why), "%u files in it aren't the ones its list names", wrong);
+        goto fall_back;
+    }
+    /* Each file it doesn't have is on the console as the new release has it. */
+    qsort(in_zip, zipped, sizeof(char *), text_compare);
+    for (size_t i = 0; i < release.count; i++) {
+        const Listed *file = &release.files[i], *had;
+        if (bsearch(&file->name, in_zip, zipped, sizeof(char *), text_compare)) continue;
+        if (atomic_load(&upgrade->cancel)) goto cancelled;
+        had = manifest_find(&installed, file->name);
+        if (!had || had->size != file->size || strcmp(had->sha256, file->sha256) ||
+            pc5_join(path, sizeof(path), upgrade->folder, file->name) || lstat(path, &st) || !S_ISREG(st.st_mode) ||
+            (uint64_t)st.st_size != file->size)
+            missing++;
+    }
+    if (missing) {
+        snprintf(why, sizeof(why), "%u files aren't in the update zip or on the console as it needs them", missing);
+        goto fall_back;
+    }
+    /* The release's names: the new list's, and the list itself. */
+    for (size_t i = 0; i < release.count; i++)
+        if (pc5_buf_printf(&files, "%s\t%llu\n", release.files[i].name, (unsigned long long)release.files[i].size)) {
+            snprintf(why, sizeof(why), "PC5 ran out of memory");
+            goto fall_back;
+        }
+    if (stat(new_list, &st) || pc5_buf_printf(&files, MANIFEST "\t%llu\n", (unsigned long long)st.st_size) ||
+        pc5_write_file(list, files.data, files.len)) {
+        snprintf(why, sizeof(why), "the work folder can't be written");
+        goto fall_back;
+    }
+    note(config, "PC5 update the update zip holds %zu of the release's %zu files; the rest are in place", zipped,
+         release.count + 1);
+    result = 1;
+    goto out;
+cancelled:
+    result = fail(upgrade, "Cancelled.");
+    goto out;
+fall_back:
+    note(config, "PC5 update can't use the update zip (%s); downloading the whole app", why);
+    upgrade->error[0] = 0;
+    if (unpacked[0] && delete_tree(unpacked)) note(config, "PC5 update can't delete %s", unpacked);
+    if (zip[0]) unlink(zip);
+    if (part[0]) unlink(part);
+    unlink(list);
+    result = 0;
+out:
+    manifest_free(&installed);
+    manifest_free(&release);
+    pc5_buf_free(&names);
+    pc5_buf_free(&files);
+    pc5_free(in_zip);
+    return result;
+}
+
 static int run(Pc5Upgrade *upgrade, char *work, size_t work_size)
 {
     const Pc5UpgradeConfig *config = &upgrade->config;
@@ -828,10 +1122,9 @@ static int run(Pc5Upgrade *upgrade, char *work, size_t work_size)
         list[PC5_PATH], journal[PC5_PATH], trash[PC5_PATH], text[PC5_PATH + 64];
     const char *drive, *rest = NULL;
     uint64_t room = 0;
-    Saving saving = { 0 };
     Pc5Buf names = { 0 };
     Release release;
-    int status = 0, rc, eboot_placed;
+    int rc, eboot_placed, used_update;
 
     pc5_update_check(&config->http, PC5_VERSION, &update);
     if (update.state == PC5_UPDATE_FAILED || update.state == PC5_UPDATE_UNKNOWN)
@@ -850,8 +1143,9 @@ static int run(Pc5Upgrade *upgrade, char *work, size_t work_size)
     if (rc)
         return fail(upgrade, "PC5's folder wasn't found on the console's drives (in homebrew, etaHEN/games or at the "
                              "top of a drive). Install PC5 %s from GitHub as before.", update.version);
-    note(config, "PC5 update version=%s folder=%s size=%llu sha256=%s", update.version, upgrade->folder,
-         (unsigned long long)update.asset_size, update.asset_sha256[0] ? update.asset_sha256 : "-");
+    note(config, "PC5 update version=%s folder=%s size=%llu sha256=%s update_zip=%llu", update.version, upgrade->folder,
+         (unsigned long long)update.asset_size, update.asset_sha256[0] ? update.asset_sha256 : "-",
+         (unsigned long long)(update.delta_url[0] ? update.delta_size : 0));
     if (!(drive = drive_of(config, upgrade->folder, &rest)) || drive_work(config, drive, work, work_size) ||
         overlap(work, upgrade->folder))
         return fail(upgrade, "PC5 can't update itself where it is (%s).", upgrade->folder);
@@ -874,55 +1168,35 @@ static int run(Pc5Upgrade *upgrade, char *work, size_t work_size)
         pc5_format(list, sizeof(list), "%s/" LIST, work) || pc5_format(journal, sizeof(journal), "%s/" JOURNAL, work) ||
         pc5_format(trash, sizeof(trash), "%s/old", work))
         return fail(upgrade, "A path in PC5's folder is too long.");
-    /* The zip, and its files unpacked: about four times the zip. */
-    if (!pc5_free_bytes(work, &room) && room < update.asset_size * 4 + MARGIN) {
-        pc5_size_text(update.asset_size * 4 + MARGIN, text, sizeof(text));
-        return fail(upgrade, "There isn't room on PC5's drive for the update: it needs about %s free.", text);
-    }
-    if (atomic_load(&upgrade->cancel)) return fail(upgrade, "Cancelled.");
+    /* Only the files that changed, when the release has them in its update zip and the
+     * console has the rest; otherwise the whole app. */
+    rc = use_update_zip(upgrade, &update, work, fresh, list);
+    if (rc < 0) return -1;
+    used_update = rc;
+    if (!used_update) {
+        /* The zip, and its files unpacked: about four times the zip. */
+        if (!pc5_free_bytes(work, &room) && room < update.asset_size * 4 + MARGIN) {
+            pc5_size_text(update.asset_size * 4 + MARGIN, text, sizeof(text));
+            return fail(upgrade, "There isn't room on PC5's drive for the update: it needs about %s free.", text);
+        }
+        if (atomic_load(&upgrade->cancel)) return fail(upgrade, "Cancelled.");
+        note(config, "PC5 update using %s.zip size=%llu", PC5_TITLE_ID, (unsigned long long)update.asset_size);
+        if (download(upgrade, update.asset_url, update.asset_size, update.asset_sha256, part, zip)) return -1;
 
-    atomic_store(&upgrade->total, update.asset_size);
-    atomic_store(&upgrade->done, 0);
-    atomic_store(&upgrade->step, PC5_UPGRADE_DOWNLOADING);
-    saving.upgrade = upgrade;
-    saving.expected = update.asset_size;
-    pc5_sha256_init(&saving.sha);
-    if ((saving.fd = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0666)) < 0)
-        return fail(upgrade, "The download can't be saved (%s).", strerror(errno));
-    {
-        Pc5Sink sink = { &saving, saving_begin, saving_write, saving_stop };
-        rc = config->http.download(config->http.context, update.asset_url, &sink, &status);
+        atomic_store(&upgrade->done, 0);
+        atomic_store(&upgrade->total, 0);
+        atomic_store(&upgrade->step, PC5_UPGRADE_UNPACKING);
+        if (pc5_free_bytes(work, &room)) room = UINT64_MAX;
+        else room = room > MARGIN ? room - MARGIN : 0;
+        rc = pc5_unzip(zip, PREFIX, fresh, &upgrade->done, &upgrade->total, &upgrade->cancel, room, &names,
+                       upgrade->error, sizeof(upgrade->error));
+        if (!rc && pc5_write_file(list, names.data, names.len)) rc = fail(upgrade, "The work folder can't be written.");
+        pc5_buf_free(&names);
+        if (rc) return -1;
+        unlink(zip);
     }
-    if (fsync(saving.fd) && !rc) rc = -1;
-    if (close(saving.fd) && !rc) rc = -1;
-    note(config, "PC5 update download rc=%d status=%d bytes=%llu", rc, status, (unsigned long long)saving.got);
-    if (atomic_load(&upgrade->cancel)) return fail(upgrade, "Cancelled.");
-    if (rc || status != 200)
-        return fail(upgrade, status && status != 200 ? "GitHub answered the download with an error (HTTP %d)."
-                                                     : "The download stopped (%d). Is the console still online?", status);
-    if (saving.got != update.asset_size) return fail(upgrade, "The download was cut short.");
-    if (update.asset_sha256[0]) {
-        uint8_t digest[32];
-        char hex[65];
-        pc5_sha256_final(&saving.sha, digest);
-        for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
-        if (strcmp(hex, update.asset_sha256))
-            return fail(upgrade, "The download doesn't match the checksum GitHub lists for it.");
-    }
-    if (rename(part, zip)) return fail(upgrade, "The download can't be saved (%s).", strerror(errno));
-
-    atomic_store(&upgrade->done, 0);
-    atomic_store(&upgrade->total, 0);
-    atomic_store(&upgrade->step, PC5_UPGRADE_UNPACKING);
-    if (pc5_free_bytes(work, &room)) room = UINT64_MAX;
-    else room = room > MARGIN ? room - MARGIN : 0;
-    rc = pc5_unzip(zip, PREFIX, fresh, &upgrade->done, &upgrade->total, &upgrade->cancel, room, &names,
-                   upgrade->error, sizeof(upgrade->error));
-    if (!rc && pc5_write_file(list, names.data, names.len)) rc = fail(upgrade, "The work folder can't be written.");
-    pc5_buf_free(&names);
-    if (rc) return -1;
-    unlink(zip);
-    if (check_new(fresh)) return fail(upgrade, "The download isn't PC5 (%s is missing something).", PC5_TITLE_ID);
+    if (check_new(fresh, used_update ? upgrade->folder : NULL))
+        return fail(upgrade, "The download isn't PC5 (%s is missing something).", PC5_TITLE_ID);
     if (release_load(work, &release)) return fail(upgrade, "The work folder can't be read.");
     /* The unpacked files' folders on the disk before the journal says they are being moved. */
     for (size_t f = 0; f < release.folder_count; f++) {
@@ -948,6 +1222,9 @@ static int run(Pc5Upgrade *upgrade, char *work, size_t work_size)
         char old_eboot[PC5_PATH], new_eboot[PC5_PATH], old_mark[48], new_mark[48];
         if (pc5_format(old_eboot, sizeof(old_eboot), "%s/eboot.bin", upgrade->folder) ||
             pc5_format(new_eboot, sizeof(new_eboot), "%s/eboot.bin", fresh) ||
+            /* the update zip without it: the installed one is the new one */
+            (!pc5_is_file(new_eboot) && used_update &&
+             pc5_format(new_eboot, sizeof(new_eboot), "%s/eboot.bin", upgrade->folder)) ||
             file_mark(old_eboot, old_mark, sizeof(old_mark)) || file_mark(new_eboot, new_mark, sizeof(new_mark)) ||
             pc5_format(text, sizeof(text), "%s\n%s\n%s\n%s\n", rest, update.version, old_mark, new_mark) ||
             pc5_write_file(journal, text, strlen(text))) {

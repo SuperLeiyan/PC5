@@ -1,5 +1,7 @@
 # Builds PC5 from source on GitHub's machines (tools/build.sh) and, when asked, makes a draft
-# release with its three archives for the maintainer to check and publish.
+# release with its archives for the maintainer to check and publish: the app
+# (PPSA11018.zip), the update zip with only what changed since the newest published release
+# (PPSA11018-update.zip), the sources and Wine Mono's source.
 # Run it from the Actions tab: Build › Run workflow.
 #
 # The build is in pieces (tools/build.sh names them). Each is kept under its key, a
@@ -388,11 +390,53 @@ jobs:
       - uses: actions/download-artifact@v8
         with: { name: sources, path: release }
 
+      - name: The update zip
+        # PPSA11018-update.zip: the files that differ from the newest published release's
+        # PPSA11018.zip, and the new release's list of its files (tools/make-update.py).
+        # PC5's updater uses it when the console's files are that release's; otherwise it
+        # downloads PPSA11018.zip.
+        run: |
+          base=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          case $base in v[0-9]*) ;; *) base= ;; esac   # none published: GitHub answers 404
+          if [ -z "$base" ]; then
+            echo "::notice title=No update zip::No release is published yet, so there is nothing to make an update from"
+            exit 0
+          fi
+          if [ "$base" = "v$VERSION" ]; then
+            if [ '${{ inputs.draft_release }}' = true ]; then
+              echo "::error::v$VERSION is already the newest published release; raise PC5_VERSION in title/pc5.h for a new release"
+              exit 1
+            fi
+            echo "::notice title=No update zip::v$VERSION is the newest published release itself"
+            exit 0
+          fi
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$base" --jq '.assets[] | select(.name == "PPSA11018.zip") | .id')
+          if [ -z "$asset" ]; then
+            echo "::notice title=No update zip::$base, the newest published release, has no PPSA11018.zip"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/base"
+          gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset" \
+            > "$RUNNER_TEMP/base/PPSA11018.zip"
+          python3 tools/make-update.py "$RUNNER_TEMP/base/PPSA11018.zip" release/PPSA11018.zip \
+            release/PPSA11018-update.zip --markdown "$GITHUB_STEP_SUMMARY" | tee update.txt
+          echo "Made against $base's PPSA11018.zip." >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Update zip against $base::$(sed 's/^make-update: [^:]*: //' update.txt)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: update
+          path: release/PPSA11018-update.zip
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
       - name: The archives
         working-directory: release
         run: |
           ls -l
-          sha256sum PPSA11018.zip PPSA11018-sources.tar.xz wine-mono-*-src.tar.xz | tee SHA256SUMS.txt
+          sha256sum PPSA11018.zip $(ls PPSA11018-update.zip 2>/dev/null) PPSA11018-sources.tar.xz \
+            wine-mono-*-src.tar.xz | tee SHA256SUMS.txt
           { echo "### PC5 $VERSION"; echo '```'; cat SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compare with ${{ inputs.compare_with }}
@@ -430,7 +474,8 @@ jobs:
           notes="release-notes/$VERSION.md"
           [ -f "$notes" ] || { echo "PC5 $VERSION" > "$RUNNER_TEMP/notes.md"; notes=$RUNNER_TEMP/notes.md; }
           gh release create "$tag" --draft --target "$GITHUB_SHA" --title "PC5 $VERSION" --notes-file "$notes" \
-            release/PPSA11018.zip release/PPSA11018-sources.tar.xz release/wine-mono-*-src.tar.xz
+            release/PPSA11018.zip $(ls release/PPSA11018-update.zip 2>/dev/null) release/PPSA11018-sources.tar.xz \
+            release/wine-mono-*-src.tar.xz
           echo "Draft release $tag is ready: check it and publish it from the Releases page." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Only the newest work kept

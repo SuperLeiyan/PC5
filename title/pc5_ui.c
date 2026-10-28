@@ -323,7 +323,7 @@ struct Pc5Ui {
     char select_after[PC5_ID];
 
     Pc5Settings settings;
-    int page;                      /* Settings: 0 its first page, 1 In games, 2 Updates */
+    int page;                      /* Settings: 0 its first page, 1 In games, 2 System, ... (PAGE_*) */
     Pc5Controls controls;          /* the controller of the game in launch_id (its menu) */
     int game_page;                 /* its menu's page: GP_MAIN or a group's */
     int pad_row, pad_top;          /* Button mapping: the row chosen, the first one shown */
@@ -2075,7 +2075,7 @@ static int can_upgrade(const Pc5Ui *ui)
     return ui->config.drives && ui->platform.http.download && ui->app[0];
 }
 
-/* A newer PC5 to offer: Settings › Updates' Update now, and the question when PC5 opens. */
+/* A newer PC5 to offer: Settings › System's Update now, and the question when PC5 opens. */
 static int offer_update(const Pc5Ui *ui)
 {
     return can_upgrade(ui) && ui->update.last.state == PC5_UPDATE_AVAILABLE;
@@ -4388,10 +4388,14 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_CHECKING: settings_screen(ui, c); busy_dialog(ui, c, "Checking for a newer PC5", "Asking GitHub", 0); break;
     case S_UPGRADE_ASK: {
         char title[120], body[400], size[32];
-        pc5_size_text(ui->update.last.asset_size, size, sizeof(size));
+        /* The update zip's size when PC5 will try it (this PC5 has its list of files), else the whole app's. */
+        char manifest[PC5_PATH];
+        int small = ui->update.last.delta_url[0] && !pc5_format(manifest, sizeof(manifest), "%s/pc5/manifest.txt", ui->app) &&
+                    pc5_is_file(manifest);
+        pc5_size_text(small ? ui->update.last.delta_size : ui->update.last.asset_size, size, sizeof(size));
         snprintf(title, sizeof(title), "PC5 %s is available", ui->update.last.version);
         snprintf(body, sizeof(body), "You have %s. PC5 can download it from GitHub (%s), install it and restart. "
-                 "Your games, saves and settings stay. Later: Settings \xe2\x80\xba Updates.", PC5_VERSION, size);
+                 "Your games, saves and settings stay. Later: Settings \xe2\x80\xba System.", PC5_VERSION, size);
         confirm_dialog(ui, c, title, body, "Update now", "Later", 0, NULL);
         break;
     }

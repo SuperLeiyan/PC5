@@ -136,7 +136,137 @@ rms = ImageStat.Stat(ImageChops.difference(decoded.convert("RGB"), Image.open(f"
 if max(rms) > 4:
     sys.exit(f"make-dds: the picture decoded is far from what went in (rms {rms})")
 DDS
-python3 -m py_compile tools/make-prefix.py tools/make-app.py tools/make-font.py art/make-art.py \
+# The release's list of its files (tools/make-app.py), its PE modules' one date, the Windows
+# template's registry made the same each build (tools/make-prefix.py), and the update zip
+# (tools/make-update.py): the files that changed and the list, as they are in the app's zip.
+python3 - "$out/release-tools" <<'RELEASE'
+import calendar, hashlib, importlib.util, struct, subprocess, sys, zipfile, zlib
+from pathlib import Path
+def tool(name):
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), f"tools/{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+app_tool, prefix_tool = tool("make-app"), tool("make-prefix")
+out = Path(sys.argv[1])
+def release(folder, files):
+    for name, data in files.items():
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(data)
+    (folder / "eboot.bin").chmod(0o755)
+    app_tool.write_manifest(folder)
+    return folder
+def zip_app(folder, target):
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+            info = zipfile.ZipInfo(f"PPSA11018/{path.relative_to(folder).as_posix()}", app_tool.STAMP)
+            info.create_system = 3
+            info.external_attr = (0o100000 | (path.stat().st_mode & 0o777)) << 16
+            archive.writestr(info, path.read_bytes(), zipfile.ZIP_DEFLATED)
+def crc_alike(prefix, target):
+    """prefix and 4 bytes whose CRC-32 is target: the CRC is linear in the bits, so solve for them."""
+    base = zlib.crc32(prefix + b"\0" * 4)
+    rows = [(zlib.crc32(prefix + (1 << bit).to_bytes(4, "little")) ^ base, 1 << bit) for bit in range(32)]
+    want, chosen = target ^ base, 0
+    for bit in range(32):
+        pivot = next((r for r in rows if r[0] >> bit & 1), None)
+        if pivot is None:
+            continue
+        rows.remove(pivot)
+        rows = [(r[0] ^ pivot[0], r[1] ^ pivot[1]) if r[0] >> bit & 1 else r for r in rows]
+        if want >> bit & 1:
+            want, chosen = want ^ pivot[0], chosen ^ pivot[1]
+    assert want == 0
+    return prefix + chosen.to_bytes(4, "little")
+alike_new = b"crc-alike B...."
+alike_old = crc_alike(b"crc-alike A", zlib.crc32(alike_new))
+assert len(alike_old) == len(alike_new) and zlib.crc32(alike_old) == zlib.crc32(alike_new) and alike_old != alike_new
+old_files = {"eboot.bin": b"old eboot", "LICENSE": b"licence 1", "pc5/same.bin": b"same" * 1000,
+             "pc5/gone.txt": b"gone", "win/x.dll": alike_old}
+new_files = {"eboot.bin": b"new eboot!", "LICENSE": b"licence 2", "pc5/same.bin": b"same" * 1000,
+             "pc5/new.txt": b"new", "win/x.dll": alike_new}
+old, new = release(out / "old" / "PPSA11018", old_files), release(out / "new" / "PPSA11018", new_files)
+# The list: every file but itself, sorted, its size and SHA-256, after a comment.
+lines = (new / "pc5/manifest.txt").read_text().splitlines()
+assert lines[0].startswith("# "), lines[0]
+want = sorted((name, len(data), hashlib.sha256(data).hexdigest()) for name, data in new_files.items())
+assert [tuple(line.split("\t")) for line in lines[1:]] == [(n, str(s), h) for n, s, h in want], lines
+zip_app(old, out / "old.zip")
+zip_app(new, out / "new.zip")
+# A file whose size and CRC-32 are the old one's but whose bytes aren't (4 bytes chosen to
+# give the CRC): still in the update zip, as the list's SHA-256 says.
+made = subprocess.run([sys.executable, "tools/make-update.py", str(out / "old.zip"), str(out / "new.zip"),
+                       str(out / "update.zip"), "--markdown", str(out / "summary.md")], capture_output=True, text=True)
+assert made.returncode == 0, made.stderr
+with zipfile.ZipFile(out / "update.zip") as update, zipfile.ZipFile(out / "new.zip") as full:
+    assert update.testzip() is None
+    names = sorted(update.namelist())
+    assert names == sorted(f"PPSA11018/{n}" for n in ("eboot.bin", "LICENSE", "pc5/new.txt", "win/x.dll",
+                                                      "pc5/manifest.txt")), names
+    for info in update.infolist():
+        other = full.getinfo(info.filename)
+        assert (info.date_time, info.external_attr, info.create_system, info.compress_type) == \
+            (other.date_time, other.external_attr, other.create_system, zipfile.ZIP_DEFLATED), info.filename
+        assert update.read(info) == full.read(other), info.filename
+assert "5 of 6 files" in made.stdout and "The update zip" in (out / "summary.md").read_text(), made.stdout
+# A new zip without the list, or whose list isn't its files, makes none.
+for name, data in (("pc5/manifest.txt", None), ("pc5/manifest.txt", b"# list\nLICENSE\t9\t" + b"0" * 64 + b"\n")):
+    with zipfile.ZipFile(out / "new.zip") as full, zipfile.ZipFile(out / "odd.zip", "w") as odd:
+        for info in full.infolist():
+            if info.filename != "PPSA11018/" + name:
+                odd.writestr(info, full.read(info))
+            elif data is not None:
+                odd.writestr(info, data)
+    failed = subprocess.run([sys.executable, "tools/make-update.py", str(out / "old.zip"), str(out / "odd.zip"),
+                             str(out / "odd-update.zip")], capture_output=True, text=True)
+    assert failed.returncode and "make-update:" in failed.stderr, failed.stderr
+
+# PE modules: one link time and the right checksum; a signed one left as it is.
+def pe(stamp, signed=False):
+    data = bytearray(1024)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3c, 0x80)
+    data[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HHI", data, 0x84, 0x8664, 0, stamp)
+    struct.pack_into("<H", data, 0x94, 240)
+    struct.pack_into("<H", data, 0x98, 0x20b)
+    struct.pack_into("<I", data, 0x98 + 64, 1)            # a checksum, made again
+    struct.pack_into("<I", data, 0x98 + 108, 16)
+    if signed:
+        struct.pack_into("<II", data, 0x98 + 112 + 4 * 8, 0x300, 8)
+    return bytes(data)
+stamp = calendar.timegm(app_tool.STAMP)
+for name, first, second in (("a.dll", 1700000000, 1800000000), ("signed.dll", 1700000000, 1800000000)):
+    one, two = out / f"1-{name}", out / f"2-{name}"
+    one.write_bytes(pe(first, name == "signed.dll"))
+    two.write_bytes(pe(second, name == "signed.dll"))
+    changed = app_tool.steady_pe(one, stamp), app_tool.steady_pe(two, stamp)
+    if name == "signed.dll":
+        assert changed == (False, False) and one.read_bytes() != two.read_bytes(), name
+        continue
+    data = one.read_bytes()
+    assert changed == (True, True) and data == two.read_bytes(), name
+    assert struct.unpack_from("<I", data, 0x88)[0] == stamp
+    assert struct.unpack_from("<I", data, 0x98 + 64)[0] == app_tool.pe_checksum(data, 0x98 + 64) != 1
+assert not app_tool.steady_pe(Path("tools/make-app.py"), stamp)
+
+# Two Wines' registries of one build: the same once made steady.
+def registry(seconds, guid, host, msi):
+    return (f"WINE REGISTRY Version 2\n;; All keys relative to \\\\Machine\n\n#arch=win64\n\n"
+            f"[Software\\\\Microsoft\\\\Cryptography] {seconds}\n#time=1dd66{seconds:x}\n\"MachineGuid\"=\"{guid}\"\n\n"
+            f"[Software\\\\Wine\\\\Mono] {seconds}\n\"InstallDate\"=\"2026102{seconds % 9}\"\n"
+            f"\"LocalPackage\"=\"C:\\\\windows\\\\Installer\\\\{msi}.msi\"\n\n"
+            f"[System\\\\Control\\\\ComputerName] {seconds}\n\"ComputerName\"=\"{host.upper()}\"\n"
+            f"\"Hostname\"=\"{host}\"\n\"PROCESSOR_LEVEL\"=\"{seconds % 30}\"\n"
+            f"\"ContainerId\"=\"{{0001845E-0000-FFFF-{guid[:4].upper()}-1B8F00000000}}\"\n"
+            f"@=hex(ffff0010):{','.join(f'{(seconds >> i) & 255:02x}' for i in range(0, 64, 8))}\n")
+one = prefix_tool.steady_registry(registry(1793102035, "8d10a469-e550-4f92-9e5e-7582228a161c", "23bd2c9ae97f", "ea81"))
+two = prefix_tool.steady_registry(registry(1793174756, "b2d5c60e-791f-4682-b1b0-5091a729be73", "ed6c3038ba7e", "d2a4"))
+assert one == two, "\n".join(a + "  |  " + b for a, b in zip(one.splitlines(), two.splitlines()) if a != b)
+assert "1793102035" not in one and "23BD2C9AE97F" not in one and '"ComputerName"="PROSPERO"' in one
+assert '"MachineGuid"="' in one and "8d10a469" not in one and "{0001845E-0000-FFFF-" in one
+RELEASE
+python3 -m py_compile tools/make-prefix.py tools/make-app.py tools/make-update.py tools/make-font.py art/make-art.py \
     tests/make-test-programs.py tests/make-sample-covers.py
 bash -n tools/build.sh
 echo "host checks passed"

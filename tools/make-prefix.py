@@ -40,13 +40,24 @@ console reads.
    SimSun, Gulim and PMingLiU for characters a font lacks, which are then Droid Sans
    Fallback. APP_DIR/pc5/prefix-fonts.reg holds what that adds to user.reg, which PC5 adds
    to the prefix of a game installed before (title/pc5_game.c).
+8. The same build gives the same files (steady_registry): what Wine writes from the clock,
+   from chance or from the machine it ran on is written as one fixed value instead. That
+   is the registry's times (each key's and the dates installers and devices record), its
+   GUIDs (the machine's, the display's, the devices'), Windows Installer's names for its
+   copies of the MSIs (deleted, 6.), the build machine's name and CPU, and
+   .update-timestamp. The time is SOURCE_DATE_EPOCH (tools/build.sh). An update then
+   downloads only what changed (tools/make-update.py).
 """
 import argparse
+import calendar
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -73,6 +84,77 @@ FONT_REPLACEMENTS = {
     "Gungsuh": CJK, "Malgun Gothic": CJK,
     "굴림": CJK, "굴림체": CJK, "돋움": CJK, "돋움체": CJK, "바탕": CJK, "바탕체": CJK, "궁서": CJK, "맑은 고딕": CJK,
 }
+
+
+# The time the files are said to be made at, when tools/build.sh doesn't give one: the
+# date tools/make-app.py zips them with.
+EPOCH = int(os.environ.get("SOURCE_DATE_EPOCH") or calendar.timegm((2026, 10, 22, 0, 0, 0)))
+# The machine Wine ran on, as every build says it: the console's name for its user
+# (pw_prefix.CONSOLE_USER) and the PS5's CPU (AMD's Zen 2 as the 4700S reports it).
+MACHINE_NAME = "PROSPERO"
+MACHINE_CPU = {"PROCESSOR_IDENTIFIER": "AMD64 Family 23 Model 71 Stepping 0, AuthenticAMD",
+               "PROCESSOR_LEVEL": "23", "PROCESSOR_REVISION": "4700", "NUMBER_OF_PROCESSORS": "16"}
+# The registry's GUIDs Wine makes by chance; a device's ContainerId keeps its first part
+# (the device's own ID), so the same device has the same one in each file.
+RANDOM_GUIDS = ("MachineGuid", "MachineId", "VideoID", "ContainerId")
+
+
+def filetime(seconds: int) -> int:
+    """Windows' time (100 ns since 1601) of a time in seconds since 1970."""
+    return (seconds + 11644473600) * 10_000_000
+
+
+def steady_guid(seed: str, old: str) -> str:
+    """A GUID from seed, written as old is (braces, case); a ContainerId keeps its first 19 characters."""
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    inner = old.strip("{}")
+    keep = 19 if seed.startswith("ContainerId") and len(inner) == 36 else 0
+    made = inner[:keep] + "-".join((digest[0:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32]))[keep:]
+    made = made.upper() if inner == inner.upper() else made.lower()
+    return f"{{{made}}}" if old.startswith("{") else made
+
+
+def steady_registry(text: str) -> str:
+    """A registry file (or a part of one) with the clock's, chance's and the machine's values fixed (8. above)."""
+    when = time.gmtime(EPOCH)
+    stamp = filetime(EPOCH)
+    stamp_bytes, day_bytes = stamp.to_bytes(8, "little"), filetime(EPOCH - EPOCH % 86400).to_bytes(8, "little")
+    out, section = [], ""
+    for line in text.split("\n"):
+        cr = line.endswith("\r")
+        body = line[:-1] if cr else line
+        if m := re.fullmatch(r"(\[.*\]) \d+", body):
+            section = m.group(1)
+            body = f"{section} {EPOCH}"
+        elif re.fullmatch(r"#time=[0-9a-f]+", body):
+            body = f"#time={stamp:x}"
+        elif m := re.fullmatch(r'"(\w+)"=(.*)', body):
+            name, value = m.groups()
+            if name == "InstallDate" and re.fullmatch(r'"\d{8}"', value):
+                value = f'"{when.tm_year:04}{when.tm_mon:02}{when.tm_mday:02}"'
+            elif name == "DriverDate" and re.fullmatch(r'"\d\d-\d\d-\d{4}"', value):
+                value = f'"{when.tm_mon:02}-{when.tm_mday:02}-{when.tm_year:04}"'
+            elif name == "DriverDateData" and re.fullmatch(r"hex:([0-9a-f]{2},){7}[0-9a-f]{2}", value):
+                value = "hex:" + ",".join(f"{b:02x}" for b in day_bytes)
+            elif name in RANDOM_GUIDS and (g := re.fullmatch(r'"(\{?[0-9A-Fa-f-]{36}\}?)"', value)):
+                old = g.group(1)
+                seed = f"{name} {old.strip('{}')[:19]}" if name == "ContainerId" else name
+                value = f'"{steady_guid(seed, old)}"'
+            elif name == "LocalPackage" and (p := re.fullmatch(r'"(C:\\\\windows\\\\Installer\\\\)[0-9a-f]+\.msi"', value)):
+                value = f'"{p.group(1)}{hashlib.sha256(section.encode("latin-1")).hexdigest()[:4]}.msi"'
+            elif name in ("ComputerName", "USERDOMAIN") and value.startswith('"'):
+                value = f'"{MACHINE_NAME}"'
+            elif name == "Hostname" and value.startswith('"'):
+                value = f'"{MACHINE_NAME.lower()}"'
+            elif name == "LOGONSERVER" and value.startswith('"'):
+                value = f'"\\\\\\\\{MACHINE_NAME}"'
+            elif name in MACHINE_CPU and value.startswith('"'):
+                value = f'"{MACHINE_CPU[name]}"'
+            body = f'"{name}"={value}'
+        elif re.fullmatch(r"(@|\"[^\"]*\")=hex\(ffff0010\):([0-9a-f]{2},){7}[0-9a-f]{2}", body):
+            body = body[:body.index("=hex(")] + "=hex(ffff0010):" + ",".join(f"{b:02x}" for b in stamp_bytes)
+        out.append(body + ("\r" if cr else ""))
+    return "\n".join(out)
 
 
 def vkd3d_files(archive: Path) -> dict:
@@ -268,7 +350,10 @@ def main() -> int:
     for key in sorted(files):
         data = files[key].read_bytes()
         if key in pw_prefix.REGISTRY:
-            data = pw_prefix.to_console(key, data)
+            data = steady_registry(pw_prefix.to_console(key, data).decode("latin-1")).encode("latin-1")
+        elif key == ".update-timestamp":
+            # The time of Wine's wine.inf when it made the prefix, which every build has anew.
+            data = re.sub(rb"^\d+", str(EPOCH).encode(), data)
         (target / key).parent.mkdir(parents=True, exist_ok=True)
         (target / key).write_bytes(data)
         listed.append(key)
@@ -279,9 +364,9 @@ def main() -> int:
     if b'@="wowprospero.dll"' not in (target / "system.reg").read_bytes():
         sys.exit("make-prefix: system.reg doesn't name wowprospero.dll as the WoW64 CPU")
     (args.out / "pc5" / "prefix.list").write_text("".join(f"{line}\n" for line in listed))
-    (args.out / "pc5" / "prefix-media.reg").write_bytes(media.encode("latin-1"))
-    (args.out / "pc5" / "prefix-dotnet.reg").write_bytes(dotnet.encode("latin-1"))
-    (args.out / "pc5" / "prefix-fonts.reg").write_bytes(fonts.encode("latin-1"))
+    (args.out / "pc5" / "prefix-media.reg").write_bytes(steady_registry(media).encode("latin-1"))
+    (args.out / "pc5" / "prefix-dotnet.reg").write_bytes(steady_registry(dotnet).encode("latin-1"))
+    (args.out / "pc5" / "prefix-fonts.reg").write_bytes(steady_registry(fonts).encode("latin-1"))
     mono =args.out / "pc5" / "mono"
     if mono.exists():
         shutil.rmtree(mono)
