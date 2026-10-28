@@ -1,0 +1,45 @@
+name: A problem with PC5
+description: PC5 itself doesn't open, closes, can't update, or something in it doesn't work. For a game, use "A game doesn't run".
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before reporting, update to the newest PC5 if it opens (**Settings › System › Update now**). See [Reporting a problem](https://github.com/bornaradusin/PC5/wiki/Reporting-a-problem) and [Troubleshooting](https://github.com/bornaradusin/PC5/wiki/Troubleshooting).
+  - type: input
+    id: pc5
+    attributes:
+      label: PC5 version
+      description: "**Settings › About PC5** (press Options in the library)."
+      placeholder: "Example: 1.8.7"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware
+      description: The console's **Settings › System › System Software**.
+      placeholder: "Example: 9.60"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what PC5 showed (any error code), and whether it happens every time.
+    validations:
+      required: true
+  - type: upload
+    id: log
+    attributes:
+      label: Log
+      description: PC5's own zip from `/data/prospero-win/logs/` (`issue-…_launcher.zip`), as it is, when there is one. For an update that failed, turn on **Settings › System › Keep all logs**, try again and attach PC5's newest `…_launcher.zip`.
+    validations:
+      required: false
+      accept: ".zip"
+  - type: textarea
+    id: saw
+    attributes:
+      label: What PC5 saw
+      description: Report on GitHub fills this in. Leave it as it is, or empty.
+    validations:
+      required: false

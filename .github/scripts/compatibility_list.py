@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Collects the reports in the "Game compatibility" discussions category into one table, the
-wiki's "Game compatibility" page. The category's "Game compatibility list" discussion (made
-the first time, for pinning) points there and to the report form: an Action can make a
-discussion but not edit one afterwards ("Resource not accessible by integration").
+"""Makes the wiki's "Game compatibility" page: one table of how games run in PC5, from two
+places.
 
-Run by .github/workflows/compatibility.yml with GITHUB_TOKEN and GITHUB_REPOSITORY. Each
-report is a discussion made with .github/DISCUSSION_TEMPLATE/game-compatibility.yml, whose
-body GitHub writes as "### <label>" headings, each followed by its answer.
+- A game that runs: a report in the "Game compatibility" discussions category, made with
+  .github/DISCUSSION_TEMPLATE/game-compatibility.yml (GitHub writes its body as "### <label>"
+  headings, each followed by its answer). It lists as posted: works perfectly, or playable with
+  issues. Each one gets one comment once the page with it is published.
+- A game that doesn't run: an issue in this repository, with the game's log. It lists by its
+  state: being looked at while it is open; resolved (it runs) once it is closed as completed;
+  unresolved (it doesn't run) once it is closed as not planned. An issue closed as a duplicate
+  isn't listed. The game is the issue's "Game" field (.github/ISSUE_TEMPLATE/1-game.yml, which
+  PC5's Report on GitHub opens filled in), or the "**Game:**" line older PC5s wrote. For an
+  issue written by hand, before the form, games-by-issue.txt beside this script names it, or
+  a report names it.
 
-A report that a game doesn't run lists only on the maintainer's word: it names an issue in this
-repository (with the game's log), and the game shows as being looked at while that issue is
-open, and as not running once the maintainer labels it wontfix (closing an issue as not planned
-for a missing log confirms nothing). A
-report without such an issue gets one comment saying so and is closed; edited to name one, it
-opens again. The maintainer's own reports list as posted. Each report in the list gets one
-comment saying so, once the page with it is published.
+A report that a game doesn't run, made before issues were the way (the form no longer offers
+it), names its game's issue: without one it gets one comment saying so and is closed. The
+category's "Game compatibility list" discussion (made the first time, for pinning) points to
+the page and to the report form: an Action can make a discussion but not edit one afterwards.
+
+Run by .github/workflows/compatibility.yml with GITHUB_TOKEN and GITHUB_REPOSITORY.
 """
 import json
 import os
@@ -34,9 +39,11 @@ RESULTS = {  # the form's answers, best first, with the mark the table shows
     "Starts but not playable": "🟠 Starts but not playable",
     "Doesn't start": "❌ Doesn't start",
 }
-NOT_RUNNING = ("Starts but not playable", "Doesn't start")
-LOOKED_AT = "🔍 Being looked at"   # a report whose issue is still open
-SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, "Starts but not playable", "Doesn't start"]
+NOT_RUNNING = ("Starts but not playable", "Doesn't start")   # older reports: their issue lists the game
+LOOKED_AT = "🔍 Being looked at"     # an issue still open
+RESOLVED = "✅ Resolved: runs"       # an issue closed as completed
+UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
+SHOWN = ["Works perfectly", "Playable with issues", RESOLVED, LOOKED_AT, UNRESOLVED]
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
@@ -104,7 +111,7 @@ def main() -> int:
         print(f"compatibility list: no '{CATEGORY}' category yet: nothing to do")
         return 0
 
-    reports, listing, after = [], None, None
+    reports, named, listing, after = [], {}, None, None
     while True:
         page = graphql("""query($owner: String!, $name: String!, $category: ID!, $after: String) {
             repository(owner: $owner, name: $name) {
@@ -124,30 +131,20 @@ def main() -> int:
             result = fields.get("How it runs", "")
             if not game or result not in RESULTS:
                 continue   # not made with the form
-            author = (discussion["author"] or {}).get("login", "")
-            shown, issue = result, None
-            if result in NOT_RUNNING and author.casefold() != owner.casefold():
+            if result in NOT_RUNNING:
+                # Listed by its issue, under this report's name for the game when the issue has none.
                 issue = linked_issue(owner, name, fields.get("Issue", ""))
                 asked = any(MARK in (c["body"] or "") for c in discussion["comments"]["nodes"])
-                print(f"::notice::compatibility list: #{discussion['number']} {game}: {result}, "
-                      f"issue field {fields.get('Issue', '')!r}, issue "
-                      f"{'unknown' if issue is UNKNOWN else issue and (issue['number'], issue['state'], issue['labels'])}, "
-                      f"closed={discussion['closed']}, asked={asked}")
-                if issue is UNKNOWN:
-                    continue   # not listed this time, and nothing said or closed on a failed lookup
-                if issue is None:
+                if issue is None and (discussion["author"] or {}).get("login", "").casefold() != owner.casefold():
                     needs_issue(discussion, owner, name, asked)
-                    continue
-                if asked and discussion["closed"] and graphql(
-                        """mutation($id: ID!) { reopenDiscussion(input: {discussionId: $id}) { discussion { id } } }""",
-                        fatal=False, id=discussion["id"]) is not None:
-                    print(f"compatibility list: #{discussion['number']} names issue #{issue['number']}: opened again")
-                if issue["state"] == "OPEN":
-                    shown = LOOKED_AT
-                elif "wontfix" not in issue["labels"]:
-                    continue   # fixed, or closed without a verdict (a missing log): not listed
-            elif result in NOT_RUNNING:
-                issue = linked_issue(owner, name, fields.get("Issue", "")) or None
+                elif issue and issue is not UNKNOWN:
+                    named.setdefault(issue["number"], game)
+                    if asked and discussion["closed"] and graphql(
+                            """mutation($id: ID!) { reopenDiscussion(input: {discussionId: $id}) { discussion { id } } }""",
+                            fatal=False, id=discussion["id"]) is not None:
+                        print(f"compatibility list: #{discussion['number']} names issue #{issue['number']}: opened again")
+                continue
+            shown, issue = result, None
             told = any(LISTED in (c["body"] or "") for c in discussion["comments"]["nodes"])
             reports.append({
                 "id": discussion["id"], "told": told, "locked": discussion["locked"],
@@ -161,6 +158,7 @@ def main() -> int:
         if not discussions["pageInfo"]["hasNextPage"]:
             break
         after = discussions["pageInfo"]["endCursor"]
+    reports += issue_reports(owner, name, named)
 
     reports.sort(key=lambda r: (r["game"].casefold(), SHOWN.index(r["shown"]), r["date"]))
     counts = {shown: sum(1 for r in reports if r["shown"] == shown) for shown in SHOWN}
@@ -170,26 +168,27 @@ def main() -> int:
         "",
         ", ".join(f"{label(shown)} {counts[shown]}" for shown in SHOWN) + ".",
         "",
-        "| Game | How it runs | PC5 | Store and version | Controller | Settings that helped | Notes | Report |",
+        "| Game | How it runs | PC5 | Store and version | Controller | Settings that helped | Notes | Report or issue |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in reports:
-        how = label(r["shown"]) + (f" ([#{r['issue']['number']}]({r['issue']['url']}))" if r["issue"] else "")
+        how = label(r["shown"])
         lines.append(f"| {cell(r['game'], 60)} | {how} | {cell(r['pc5'], 12)} | {cell(r['edition'], 40)} | "
                      f"{cell(r['controller'], 20)} | {cell(r['settings'])} | {cell(r['notes'], 200)} | "
                      f"[#{r['number']}]({r['url']}) by "
                      f"{cell(r['author'], 40)}, {r['date']} |")
     if not reports:
         lines.append("| *No reports yet* | | | | | | | |")
-    lines += ["", "A game that crashes or doesn't start: open an "
-              f"[issue](https://github.com/{owner}/{name}/issues/new/choose) with its log first, then report it here "
-              "with the issue's number. It shows as being looked at while the issue is open, and as not running "
-              "once the issue is marked wontfix."]
+    lines += ["", "A game that crashes, doesn't start or isn't playable: open an "
+              f"[issue](https://github.com/{owner}/{name}/issues/new/choose) with its log (PC5's **Report on GitHub** "
+              "writes one for you). The game shows as being looked at while the issue is open, then as resolved "
+              "(it runs) or unresolved (it doesn't run), as the issue is closed."]
 
     page = "\n".join([
-        "Which games run in PC5, as players found: every report of the [Game compatibility]"
-        f"(https://github.com/{owner}/{name}/discussions/categories/game-compatibility) discussions, collected by a "
-        "GitHub Action each time one is posted or edited.",
+        "Which games run in PC5: the games players report running, from the [Game compatibility]"
+        f"(https://github.com/{owner}/{name}/discussions/categories/game-compatibility) discussions, and the games "
+        f"with an [issue](https://github.com/{owner}/{name}/issues?q=is%3Aissue), by how it stands. A GitHub Action "
+        "makes it again each time either changes.",
         "",
     ] + lines) + "\n"
     publish(owner, name, page)
@@ -214,6 +213,84 @@ def main() -> int:
               discussion { url } } }""", repo=repo["id"], category=category["id"], title=LIST_TITLE, body=pointer)
         print(f"compatibility list: made {made['createDiscussion']['discussion']['url']} (pin it)")
     return 0
+
+
+GAME_LINE = re.compile(r"^\s*(?:\*\*)?Game:(?:\*\*)?\s*(.+?)\s*$", re.I | re.M)
+PC5_LINE = re.compile(r"^\s*(?:\*\*)?PC5:(?:\*\*)?\s*v?([0-9][0-9.]*)", re.I | re.M)
+SAW_LINE = re.compile(r"^\s*(?:\*\*)?PC5 saw:(?:\*\*)?\s*(.+?)\s*$", re.I | re.M)
+GAMES_BY_ISSUE = Path(__file__).with_name("games-by-issue.txt")
+
+
+def games_by_issue() -> dict:
+    """games-by-issue.txt: the games of issues written by hand, by the issue's number."""
+    games = {}
+    for line in GAMES_BY_ISSUE.read_text(encoding="utf-8").splitlines() if GAMES_BY_ISSUE.exists() else []:
+        found = re.match(r"\s*(\d+)\s+(\S.*?)\s*$", line)   # "# …" lines don't match: they say what it is
+        if found:
+            games.setdefault(int(found.group(1)), []).append(found.group(2))
+    return games
+
+
+def issue_games(issue: dict, fields: dict, named: dict, by_number: dict) -> list:
+    """The games an issue is about: games-by-issue.txt's for it, its form's "Game" field, the
+    "**Game:**" line of an older PC5's Report on GitHub (without the program in brackets), or
+    the game a report names it for. An empty list for an issue about no one game."""
+    if issue["number"] in by_number:
+        return by_number[issue["number"]]
+    if fields.get("Game"):
+        return [fields["Game"]]
+    found = GAME_LINE.search(issue["body"] or "")
+    if found:
+        return [re.sub(r"\s*\((?:`[^`]*`|[^()]*\.exe)\)\s*$", "", found.group(1), flags=re.I).strip()]
+    if issue["number"] in named:
+        return [named[issue["number"]]]
+    return []
+
+
+def first_line(text: str) -> str:
+    """A field's first line with something on it, without code marks."""
+    return next((line.strip(" `") for line in text.splitlines() if line.strip(" `")), "")
+
+
+def issue_reports(owner: str, name: str, named: dict) -> list:
+    """The rows of the games with an issue, by its state: one a game, its newest issue's."""
+    rows, after, by_number = {}, None, games_by_issue()
+    while True:
+        page = graphql("""query($owner: String!, $name: String!, $after: String) {
+            repository(owner: $owner, name: $name) {
+              issues(first: 100, after: $after, states: [OPEN, CLOSED], orderBy: {field: CREATED_AT, direction: ASC}) {
+                pageInfo { hasNextPage endCursor }
+                nodes { number title url body state stateReason createdAt author { login }
+                        labels(first: 20) { nodes { name } } }
+              } } }""", owner=owner, name=name, after=after)["repository"]["issues"]
+        for node in page["nodes"]:
+            body = node["body"] or ""
+            issue = {"number": node["number"], "title": node["title"], "body": body,
+                     "labels": [label["name"].casefold() for label in node["labels"]["nodes"]]}
+            fields = answers(body)
+            if node["stateReason"] == "DUPLICATE":
+                continue
+            if node["state"] == "OPEN":
+                shown = LOOKED_AT
+            elif node["stateReason"] == "NOT_PLANNED" or "wontfix" in issue["labels"]:
+                shown = UNRESOLVED
+            else:
+                shown = RESOLVED
+            pc5 = re.match(r"\s*v?([0-9][0-9.]*)", fields.get("PC5 version", "")) or PC5_LINE.search(body)
+            saw = first_line(fields.get("What PC5 saw", "")) or first_line(fields.get("What goes wrong", ""))
+            if not saw and SAW_LINE.search(body):
+                saw = SAW_LINE.search(body).group(1)
+            for game in issue_games(issue, fields, named, by_number):
+                rows[game.casefold()] = {   # issues come oldest first: a newer one takes the game's row
+                    "told": True, "locked": True, "game": game, "shown": shown,
+                    "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "", "settings": "",
+                    "notes": saw if shown != RESOLVED else "",
+                    "url": node["url"], "number": node["number"],
+                    "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
+                }
+        if not page["pageInfo"]["hasNextPage"]:
+            return list(rows.values())
+        after = page["pageInfo"]["endCursor"]
 
 
 def label(shown: str) -> str:
@@ -245,10 +322,6 @@ def linked_issue(owner: str, name: str, text: str):
 def tell_listed(report: dict, owner: str, name: str) -> int:
     """One comment on a report now in the list, with how it shows there: 1 when made."""
     how = label(report["shown"])
-    if report["shown"] == LOOKED_AT:
-        how = f"{how}, while [#{report['issue']['number']}]({report['issue']['url']}) is open"
-    elif report["issue"]:
-        how = f"{how} ([#{report['issue']['number']}]({report['issue']['url']}))"
     body = "\n".join([
         LISTED,
         f"Thanks for the report! **{report['game']}** is now in the [game compatibility list]"
@@ -269,15 +342,13 @@ def needs_issue(discussion: dict, owner: str, name: str, asked: bool) -> None:
     if not asked and not discussion["locked"]:
         body = "\n".join([
             MARK,
-            "Thanks for the report! A game that doesn't start or isn't playable needs an issue with its log first, "
-            "so the cause can be found: it could be the game, its copy, a setting or PC5. Until then this report "
-            "isn't listed, and it's closed.",
+            "Thanks for the report! A game that doesn't start or isn't playable is listed by its issue, with its "
+            "log, so the cause can be found: it could be the game, its copy, a setting or PC5. This report is "
+            "closed.",
             "",
-            f"1. Open an [issue](https://github.com/{owner}/{name}/issues/new/choose) and attach the game's zip "
-            "from `/data/prospero-win/logs/`.",
-            "2. Edit this report and put the issue's number in **Issue**.",
-            "",
-            "It then opens again and is listed as being looked at.",
+            f"Open an [issue](https://github.com/{owner}/{name}/issues/new/choose) and attach the game's zip "
+            "from `/data/prospero-win/logs/` (PC5's **Report on GitHub** writes it for you). The game is then "
+            "listed as being looked at, and as resolved or unresolved once the issue is closed.",
         ])
         if graphql("""mutation($id: ID!, $body: String!) { addDiscussionComment(input: {discussionId: $id, body: $body}) {
                 comment { id } } }""", fatal=False, id=discussion["id"], body=body) is not None:

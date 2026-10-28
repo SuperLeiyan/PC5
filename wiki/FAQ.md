@@ -9,7 +9,7 @@ No. PC5 contains no games and downloads none. You install the games you own, fro
 Whether a game runs is only known by trying it. PC5 makes no promise about any game. Games that need Steam, Epic, EA or Ubisoft's launcher running, online DRM or anti-cheat don't run. See [What runs and what doesn't](Installing-games#what-runs-and-what-doesnt).
 
 **Is there a list of games that work?**
-Yes: the [Game compatibility list](Game-compatibility), made from players' reports in Discussions. To add a game, open [the report form](https://github.com/bornaradusin/PC5/discussions/new?category=game-compatibility), fill it in and post it: the game appears in the list within a minute or two.
+Yes: the [Game compatibility list](Game-compatibility). A game that runs comes from a player's report in Discussions: to add one, open [the report form](https://github.com/bornaradusin/PC5/discussions/new?category=game-compatibility), fill it in and post it, and the game appears in the list within a minute or two. A game that doesn't run comes from its [issue](https://github.com/bornaradusin/PC5/issues): being looked at while it is open, then resolved or unresolved as it is closed.
 
 **Does PC5 need internet?**
 No. PC5 itself only goes online to find covers and to check for a newer version. Without internet, games get a cover made from their icon, or [your own picture](Covers#using-your-own-cover).

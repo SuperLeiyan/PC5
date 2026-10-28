@@ -78,7 +78,7 @@ The QR code only opens the form: nothing is sent until you submit it, and the lo
 
 ### Copying the log off the console
 
-Copy the zip from `/data/prospero-win/logs/` with the tool you use to move files to and from the console (an FTP server payload, for example). Drag it into the issue's text box.
+Copy the zip from `/data/prospero-win/logs/` with the tool you use to move files to and from the console (an FTP server payload, for example). Drag it into the issue form's **Log** field.
 
 PC5 1.6.0 and older kept logs as `.log` files (with `-earlier` and `-start` parts) rather than zips. Attach all of them if that is what you have.
 
@@ -92,9 +92,11 @@ Sometimes the log doesn't show why a game stops, and the issue's answer asks for
 
 ## Opening the issue
 
-1. Press **△** on PC5's message and scan the code (see [Report on GitHub from PC5](#report-on-github-from-pc5)), or go to <https://github.com/bornaradusin/PC5/issues> and choose **New issue**. You need a GitHub account.
-2. Give it a title that says what goes wrong, for example "Game closes before showing anything after its intro video".
-3. Write the details from [What to include](#what-to-include).
-4. Drag the zip into the text box, wait for it to upload, and submit.
+1. Press **△** on PC5's message and scan the code (see [Report on GitHub from PC5](#report-on-github-from-pc5)), or go to <https://github.com/bornaradusin/PC5/issues/new/choose> and choose **A game doesn't run** (**A problem with PC5** for PC5 itself). You need a GitHub account.
+2. Give it a title that says what goes wrong, for example "Far Cry: closes before showing anything".
+3. Fill in the form, with the details from [What to include](#what-to-include). It can't be submitted until the fields it asks for are filled in, the zip in **Log** among them: drag it there and wait for it to upload.
+4. Submit.
+
+A game's issue puts it in the [game compatibility list](Game-compatibility), by the name in its **Game** field: as being looked at while the issue is open, then as resolved (it runs) or unresolved (it doesn't run), as it is closed.
 
 Thank you: every report with a log helps more games run.

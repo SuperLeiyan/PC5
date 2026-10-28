@@ -1,0 +1,74 @@
+name: A game doesn't run
+description: A game that closes, stops with an error, freezes or isn't playable in PC5. The game compatibility list shows it from this issue.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue per game. PC5's **Report on GitHub** (△ on PC5's message after a game went wrong) opens this form filled in. The [game compatibility list](https://github.com/bornaradusin/PC5/wiki/Game-compatibility) shows the game as being looked at while the issue is open, then as resolved (it runs) or unresolved (it doesn't run), as it is closed.
+
+        Before reporting, update to the newest PC5 and check the program PC5 starts for the game (**Manage › Change program**). See [Reporting a problem](https://github.com/bornaradusin/PC5/wiki/Reporting-a-problem).
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      description: Its name, as the store or its title screen has it.
+      placeholder: "Example: Far Cry"
+    validations:
+      required: true
+  - type: input
+    id: program
+    attributes:
+      label: Program
+      description: The program PC5 starts for it, as the game's **Manage › Change program** shows it.
+      placeholder: "Example: FarCry.exe"
+    validations:
+      required: false
+  - type: input
+    id: pc5
+    attributes:
+      label: PC5 version
+      description: "**Settings › About PC5** (press Options in the library)."
+      placeholder: "Example: 1.8.7"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware
+      description: The console's **Settings › System › System Software**.
+      placeholder: "Example: 9.60"
+    validations:
+      required: true
+  - type: dropdown
+    id: problem
+    attributes:
+      label: What goes wrong
+      options:
+        - Closes before showing anything
+        - Stops with an error
+        - Freezes, or has to be closed
+        - Starts, but isn't playable
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, where it stopped, what was on screen, and whether it happens every time. Any settings you changed for the game (controller mode, frame generation, launch options).
+    validations:
+      required: true
+  - type: upload
+    id: log
+    attributes:
+      label: Log
+      description: The game's zip from `/data/prospero-win/logs/`, as it is (`issue-….zip`, or the game's newest `log-….zip` when nothing crashed). Without it the cause can't be found.
+    validations:
+      required: true
+      accept: ".zip"
+  - type: textarea
+    id: saw
+    attributes:
+      label: What PC5 saw
+      description: Report on GitHub fills this in. Leave it as it is, or empty.
+    validations:
+      required: false

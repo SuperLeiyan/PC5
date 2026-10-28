@@ -1,0 +1,15 @@
+# The games of issues written by hand, before the issue form, and of issues whose game's name
+# needs putting right: the issue's number, then the game, one game a line (an issue about two
+# games has two lines). The game compatibility list (compatibility_list.py) lists each game by
+# how its issue stands, as it lists the issues made with the form, whose "Game" field names
+# it. A line here wins over that field.
+43 The Binding of Isaac: Rebirth
+65 Stellar Blade
+89 Batman: Arkham Knight
+95 Fallout
+95 Fallout 2
+96 Brian Lara International Cricket 2007
+99 Sacred Underworld
+100 WheelMates
+104 Heroes of Might and Magic: Olden Era
+120 Baldur's Gate II (original GOG edition)

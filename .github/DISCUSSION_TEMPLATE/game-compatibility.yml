@@ -4,9 +4,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        One report per game and PC5 version: how the game runs in PC5. Within a minute or two of posting, your report is in the [game compatibility list](https://github.com/bornaradusin/PC5/wiki/Game-compatibility).
+        One report per game and PC5 version: a game that runs in PC5, and how well. Within a minute or two of posting, your report is in the [game compatibility list](https://github.com/bornaradusin/PC5/wiki/Game-compatibility).
 
-        **A game that doesn't start or isn't playable needs an issue first.** Open an [issue](https://github.com/bornaradusin/PC5/issues/new/choose) with the game's log from `/data/prospero-win/logs/`, then put its number in **Issue** below. A report of a game that doesn't run, without an issue, isn't listed and is closed. While its issue is open the game is listed as being looked at, and it is listed as not running once the issue is marked wontfix.
+        **A game that doesn't start or isn't playable: open an [issue](https://github.com/bornaradusin/PC5/issues/new/choose) instead**, with the game's log from `/data/prospero-win/logs/` (PC5's **Report on GitHub** writes one for you). The list shows the game as being looked at while its issue is open, then as resolved (it runs) or unresolved (it doesn't run), as the issue is closed.
   - type: input
     id: game
     attributes:
@@ -30,18 +30,8 @@ body:
       options:
         - Works perfectly
         - Playable with issues
-        - Starts but not playable
-        - Doesn't start
     validations:
       required: true
-  - type: input
-    id: issue
-    attributes:
-      label: Issue
-      description: For a game that doesn't start or isn't playable, the issue you opened for it with its log. Leave it empty for a game that runs.
-      placeholder: "Example: #61"
-    validations:
-      required: false
   - type: input
     id: pc5
     attributes:

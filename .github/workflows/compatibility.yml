@@ -1,11 +1,18 @@
-# The wiki's "Game compatibility" page: every report of the "Game compatibility" discussions
-# category in one table (.github/scripts/compatibility_list.py), made again whenever a
-# discussion is posted, edited or moved, and once a day.
+# The wiki's "Game compatibility" page: the games players report running (the "Game
+# compatibility" discussions) and the games with an issue, by how it stands, in one table
+# (.github/scripts/compatibility_list.py), made again whenever a discussion or an issue is
+# posted, edited, closed or opened again, when the script or its games-by-issue.txt changes,
+# and once a day.
 name: Compatibility list
 
 on:
   discussion:
     types: [created, edited, deleted, category_changed, transferred]
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled, deleted, transferred]
+  push:
+    branches: [main]
+    paths: [.github/scripts/compatibility_list.py, .github/scripts/games-by-issue.txt, .github/workflows/compatibility.yml]
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
@@ -13,7 +20,7 @@ on:
 permissions:
   discussions: write
   contents: write
-  issues: read          # a report that a game doesn't run names an issue
+  issues: read          # the games with an issue
   pull-requests: read   # a number that turns out to be a pull request
 
 concurrency:
