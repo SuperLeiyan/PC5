@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 08:00:00 +0000
+Subject: [PATCH 43/47] PC5: a game's settings tool isn't handed off (Wine
+ patch 0931)
+
+A game that starts its own settings tool and waits for it was handed
+off as if it were a launcher starting the game: Far Cry starts
+Bin32\FarCryConfigurator.exe /Caller=FarCry each time it opens, so it
+ended, and the configurator closed at once. A program named as a
+settings tool ("config", "setting") is a helper now, as a crash reporter
+or an installer is: its start fails and the game carries on.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...s5-a-settings-tool-is-not-handed-off.patch | 44 +++++++++++++++++++
+ 3 files changed, 46 insertions(+)
+ create mode 100644 wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 697d9ef..8e77508 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -576,6 +576,7 @@ wine/patches/0927-dinput-the-ps5-title-s-controllers-as-directinput-joysticks.pa
+ wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
+ wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+ wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
++wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 07ca6a5..14d5693 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -134,6 +134,7 @@ before evaluating a candidate built from that cache.
+ | 0928 | `ntdll`: a page fault in 32-bit code on the native WoW64 CPU whose `%fs:` operand missed the 32-bit TEB gets the TEB's base back in the signal frame and runs again. sysarch(AMD64_SET_FSBASE) sets the base the CPU uses but not the GDT descriptor of the kernel's user FS selector, which the kernel writes from the thread's saved base when it switches the thread in, often while it is on its 64-bit side with the host's FS; a program that loads FS again got the low half of the host thread pointer (Fallout 1 and 2 in `GetStdHandle`, reading `%fs:0x18` at FF81C098). Only an access violation `virtual_handle_fault` left alone, not an execute fault, and not one on the stack; the first repair, and every hundredfold after, is logged; 64 repairs in one state, each within a millisecond of the last, give the fault to the program |
+ | 0929 | `ntdll`, `krnl386`: `NtSetLdtEntries` returns `STATUS_NOT_IMPLEMENTED`, as for a 64-bit process: the console refuses I386_SET_LDT (EINVAL), and `ldt_set_entry` ended the process on that. krnl386.exe16 doesn't load without LDT entries, so a lookup of a forwarded 16-bit export (`kernel32.UTRegister`, Brian Lara International Cricket 2007) fails instead of ending the game |
+ | 0930 | `win32u`: where a frame shows less than the screen (one window, or a display mode smaller than the desktop), the PS5 pointer still stops at the shown edge, but each motion goes to the server whole as raw input (`SEND_HWMSG_RAWINPUT` with a `struct raw_mouse`), as a mouse held against the screen's edge keeps reporting its motion on Windows. A game that moves a pointer of its own by `WM_INPUT` (DirectInput) stopped short of its far side once the system's pointer reached the edge first (Sacred Underworld at 1024x768) |
++| 0931 | `ntdll`: a program whose name says it is a settings tool (`config`, `setting`) is a helper for the PS5 title's hand-off (`PW_HANDOFF`), as a crash reporter or an installer is: it isn't handed off, its start fails, and the game that started it carries on. Far Cry starts `Bin32\FarCryConfigurator.exe /Caller=FarCry` each time it opens and waits for it; it was handed off, so Far Cry ended and the configurator, which shows nothing after a first launch, closed at once |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch b/wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+new file mode 100644
+index 0000000..7ff130c
+--- /dev/null
++++ b/wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+@@ -0,0 +1,44 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Wed, 28 Oct 2026 08:00:00 +0000
++Subject: [PATCH] ntdll: Don't hand a PS5 title's settings tool off as its
++ game.
++
++A game that starts its own settings tool and waits for it (Far Cry runs
++Bin32\FarCryConfigurator.exe /Caller=FarCry each time it opens) was
++handed off: the game ended and the title started the tool in its place,
++which closed at once. A program whose name says it is a settings tool
++("config", "setting") is a helper: its start fails as other helpers'
++do, and the game goes on.
++---
++ dlls/ntdll/unix/process.c | 9 ++++++---
++ 1 file changed, 6 insertions(+), 3 deletions(-)
++
++diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
++--- a/dlls/ntdll/unix/process.c
+++++ b/dlls/ntdll/unix/process.c
++@@ -694,15 +694,18 @@ static void ps5_utf8( const UNICODE_STRING *str, char *out, DWORD size )
++  * have. With PW_HANDOFF (a file) and PW_HANDOFF_DIR (the game's folder as a Windows path,
++  * ending in a backslash) in the environment, a Windows program in that folder, other than
++  * the one running and not a helper by its name (a crash reporter, an installer, an
++- * updater), is written to the file instead: its path, its command line and its working
++- * folder, a line each, in UTF-8. This process then ends, and the title starts that
++- * program in its place (PC5). Returns only when that doesn't apply. */
+++ * updater, a settings tool), is written to the file instead: its path, its command line
+++ * and its working folder, a line each, in UTF-8. This process then ends, and the title
+++ * starts that program in its place (PC5). Returns only when that doesn't apply. */
++ static void ps5_hand_off( const RTL_USER_PROCESS_PARAMETERS *params, const struct pe_image_info *pe_info )
++ {
++     static const char * const helpers[] =
++     {
++         "crash", "report", "unins", "setup", "install", "redist", "update", "patch", "helper",
++         "service", "cefsub", "webhelper", "anticheat", "battleye", "dxsetup", "dotnet", "dump",
+++        /* A game that starts its settings tool and waits for it (Far Cry, FarCryConfigurator.exe
+++         * /Caller=FarCry) goes on to the game when that start fails. */
+++        "config", "setting",
++     };
++     const char *file = getenv( "PW_HANDOFF" ), *dir = getenv( "PW_HANDOFF_DIR" ), *name;
++     char image[1024], current[1024], command[4096], cwd[1024], lower[256], text[6200];
++-- 
++2.43.0
++
+-- 
+2.43.0
+

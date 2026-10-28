@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 08:20:00 +0000
+Subject: [PATCH 45/47] PC5: the controllers are XInput devices to a game that
+ checks (Wine patch 0933)
+
+A game that leaves XInput devices to XInput finds them by the device
+manager's list (WMI's Win32_PnPEntity). PC5's controllers weren't in it,
+so Batman: Arkham Knight took the controller for a joystick of another
+kind, which it doesn't play with, and never asked XInput for it. Each
+controller is listed now as Windows lists an Xbox 360 controller.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...itle-s-controllers-as-xinput-devices.patch | 91 +++++++++++++++++++
+ 3 files changed, 93 insertions(+)
+ create mode 100644 wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index bd722b7..a1069ff 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -578,6 +578,7 @@ wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+ wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+ wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+ wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
++wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 7682fbb..c5178d1 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -136,6 +136,7 @@ before evaluating a candidate built from that cache.
+ | 0930 | `win32u`: where a frame shows less than the screen (one window, or a display mode smaller than the desktop), the PS5 pointer still stops at the shown edge, but each motion goes to the server whole as raw input (`SEND_HWMSG_RAWINPUT` with a `struct raw_mouse`), as a mouse held against the screen's edge keeps reporting its motion on Windows. A game that moves a pointer of its own by `WM_INPUT` (DirectInput) stopped short of its far side once the system's pointer reached the edge first (Sacred Underworld at 1024x768) |
+ | 0931 | `ntdll`: a program whose name says it is a settings tool (`config`, `setting`) is a helper for the PS5 title's hand-off (`PW_HANDOFF`), as a crash reporter or an installer is: it isn't handed off, its start fails, and the game that started it carries on. Far Cry starts `Bin32\FarCryConfigurator.exe /Caller=FarCry` each time it opens and waits for it; it was handed off, so Far Cry ended and the configurator, which shows nothing after a first launch, closed at once |
+ | 0932 | `win32u`: the part of the desktop a display mode smaller than it covers is centred, as win32u's `map_monitor_rect` maps the mode (scaled by the ratio of the sides that fit, about the desktop's centre); the driver took it to start at the top left. Frames show that part and the pointer stops at its edges: a 1024x768 game on a 1920x1080 desktop covers 240,0 to 1680,1080, and a game that follows the system's pointer (Sacred Underworld) reached only about five sixths of its width |
++| 0933 | `dinput`: each of the PS5 title's controllers a game finds as a DirectInput joystick (patch 0927) is also in the device manager's list, as Windows lists an Xbox 360 controller's HID device: volatile keys `HKLM\System\CurrentControlSet\Enum\HID\VID_045E&PID_028E&IG_0n\PS5&TITLE&n` (`Class` HIDClass, its `ClassGUID`, `DeviceDesc`, `Mfg`). A game that leaves XInput devices to XInput tells them apart by that list through WMI's `Win32_PnPEntity` (`IsXInputDevice`); Batman: Arkham Knight took the controller for another kind of joystick and never asked XInput for it |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch b/wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
+new file mode 100644
+index 0000000..74db28f
+--- /dev/null
++++ b/wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
+@@ -0,0 +1,91 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Wed, 28 Oct 2026 08:20:00 +0000
++Subject: [PATCH] dinput: List a PS5 title's controllers as XInput devices in
++ the registry.
++
++A game that leaves XInput devices to XInput tells them apart by the
++device manager's list, through WMI's Win32_PnPEntity (IsXInputDevice):
++a device whose instance id has IG_ and the vendor and product of the
++joystick's guidProduct. The title's joysticks were in no such list, so
++Batman: Arkham Knight took the controller for a joystick of another kind,
++which it doesn't play with, and never asked XInput for it. Each one found
++is listed now as Windows lists an Xbox 360 controller's HID device,
++HID\VID_045E&PID_028E&IG_0n\PS5&TITLE&n, in volatile keys.
++---
++ dlls/dinput/title_pad.c | 39 ++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 38 insertions(+), 1 deletion(-)
++
++diff --git a/dlls/dinput/title_pad.c b/dlls/dinput/title_pad.c
++--- a/dlls/dinput/title_pad.c
+++++ b/dlls/dinput/title_pad.c
++@@ -28,7 +28,9 @@
++  * the middle, the right one down), the D-pad a hat and ten buttons. As on
++  * Windows it has no force feedback, which games ask of XInput, and its path
++  * names it an XInput device (IG_), so a game that reads such controllers with
++- * XInput leaves it out here. The input thread reads it every few
+++ * XInput leaves it out here. A game that tells them apart by the device
+++ * manager's list instead (WMI's Win32_PnPEntity, as IsXInputDevice does)
+++ * finds it there too, as an XInput device's HID device. The input thread reads it every few
++  * milliseconds while it is acquired, so buffered data and event notification
++  * work as for a HID joystick. winmm's joystick calls go through DirectInput
++  * and find it too. Anywhere but in a title the library finds no title and
++@@ -43,6 +45,7 @@
++ #include "winbase.h"
++ #include "winternl.h"
++ #include "winuser.h"
+++#include "winreg.h"
++ #include "winerror.h"
++ #include "devguid.h"
++ #include "dinput.h"
++@@ -116,6 +119,39 @@ static BOOL read_title_pad( UINT32 index, struct xinput_pad_state *pad )
++     return TRUE;
++ }
++ 
+++/* The player's controller in the device manager's list, as Windows lists an Xbox 360
+++ * controller's HID device: its instance id names it an XInput device (IG_), with the
+++ * vendor and product guidProduct has. A game that reads that list (WMI's Win32_PnPEntity
+++ * reads these keys) to leave XInput devices to XInput, as Batman: Arkham Knight does, then
+++ * plays it with XInput instead of taking it for a joystick of another kind. Volatile: the
+++ * keys go with the title's session. */
+++static void list_title_pad( UINT32 index )
+++{
+++    static const WCHAR hidclass[] = L"{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
+++    static LONG listed;   /* a bit a player */
+++    LONG bit = 1 << index;
+++    WCHAR path[MAX_PATH];
+++    HKEY key;
+++    BOOL ok;
+++
+++    if (InterlockedOr( &listed, bit ) & bit) return;
+++    swprintf( path, ARRAY_SIZE(path), L"System\\CurrentControlSet\\Enum\\HID\\VID_045E&PID_028E&IG_%02u\\PS5&TITLE&%u",
+++              index, index );
+++    if (RegCreateKeyExW( HKEY_LOCAL_MACHINE, path, 0, NULL, REG_OPTION_VOLATILE, KEY_SET_VALUE, NULL, &key, NULL ))
+++    {
+++        WARN( "can't list player %u's controller as a device\n", index );
+++        return;
+++    }
+++#define SET_STRING( name, value ) !RegSetValueExW( key, name, 0, REG_SZ, (const BYTE *)(value), sizeof(value) )
+++    ok = SET_STRING( L"ClassGUID", hidclass ) && SET_STRING( L"Class", L"HIDClass" ) &&
+++         SET_STRING( L"DeviceDesc", L"HID-compliant game controller" ) &&
+++         SET_STRING( L"Mfg", L"(Standard system devices)" );
+++#undef SET_STRING
+++    RegCloseKey( key );
+++    if (!ok) WARN( "player %u's controller listed without its values\n", index );
+++    else TRACE( "player %u's controller listed as %s\n", index, debugstr_w( path ));
+++}
+++
++ static BOOL title_pad_index( const GUID *guid, UINT32 *index )
++ {
++     GUID base = *guid;
++@@ -134,6 +170,7 @@ HRESULT title_pad_enum_device( DWORD type, DWORD flags, DIDEVICEINSTANCEW *insta
++     TRACE( "type %#lx, flags %#lx, instance %p, version %#lx, index %d.\n", type, flags, instance, version, index );
++ 
++     if (index < 0 || !read_title_pad( index, &pad )) return DIERR_DEVICENOTREG;
+++    list_title_pad( index );
++ 
++     size = instance->dwSize;
++     memset( instance, 0, size );
++-- 
++2.43.0
++
+-- 
+2.43.0
+

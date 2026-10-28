@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 08:50:00 +0000
+Subject: [PATCH 47/47] PC5: a session's log keeps the part with its first
+ crash
+
+A session keeps how it began, its newest chunk and the one before. A
+game whose own crash handler went on logging after the crash (or one
+with a detailed log) pushed the crash out of them: Prison Break's
+detailed log kept its first and last seconds, not the calls before the
+crash. The first chunk with Wine's line about a crash is kept now as
+session-N.crash.log, whatever follows.
+---
+ docs/GETTING_STARTED.md     |  6 ++++--
+ docs/TELEMETRY.md           |  4 +++-
+ native/pw_diagnostics.c     | 32 ++++++++++++++++++++++++++++++--
+ tests/test_pw_diagnostics.c | 22 +++++++++++++++++++++-
+ 4 files changed, 58 insertions(+), 6 deletions(-)
+
+diff --git a/docs/GETTING_STARTED.md b/docs/GETTING_STARTED.md
+index a383a56..9478ec6 100644
+--- a/docs/GETTING_STARTED.md
++++ b/docs/GETTING_STARTED.md
+@@ -126,8 +126,10 @@ from `/data/prospero-win/logs/`:
+ - `session-0.log` to `session-7.log` are the last eight runs (launcher and
+   games each count as a run). `next.txt` holds the number of the next one, so
+   the newest is the one just before it.
+-- A long run keeps its newest megabyte in `session-N.log` and the megabyte
+-  before that in `session-N.previous.log`; older lines are dropped.
++- A long run keeps its newest megabyte in `session-N.log`, the megabyte
++  before that in `session-N.previous.log`, its first in `session-N.start.log`
++  and, when it crashed, the megabyte with the crash in `session-N.crash.log`;
++  other lines are dropped.
+ 
+ Each file starts with a `PW_REPORT/1` line naming the build, the game and the
+ run, so you can tell which file belongs to which game.
+diff --git a/docs/TELEMETRY.md b/docs/TELEMETRY.md
+index 48982eb..2cf1db1 100644
+--- a/docs/TELEMETRY.md
++++ b/docs/TELEMETRY.md
+@@ -53,7 +53,9 @@ number the next session takes. A file starts with
+ and then has one line per record, `REC seq=<n> t=<monotonic seconds> <record>`.
+ A session keeps two chunks of at most a megabyte: when the current one is
+ full, it becomes `session-N.previous.log` (replacing the older chunk) and a new
+-one starts with the same `PW_REPORT/1` line. A writer thread saves and sends
++one starts with the same `PW_REPORT/1` line. The first chunk is kept as
++`session-N.start.log` (how the session began), and the first chunk with a
++crash in it (Wine's line about one) as `session-N.crash.log`, whatever follows. A writer thread saves and sends
+ buffered records every 100 ms and before every restart, so a crash loses at
+ most that much; the thread that logs a record (any game thread, through Wine's
+ stderr sink) only copies it into a 512 KiB buffer and never waits for the
+diff --git a/native/pw_diagnostics.c b/native/pw_diagnostics.c
+index 286d386..32516af 100644
+--- a/native/pw_diagnostics.c
++++ b/native/pw_diagnostics.c
+@@ -34,7 +34,7 @@ static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;    /* records to write, o
+ static pthread_cond_t drained = PTHREAD_COND_INITIALIZER; /* the writer finished a pass */
+ static volatile sig_atomic_t fd = -1;
+ static int disk_error; /* __atomic: the writer stores it with the lock released */
+-static char current[512], previous[512], first[512], identity[256];
++static char current[512], previous[512], first[512], crashed[512], identity[256];
+ static char buffers[2][PW_DIAGNOSTICS_PENDING];
+ static char *pending = buffers[0], *draining = buffers[1];
+ static size_t used, bytes;
+@@ -43,6 +43,11 @@ static int writing, writer_started, writer_refused;
+ /* Chunks the session has filled: the first is kept as session-N.start.log
+  * (how the session began), the others in turn as session-N.previous.log. */
+ static unsigned rotations;
++/* The first chunk with a crash in it (Wine's line about it) is kept as
++ * session-N.crash.log instead, whatever follows: a game's own crash handler,
++ * or a detailed log, went on long enough to push it out of the parts kept.
++ * Writer thread only (and open, with the writer waited for). */
++static int crash_in_chunk, crash_kept;
+ /* The last message logged, and how many times it came again since: a run of
+  * the same line is saved once and then counted (a game's trace in a loop
+  * filled every chunk and pushed out how its session began). */
+@@ -111,15 +116,34 @@ static void disk_failed(int error)
+  * records stay in order across them. */
+ static int rotate(void)
+ {
++    const char *to = rotations++ ? previous : first;
++    if (crash_in_chunk && !crash_kept) {
++        if (to == previous) to = crashed;   /* in the first chunk it is kept as how the session began */
++        crash_kept = 1;
++    }
++    crash_in_chunk = 0;
+     (void)fsync(fd);
+     close(fd); fd = -1;
+-    if (rename(current, rotations++ ? previous : first) != 0) { disk_failed(errno); return -1; }
++    if (rename(current, to) != 0) { disk_failed(errno); return -1; }
+     fd = open(current, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+     bytes = strlen(identity);
+     if (fd < 0 || put_all(fd, identity, bytes) != 0) { disk_failed(errno); return -1; }
+     return 0;
+ }
+ 
++/* Wine's line about a crash, as PC5 finds it (pc5_logs.c). */
++static int is_crash(const char *line, size_t length)
++{
++    static const char *const marks[] = { "Unhandled exception", "Unhandled page fault", "unhandled exception",
++                                         "own crash handler" };
++    for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); m++) {
++        size_t n = strlen(marks[m]);
++        for (size_t i = 0; i + n <= length; i++)
++            if (line[i] == marks[m][0] && !memcmp(line + i, marks[m], n)) return 1;
++    }
++    return 0;
++}
++
+ /* Writer thread only: whole lines, rotating before one that would take the
+  * chunk past its size (a line longer than a chunk goes in as it is). */
+ static void save(const char *data, size_t length)
+@@ -134,6 +158,7 @@ static void save(const char *data, size_t length)
+             bytes += run; run = 0;
+             if (rotate() != 0) return;
+         }
++        if (!crash_kept && !crash_in_chunk && is_crash(data + at, line)) crash_in_chunk = 1;
+         run += line; at += line;
+     }
+     if (run && put_all(fd, data + at - run, run) != 0) { disk_failed(errno); return; }
+@@ -336,9 +361,12 @@ int pw_diagnostics_open(const char *root, const char *build, const char *profile
+     snprintf(current, sizeof(current), "%s/session-%u.log", directory, next);
+     snprintf(previous, sizeof(previous), "%s/session-%u.previous.log", directory, next);
+     snprintf(first, sizeof(first), "%s/session-%u.start.log", directory, next);
++    snprintf(crashed, sizeof(crashed), "%s/session-%u.crash.log", directory, next);
+     (void)unlink(previous);
+     (void)unlink(first);
++    (void)unlink(crashed);
+     rotations = 0;
++    crash_in_chunk = crash_kept = 0;
+     fd = open(current, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+     if (fd < 0) { disk_error = errno; goto out; }
+     /* Identity repeats on rotation so a retained tail can be identified. */
+diff --git a/tests/test_pw_diagnostics.c b/tests/test_pw_diagnostics.c
+index c7aca18..7a3025c 100644
+--- a/tests/test_pw_diagnostics.c
++++ b/tests/test_pw_diagnostics.c
+@@ -188,6 +188,24 @@ int main(void)
+     assert(read_chunk(root, 0) && !strncmp(data, "PW_REPORT/1 build=test-build", 28) && strstr(data, "record=299 repeated"));
+     assert(read_chunk(root, 1) && !strncmp(data, "PW_REPORT/1 build=test-build", 28) && data[strlen(data) - 1] == '\n');
+     pw_diagnostics_status(status, sizeof(status)); assert(!strcmp(status, "LOG SAVED - OPTIONS: REPORT HELP"));
++    /* The chunk with the session's first crash is kept as session-0.crash.log, though the
++     * game's crash handler and a second crash push it out of the other parts. */
++    pw_diagnostics_log("WINE wine: Unhandled page fault on read access to 0000000000000000 at address "
++                       "0000000140001000 (thread 0024), handed to the program's own crash handler");
++    for (unsigned i = 0; i < 300; i++) pw_diagnostics_log("handler=%u the game's crash handler logs on and on", i);
++    pw_diagnostics_log("WINE wine: Unhandled exception 0xc0000005 at address 0000000140002000: a second crash");
++    for (unsigned i = 0; i < 300; i++) pw_diagnostics_log("after=%u the session goes on after the second", i);
++    pw_diagnostics_tick(13500000000ull);
++    pw_diagnostics_test_settle();
++    {
++        snprintf(path, sizeof(path), "%s/logs/session-0.crash.log", root);
++        FILE *chunk = fopen(path, "r");
++        assert(chunk);
++        size_t got = fread(data, 1, sizeof(data) - 1, chunk); data[got] = 0; fclose(chunk);
++        assert(!strncmp(data, "PW_REPORT/1 build=test-build", 28) && strstr(data, "handed to the program's own crash handler\n"));
++        assert(!strstr(data, "a second crash") && got <= PW_DIAGNOSTICS_CHUNK);
++        assert(!session_has(root, "handed to the program's own crash handler") && session_has(root, "after=299 the session"));
++    }
+     /* A writer that cannot keep up (here: one send that takes a second)
+      * fills the buffer; the records past that are dropped, never waited for,
+      * and the writer says how many once it is through. */
+@@ -251,6 +269,7 @@ int main(void)
+     assert(read_chunk(root, 0) && strstr(data, "build=next-build") && !strstr(data, "profile=pinball"));
+     snprintf(path, sizeof(path), "%s/logs/session-0.previous.log", root); assert(access(path, F_OK) != 0);
+     snprintf(path, sizeof(path), "%s/logs/session-0.start.log", root); assert(access(path, F_OK) != 0);
++    snprintf(path, sizeof(path), "%s/logs/session-0.crash.log", root); assert(access(path, F_OK) != 0);
+     /* A folder the owner left some access to is left as it is. */
+     assert(chmod(root, 0750) == 0);
+     assert(pw_diagnostics_open(root, "next-build", "launcher", 9) == 0);
+@@ -269,9 +288,10 @@ int main(void)
+         snprintf(path, sizeof(path), "%s/logs/session-%u.log", root, i); unlink(path);
+         snprintf(path, sizeof(path), "%s/logs/session-%u.previous.log", root, i); unlink(path);
+         snprintf(path, sizeof(path), "%s/logs/session-%u.start.log", root, i); unlink(path);
++        snprintf(path, sizeof(path), "%s/logs/session-%u.crash.log", root, i); unlink(path);
+     }
+     snprintf(path, sizeof(path), "%s/logs/next.txt", root); unlink(path);
+     snprintf(path, sizeof(path), "%s/logs", root); rmdir(path); rmdir(root);
+-    puts("diagnostics passed: bounded retention, session start kept, repeated lines counted, writer thread, concurrent writers, fault/end records, off-loop reconnects, no file or network waits in callers, dropped records counted, truncation marker, disk errors");
++    puts("diagnostics passed: bounded retention, session start kept, first crash kept, repeated lines counted, writer thread, concurrent writers, fault/end records, off-loop reconnects, no file or network waits in callers, dropped records counted, truncation marker, disk errors");
+     return 0;
+ }
+-- 
+2.43.0
+

@@ -13,9 +13,17 @@
 
 /* prospero-win's sessions (native/pw_diagnostics.h, PW_DIAGNOSTICS_SESSIONS):
  * session-0.log to session-7.log in turn, next.txt naming the next. A long
- * session also has session-N.start.log (how it began) and
- * session-N.previous.log (the part before the newest). */
+ * session also has session-N.start.log (how it began),
+ * session-N.crash.log (the part with its first crash, when later parts would
+ * have pushed it out) and session-N.previous.log (the part before the newest). */
 enum { SESSIONS = 8, NO_PICTURE_S = 60 };
+
+/* A session's parts in the order they were written, the newest last, and the end of the
+ * name each is kept by. */
+static const char *const PARTS[][2] = {
+    { "start.", "-start" }, { "crash.", "-crash" }, { "previous.", "-earlier" }, { "", "" },
+};
+enum { PART_COUNT = 4, NEWEST = PART_COUNT - 1 };
 
 /* The game's own files kept with its log: a log's last 2 MiB, a dump of up
  * to 16 MiB, 32 files and 40 MiB in all, found among 20000 entries at most,
@@ -184,21 +192,20 @@ static int current_session(const char *logs)
     return current;
 }
 
-/* A session's parts in order (how it began, the part before the newest, the
- * newest), as one text. 0, or -1 when its newest part can't be read. */
+/* A session's parts in order (PARTS), as one text. 0, or -1 when its newest part can't be
+ * read. */
 static int read_session(const char *logs, int session, Pc5Buf *text)
 {
-    static const char *const parts[] = { "start.", "previous.", "" };
     char path[PC5_PATH];
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < PART_COUNT; i++) {
         Pc5Buf part = { 0 };
         int failed;
-        if (pc5_format(path, sizeof(path), "%s/session-%d.%slog", logs, session, parts[i])) return -1;
-        if (i < 2 && !pc5_is_file(path)) continue;
+        if (pc5_format(path, sizeof(path), "%s/session-%d.%slog", logs, session, PARTS[i][0])) return -1;
+        if (i < NEWEST && !pc5_is_file(path)) continue;
         failed = pc5_read_file(path, &part, 64u << 20) || pc5_buf_put(text, part.data, part.len);
         pc5_buf_free(&part);
-        if (failed && i == 2) return -1;
+        if (failed && i == NEWEST) return -1;
     }
     return 0;
 }
@@ -378,8 +385,9 @@ static void about_page(Pc5Buf *about, const Pc5LogIssue *issue, const char *when
                    issue->detail);
     if (!issue->closed)
         pc5_buf_puts(about, "Its log has no end line: it was closed with the PS button, or the console stopped while it ran.\n");
-    pc5_buf_printf(about, "\nPC5's log: %s.log, with %s-earlier.log and %s-start.log when the session was long.\n", base, base,
-                   base);
+    pc5_buf_printf(about, "\nPC5's log: %s.log, with %s-earlier.log and %s-start.log when the session was long, and "
+                          "%s-crash.log, the part with its crash, when a long session went on after it.\n",
+                   base, base, base, base);
 }
 
 static int part_path(const char *logs, int session, const char *part, char *out, size_t size)
@@ -387,19 +395,18 @@ static int part_path(const char *logs, int session, const char *part, char *out,
     return pc5_format(out, size, "%s/session-%d.%slog", logs, session, part);
 }
 
-/* The session's parts as plain files, kind-<when>_<profile>.log, -earlier.log and
- * -start.log: when a zip can't be written. */
+/* The session's parts as plain files, kind-<when>_<profile>.log, -earlier.log, -crash.log
+ * and -start.log: when a zip can't be written. The newest first: without it, nothing. */
 static int keep_plain(const char *logs, int session, const char *base, char *out, size_t size)
 {
-    static const char *const parts[][2] = { { "", "" }, { "previous.", "-earlier" }, { "start.", "-start" } };
     char from[PC5_PATH], to[PC5_PATH];
-    for (int i = 0; i < 3; i++) {
-        if (part_path(logs, session, parts[i][0], from, sizeof(from)) ||
-            pc5_format(to, sizeof(to), "%s/%s%s.log", logs, base, parts[i][1]))
+    for (int i = NEWEST; i >= 0; i--) {
+        if (part_path(logs, session, PARTS[i][0], from, sizeof(from)) ||
+            pc5_format(to, sizeof(to), "%s/%s%s.log", logs, base, PARTS[i][1]))
             return -1;
         if (!pc5_exists(from)) continue;
-        if (rename(from, to)) return i ? 0 : -1;
-        if (!i) pc5_copy(out, size, to);
+        if (rename(from, to)) return i < NEWEST ? 0 : -1;
+        if (i == NEWEST) pc5_copy(out, size, to);
     }
     return 0;
 }
@@ -409,7 +416,6 @@ static int keep_plain(const char *logs, int session, const char *base, char *out
 static int keep(const char *root, const char *logs, int session, const char *kind, Pc5LogIssue *issue, int offset_s,
                 int64_t now)
 {
-    static const char *const parts[][2] = { { "start.", "-start" }, { "previous.", "-earlier" }, { "", "" } };
     char when[32], base[PC5_PATH], zip_path[PC5_PATH], log_path[PC5_PATH], when_text[48];
     Pc5Buf about = { 0 };
     Pc5Zip zip;
@@ -430,12 +436,12 @@ static int keep(const char *root, const char *logs, int session, const char *kin
 
     if (!pc5_zip_open(&zip, zip_path)) {
         int failed = 0;
-        for (int i = 0; i < 3 && !failed; i++) {
+        for (int i = 0; i < PART_COUNT && !failed; i++) {
             char from[PC5_PATH], name[PC5_PATH + 16];
             Pc5Buf data = { 0 };
             struct stat st;
-            if (part_path(logs, session, parts[i][0], from, sizeof(from)) || stat(from, &st)) continue;
-            failed = pc5_read_file(from, &data, 64u << 20) || pc5_format(name, sizeof(name), "%s%s.log", base, parts[i][1]) ||
+            if (part_path(logs, session, PARTS[i][0], from, sizeof(from)) || stat(from, &st)) continue;
+            failed = pc5_read_file(from, &data, 64u << 20) || pc5_format(name, sizeof(name), "%s%s.log", base, PARTS[i][1]) ||
                      pc5_zip_add(&zip, name, data.data, data.len, (int64_t)st.st_mtime + offset_s);
             pc5_buf_free(&data);
         }
@@ -446,9 +452,9 @@ static int keep(const char *root, const char *logs, int session, const char *kin
         }
         pc5_buf_free(&about);
         if (!failed && !pc5_zip_close(&zip)) {
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < PART_COUNT; i++) {
                 char from[PC5_PATH];
-                if (!part_path(logs, session, parts[i][0], from, sizeof(from))) unlink(from);
+                if (!part_path(logs, session, PARTS[i][0], from, sizeof(from))) unlink(from);
             }
             pc5_copy(issue->file, sizeof(issue->file), zip_path);
             return 0;
@@ -459,12 +465,13 @@ static int keep(const char *root, const char *logs, int session, const char *kin
     return keep_plain(logs, session, base, issue->file, sizeof(issue->file));
 }
 
-/* A kept log's name: kind-YYYY-MM-DD_HH-MM_<profile>[-N] then .zip, .log, -earlier.log or
- * -start.log. Its time in when (16 characters) and 1 when it is profile's. */
+/* A kept log's name: kind-YYYY-MM-DD_HH-MM_<profile>[-N] then .zip, .log, -earlier.log,
+ * -crash.log or -start.log. Its time in when (16 characters) and 1 when it is profile's. */
 static int kept_for(const char *name, const char *kind, const char *profile, char when[17])
 {
     size_t k = strlen(kind), p = strlen(profile);
-    static const char *const ends[] = { ".zip", ".log", "-earlier.log", "-start.log" };
+    static const char *const ends[] = { ".zip", ".log", "-earlier.log", "-crash.log", "-start.log" };
+    enum { ENDS = sizeof(ends) / sizeof(ends[0]) };
     if (strncmp(name, kind, k) || name[k] != '-' || strlen(name) < k + 18 || name[k + 17] != '_') return 0;
     memcpy(when, name + k + 1, 16);
     when[16] = 0;
@@ -474,10 +481,10 @@ static int kept_for(const char *name, const char *kind, const char *profile, cha
     if (rest[0] == '-' && rest[1] >= '0' && rest[1] <= '9') {
         const char *digits = rest + 1;
         while (*digits >= '0' && *digits <= '9') digits++;
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < ENDS; i++)
             if (!strcmp(digits, ends[i])) return 1;
     }
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < ENDS; i++)
         if (!strcmp(rest, ends[i])) return 1;
     return 0;
 }
@@ -512,7 +519,8 @@ int pc5_logs_newest(const char *root, const char *profile, char *out, size_t siz
     if (pc5_format(logs, sizeof(logs), "%s/logs", root) || !(dir = opendir(logs))) return -1;
     while ((entry = readdir(dir))) {
         const char *n = entry->d_name;
-        if (pc5_ends_with_ci(n, "-earlier.log") || pc5_ends_with_ci(n, "-start.log")) continue;
+        if (pc5_ends_with_ci(n, "-earlier.log") || pc5_ends_with_ci(n, "-crash.log") || pc5_ends_with_ci(n, "-start.log"))
+            continue;
         if ((kept_for(n, "issue", profile, when) || kept_for(n, "log", profile, when)) &&
             (strcmp(when, best) > 0 || (!strcmp(when, best) && pc5_ends_with_ci(n, ".zip")))) {
             memcpy(best, when, sizeof(best));
@@ -562,26 +570,22 @@ int pc5_logs_tidy(const char *root, int keep_all, int64_t now, int offset_s, Pc5
             if (!keep(root, logs, session, "log", &issue, offset_s, now) && game && !keep_all && games < SESSIONS)
                 pc5_copy(played[games++], PC5_ID, issue.profile);
         } else {
-            unlink(path);
-            if (!pc5_format(path, sizeof(path), "%s/session-%d.previous.log", logs, session)) unlink(path);
-            if (!pc5_format(path, sizeof(path), "%s/session-%d.start.log", logs, session)) unlink(path);
+            for (int i = 0; i < PART_COUNT; i++)
+                if (!part_path(logs, session, PARTS[i][0], path, sizeof(path))) unlink(path);
         }
     }
     for (int i = 0; i < games; i++) keep_newest(logs, played[i]);
     /* Anything older than a week, but the session running now. */
     if ((dir = opendir(logs))) {
-        char now_name[32] = "", now_earlier[48] = "", now_start[48] = "";
-        if (current >= 0) {
-            snprintf(now_name, sizeof(now_name), "session-%d.log", current);
-            snprintf(now_earlier, sizeof(now_earlier), "session-%d.previous.log", current);
-            snprintf(now_start, sizeof(now_start), "session-%d.start.log", current);
-        }
+        char now_parts[PART_COUNT][48] = { "" };
+        for (int i = 0; current >= 0 && i < PART_COUNT; i++)
+            snprintf(now_parts[i], sizeof(now_parts[i]), "session-%d.%slog", current, PARTS[i][0]);
         while ((entry = readdir(dir))) {
             struct stat st;
-            if ((!pc5_ends_with_ci(entry->d_name, ".log") && !pc5_ends_with_ci(entry->d_name, ".zip")) ||
-                !strcmp(entry->d_name, now_name) || !strcmp(entry->d_name, now_earlier) ||
-                !strcmp(entry->d_name, now_start) || pc5_join(path, sizeof(path), logs, entry->d_name) ||
-                stat(path, &st) || !S_ISREG(st.st_mode))
+            int running = 0;
+            for (int i = 0; i < PART_COUNT; i++) running |= now_parts[i][0] && !strcmp(entry->d_name, now_parts[i]);
+            if ((!pc5_ends_with_ci(entry->d_name, ".log") && !pc5_ends_with_ci(entry->d_name, ".zip")) || running ||
+                pc5_join(path, sizeof(path), logs, entry->d_name) || stat(path, &st) || !S_ISREG(st.st_mode))
                 continue;
             if ((int64_t)st.st_mtime < now - (int64_t)PC5_LOG_DAYS * 86400) unlink(path);
         }

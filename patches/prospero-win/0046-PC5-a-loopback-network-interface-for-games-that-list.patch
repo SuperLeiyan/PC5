@@ -1,0 +1,495 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 08:40:00 +0000
+Subject: [PATCH 46/47] PC5: a loopback network interface for games that list
+ them (Wine patch 0934)
+
+A title starts no other process, so Wine's network information service
+(nsiproxy.sys) never ran, and every call that lists the network
+interfaces or their addresses failed with error 2. Java's
+NetworkInterface throws an Error on that, and SecureRandom's seeding
+uses it: Shattered Pixel Dungeon closed when it started a new game.
+Wine's nsi.dll answers those calls itself now, with the loopback
+interface Windows always has (127.0.0.1 and ::1).
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...-loopback-interface-without-nsiproxy.patch | 442 ++++++++++++++++++
+ 3 files changed, 444 insertions(+)
+ create mode 100644 wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index a1069ff..5539e23 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -579,6 +579,7 @@ wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+ wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+ wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+ wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
++wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index c5178d1..48eb487 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -137,6 +137,7 @@ before evaluating a candidate built from that cache.
+ | 0931 | `ntdll`: a program whose name says it is a settings tool (`config`, `setting`) is a helper for the PS5 title's hand-off (`PW_HANDOFF`), as a crash reporter or an installer is: it isn't handed off, its start fails, and the game that started it carries on. Far Cry starts `Bin32\FarCryConfigurator.exe /Caller=FarCry` each time it opens and waits for it; it was handed off, so Far Cry ended and the configurator, which shows nothing after a first launch, closed at once |
+ | 0932 | `win32u`: the part of the desktop a display mode smaller than it covers is centred, as win32u's `map_monitor_rect` maps the mode (scaled by the ratio of the sides that fit, about the desktop's centre); the driver took it to start at the top left. Frames show that part and the pointer stops at its edges: a 1024x768 game on a 1920x1080 desktop covers 240,0 to 1680,1080, and a game that follows the system's pointer (Sacred Underworld) reached only about five sixths of its width |
+ | 0933 | `dinput`: each of the PS5 title's controllers a game finds as a DirectInput joystick (patch 0927) is also in the device manager's list, as Windows lists an Xbox 360 controller's HID device: volatile keys `HKLM\System\CurrentControlSet\Enum\HID\VID_045E&PID_028E&IG_0n\PS5&TITLE&n` (`Class` HIDClass, its `ClassGUID`, `DeviceDesc`, `Mfg`). A game that leaves XInput devices to XInput tells them apart by that list through WMI's `Win32_PnPEntity` (`IsXInputDevice`); Batman: Arkham Knight took the controller for another kind of joystick and never asked XInput for it |
++| 0934 | `nsi`: without `\\.\Nsi` (a PS5 title starts no `winedevice.exe`, so no `nsiproxy.sys`) the NSI requests are answered in `nsi.dll` with the software loopback interface alone, as Windows always has it: the NDIS interface table and index-to-LUID map, and the IPv4 and IPv6 interface and unicast tables (127.0.0.1/8, ::1/128), filled as `nsiproxy.sys` fills a Unix `lo`; the other tables list no rows. `GetAdaptersAddresses`, `GetIfTable`, `GetIpAddrTable` and the like failed with error 2, and Java's `NetworkInterface` threw an Error on that: Shattered Pixel Dungeon closed when it started a new game. With the device nothing changes |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch b/wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+new file mode 100644
+index 0000000..2b45841
+--- /dev/null
++++ b/wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+@@ -0,0 +1,442 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Wed, 28 Oct 2026 08:00:00 +0000
++Subject: [PATCH] nsi: Answer with a loopback interface where the PS5 title has
++ no nsiproxy.
++
++On the console a title starts no other process, so winedevice.exe never
++runs nsiproxy.sys and \\.\Nsi can't be opened. Every NSI request failed,
++and with it GetAdaptersAddresses, GetIfTable(2), GetIpAddrTable,
++GetIfEntry(2), GetNumberOfInterfaces, ConvertInterface* and the like,
++with ERROR_FILE_NOT_FOUND, where Windows always has the software loopback
++interface. Java's NetworkInterface.getAll, which SecureRandom's seeding
++uses, throws an Error on that: Shattered Pixel Dungeon died when it
++started a new game.
++
++Without the device nsi.dll now answers the requests itself, with that
++interface alone: the NDIS interface table and index-to-LUID map, and the
++IPv4 and IPv6 interface and unicast address tables (127.0.0.1/8 and
++::1/128). The rows are filled as nsiproxy.sys fills those of a Unix "lo",
++so that iphlpapi builds its answers from them unchanged, and the interface
++is named as on Windows ("Loopback Pseudo-Interface 1", "Software Loopback
++Interface 1"). The other tables (routes, neighbours, TCP and UDP
++endpoints) list no rows; a get of another key fails as nsiproxy.sys's
++does, a get from any other table (the statistics) with ERROR_NOT_FOUND.
++Change notifications still fail, and the writes stay stubs. With the
++device nothing changes.
++---
++ dlls/nsi/nsi.c | 378 ++++++++++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 375 insertions(+), 3 deletions(-)
++
++diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
++--- a/dlls/nsi/nsi.c
+++++ b/dlls/nsi/nsi.c
++@@ -63,6 +63,378 @@ static inline HANDLE get_nsi_device( BOOL async )
++     return *cached_device;
++ }
++ 
+++/* PS5: a title can't start a second process, so winedevice.exe never runs
+++ * nsiproxy.sys and \\.\Nsi can't be opened.  Every NSI request failed then,
+++ * and with it each IP Helper call that lists the interfaces or their
+++ * addresses (GetAdaptersAddresses, GetIfTable, GetIpAddrTable,
+++ * ConvertInterface* and the like), where Windows always has the software
+++ * loopback interface; Java's NetworkInterface throws an Error on that.
+++ * Without the device the requests are answered here, with that interface
+++ * alone.  Its rows are filled as nsiproxy.sys fills those of a Unix "lo",
+++ * so that iphlpapi builds its answers from them unchanged, and it is named
+++ * as Windows names it.  The tables it has no row in (routes, neighbours,
+++ * TCP and UDP endpoints...) list none; a get of another key fails as
+++ * nsiproxy.sys's does, and of a table not kept here with ERROR_NOT_FOUND.
+++ * Change notifications still fail.  With the device nothing changes. */
+++
+++#define NSI_FALLBACK_MS_MODULEID(n) { sizeof(NPI_MODULEID), MIT_GUID, { { 0xeb004a00 + (n), 0x9b1a, 0x11d4, \
+++                                      { 0x91, 0x23, 0x00, 0x50, 0x04, 0x77, 0x59, 0xbc } } } }
+++
+++/* netiodef.h's NPI_MS_*_MODULEID, which are in uuid.lib, not imported here */
+++static const NPI_MODULEID nsi_fallback_ipv4_moduleid = NSI_FALLBACK_MS_MODULEID( 0x00 );
+++static const NPI_MODULEID nsi_fallback_ipv6_moduleid = NSI_FALLBACK_MS_MODULEID( 0x01 );
+++static const NPI_MODULEID nsi_fallback_ndis_moduleid = NSI_FALLBACK_MS_MODULEID( 0x11 );
+++
+++#define LOOPBACK_IF_INDEX       1
+++#define LOOPBACK_MTU            1500  /* nsiproxy.sys has the Unix MTU, 65536 for Linux's lo */
+++#define LOOPBACK_REACHABLE_TIME 30000 /* ms: Linux's default base_reachable_time_ms, which nsiproxy.sys reads */
+++
+++static const IN_ADDR loopback_ipv4_addr = { { { 127, 0, 0, 1 } } };
+++static const IN6_ADDR loopback_ipv6_addr = { { IN6ADDR_LOOPBACK_INIT } };
+++
+++static NET_LUID loopback_luid( void )
+++{
+++    NET_LUID luid;
+++
+++    luid.Value = 0;
+++    luid.Info.NetLuidIndex = LOOPBACK_IF_INDEX;
+++    luid.Info.IfType = MIB_IF_TYPE_LOOPBACK;
+++    return luid;
+++}
+++
+++static void loopback_string( IF_COUNTED_STRING *str, const WCHAR *value )
+++{
+++    memset( str, 0, sizeof(*str) );
+++    str->Length = wcslen( value ) * sizeof(WCHAR);
+++    memcpy( str->String, value, str->Length );
+++}
+++
+++/* ndis.c's ifinfo_fill_entry() for lo, with Windows's alias and description */
+++static void ifinfo_fill( void *key, void *rw_data, void *dynamic_data, void *static_data )
+++{
+++    static const GUID guid = { LOOPBACK_IF_INDEX, 0, 0, { 0, 0, 'N', 'e', 't', 'D', 'e', 'v' } };
+++    struct nsi_ndis_ifinfo_rw *rw = rw_data;
+++    struct nsi_ndis_ifinfo_dynamic *dyn = dynamic_data;
+++    struct nsi_ndis_ifinfo_static *stat = static_data;
+++    NET_LUID luid = loopback_luid();
+++
+++    if (key) memcpy( key, &luid, sizeof(luid) );
+++    if (rw)
+++    {
+++        memset( rw, 0, sizeof(*rw) ); /* no network guid, physical address or second name */
+++        rw->admin_status = MIB_IF_ADMIN_STATUS_UP;
+++        loopback_string( &rw->alias, L"Loopback Pseudo-Interface 1" );
+++    }
+++    if (dyn)
+++    {
+++        memset( dyn, 0, sizeof(*dyn) ); /* no flags and no traffic */
+++        dyn->oper_status = IfOperStatusUp;
+++        dyn->media_conn_state = MediaConnectStateConnected;
+++        dyn->mtu = LOOPBACK_MTU;
+++        dyn->xmit_speed = dyn->rcv_speed = 1000000; /* as on Linux: some programs want at least that */
+++    }
+++    if (stat)
+++    {
+++        memset( stat, 0, sizeof(*stat) ); /* no connector, physical address, flags or media type */
+++        stat->if_index = LOOPBACK_IF_INDEX;
+++        loopback_string( &stat->descr, L"Software Loopback Interface 1" );
+++        stat->type = MIB_IF_TYPE_LOOPBACK;
+++        stat->access_type = NET_IF_ACCESS_LOOPBACK;
+++        stat->conn_type = NET_IF_CONNECTION_DEDICATED;
+++        stat->if_guid = guid;
+++    }
+++}
+++
+++static BOOL ifinfo_is_loopback( const void *key )
+++{
+++    return ((const NET_LUID *)key)->Value == loopback_luid().Value;
+++}
+++
+++static DWORD ifinfo_get_parameter( const void *key, UINT type, void *data, UINT data_size, UINT data_offset )
+++{
+++    union
+++    {
+++        struct nsi_ndis_ifinfo_rw rw;
+++        struct nsi_ndis_ifinfo_dynamic dyn;
+++        struct nsi_ndis_ifinfo_static stat;
+++    } row;
+++
+++    if (!ifinfo_is_loopback( key )) return ERROR_FILE_NOT_FOUND;
+++    ifinfo_fill( NULL, type == NSI_PARAM_TYPE_RW ? &row.rw : NULL, type == NSI_PARAM_TYPE_DYNAMIC ? &row.dyn : NULL,
+++                 type == NSI_PARAM_TYPE_STATIC ? &row.stat : NULL );
+++    memcpy( data, (BYTE *)&row + data_offset, data_size );
+++    return ERROR_SUCCESS;
+++}
+++
+++/* ndis.c's index_luid_get_parameter() */
+++static DWORD index_luid_get_parameter( const void *key, UINT type, void *data, UINT data_size, UINT data_offset )
+++{
+++    NET_LUID luid = loopback_luid();
+++
+++    if (type != NSI_PARAM_TYPE_STATIC || data_size != sizeof(luid) || data_offset) return ERROR_INVALID_PARAMETER;
+++    if (*(const UINT *)key != LOOPBACK_IF_INDEX) return ERROR_FILE_NOT_FOUND;
+++    memcpy( data, &luid, sizeof(luid) );
+++    return ERROR_SUCCESS;
+++}
+++
+++/* ip.c's ip_interface_fill() for lo */
+++static void ip_interface_fill( BOOL ipv6, void *key, struct nsi_ip_interface_rw *rw,
+++                               struct nsi_ip_interface_dynamic *dyn, struct nsi_ip_interface_static *stat )
+++{
+++    NET_LUID luid = loopback_luid();
+++
+++    if (key) memcpy( key, &luid, sizeof(luid) );
+++    if (rw)
+++    {
+++        memset( rw, 0, sizeof(*rw) );
+++        rw->mtu = LOOPBACK_MTU;
+++        rw->site_prefix_len = 64;
+++        rw->base_reachable_time = LOOPBACK_REACHABLE_TIME;
+++        rw->dad_transmits = 0;
+++        rw->retransmit_time = 1000;
+++        rw->path_mtu_discovery_timeout = 600000;
+++        rw->link_local_address_behavior = ipv6 ? LinkLocalAlwaysOn : LinkLocalDelayed;
+++        rw->link_local_address_timeout = ipv6 ? 0 : 6500;
+++    }
+++    if (dyn)
+++    {
+++        memset( dyn, 0, sizeof(*dyn) );
+++        dyn->if_index = LOOPBACK_IF_INDEX;
+++        dyn->connected = 1;
+++        dyn->reachable_time = LOOPBACK_REACHABLE_TIME;
+++    }
+++    if (stat) memset( stat, 0, sizeof(*stat) );
+++}
+++
+++static void ipv4_interface_fill( void *key, void *rw, void *dyn, void *stat )
+++{
+++    ip_interface_fill( FALSE, key, rw, dyn, stat );
+++}
+++
+++static void ipv6_interface_fill( void *key, void *rw, void *dyn, void *stat )
+++{
+++    ip_interface_fill( TRUE, key, rw, dyn, stat );
+++}
+++
+++static BOOL ip_interface_is_loopback( const void *key )
+++{
+++    return ((const struct nsi_ip_interface_key *)key)->luid.Value == loopback_luid().Value;
+++}
+++
+++/* ip.c's unicast_fill_entry() for lo's 127.0.0.1/8 and ::1/128 */
+++static void unicast_fill( UINT prefix_len, struct nsi_ip_unicast_rw *rw, struct nsi_ip_unicast_dynamic *dyn,
+++                          struct nsi_ip_unicast_static *stat )
+++{
+++    SYSTEM_TIMEOFDAY_INFORMATION ti;
+++
+++    if (rw)
+++    {
+++        memset( rw, 0, sizeof(*rw) );
+++        rw->preferred_lifetime = 60000;
+++        rw->valid_lifetime = 60000;
+++        rw->prefix_origin = IpPrefixOriginManual;
+++        rw->suffix_origin = IpSuffixOriginManual;
+++        rw->on_link_prefix = prefix_len;
+++    }
+++    if (dyn)
+++    {
+++        dyn->scope_id = 0;
+++        dyn->dad_state = IpDadStatePreferred;
+++    }
+++    if (stat)
+++    {
+++        if (NtQuerySystemInformation( SystemTimeOfDayInformation, &ti, sizeof(ti), NULL )) ti.BootTime.QuadPart = 0;
+++        stat->creation_time = ti.BootTime.QuadPart;
+++    }
+++}
+++
+++static void ipv4_unicast_fill( void *key_data, void *rw, void *dyn, void *stat )
+++{
+++    struct nsi_ipv4_unicast_key *key = key_data;
+++
+++    if (key)
+++    {
+++        memset( key, 0, sizeof(*key) );
+++        key->luid = loopback_luid();
+++        key->addr = loopback_ipv4_addr;
+++    }
+++    unicast_fill( 8, rw, dyn, stat );
+++}
+++
+++static BOOL ipv4_unicast_is_loopback( const void *key_data )
+++{
+++    const struct nsi_ipv4_unicast_key *key = key_data;
+++
+++    return key->luid.Value == loopback_luid().Value && key->addr.s_addr == loopback_ipv4_addr.s_addr;
+++}
+++
+++static void ipv6_unicast_fill( void *key_data, void *rw, void *dyn, void *stat )
+++{
+++    struct nsi_ipv6_unicast_key *key = key_data;
+++
+++    if (key)
+++    {
+++        key->luid = loopback_luid();
+++        key->addr = loopback_ipv6_addr;
+++    }
+++    unicast_fill( 128, rw, dyn, stat );
+++}
+++
+++static BOOL ipv6_unicast_is_loopback( const void *key_data )
+++{
+++    const struct nsi_ipv6_unicast_key *key = key_data;
+++
+++    return key->luid.Value == loopback_luid().Value && !memcmp( &key->addr, &loopback_ipv6_addr, sizeof(key->addr) );
+++}
+++
+++struct nsi_fallback_table
+++{
+++    const NPI_MODULEID *module;
+++    UINT table;
+++    UINT sizes[4]; /* of the key, rw, dynamic and static data, as nsiproxy.sys has them */
+++    void (*fill)( void *key, void *rw, void *dyn, void *stat ); /* the loopback's row; NULL: none to list */
+++    BOOL (*is_loopback)( const void *key );
+++    DWORD (*get_parameter)( const void *key, UINT type, void *data, UINT data_size, UINT data_offset );
+++    DWORD not_found; /* nsiproxy.sys's error for a key that isn't the loopback's */
+++};
+++
+++static const struct nsi_fallback_table nsi_fallback_tables[] =
+++{
+++    {
+++        &nsi_fallback_ndis_moduleid, NSI_NDIS_IFINFO_TABLE,
+++        {
+++            sizeof(NET_LUID), sizeof(struct nsi_ndis_ifinfo_rw),
+++            sizeof(struct nsi_ndis_ifinfo_dynamic), sizeof(struct nsi_ndis_ifinfo_static)
+++        },
+++        ifinfo_fill, ifinfo_is_loopback, ifinfo_get_parameter, ERROR_FILE_NOT_FOUND
+++    },
+++    {
+++        &nsi_fallback_ndis_moduleid, NSI_NDIS_INDEX_LUID_TABLE,
+++        { sizeof(UINT), 0, 0, sizeof(NET_LUID) },
+++        NULL, NULL, index_luid_get_parameter, ERROR_FILE_NOT_FOUND
+++    },
+++    {
+++        &nsi_fallback_ipv4_moduleid, NSI_IP_INTERFACE_TABLE,
+++        {
+++            sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw),
+++            sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)
+++        },
+++        ipv4_interface_fill, ip_interface_is_loopback, NULL, ERROR_NOT_FOUND
+++    },
+++    {
+++        &nsi_fallback_ipv4_moduleid, NSI_IP_UNICAST_TABLE,
+++        {
+++            sizeof(struct nsi_ipv4_unicast_key), sizeof(struct nsi_ip_unicast_rw),
+++            sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)
+++        },
+++        ipv4_unicast_fill, ipv4_unicast_is_loopback, NULL, ERROR_NOT_FOUND
+++    },
+++    {
+++        &nsi_fallback_ipv6_moduleid, NSI_IP_INTERFACE_TABLE,
+++        {
+++            sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw),
+++            sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)
+++        },
+++        ipv6_interface_fill, ip_interface_is_loopback, NULL, ERROR_NOT_FOUND
+++    },
+++    {
+++        &nsi_fallback_ipv6_moduleid, NSI_IP_UNICAST_TABLE,
+++        {
+++            sizeof(struct nsi_ipv6_unicast_key), sizeof(struct nsi_ip_unicast_rw),
+++            sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)
+++        },
+++        ipv6_unicast_fill, ipv6_unicast_is_loopback, NULL, ERROR_NOT_FOUND
+++    },
+++};
+++
+++/* each request of the fallback looks up its table here, so it is reported here */
+++static const struct nsi_fallback_table *nsi_fallback_find( const NPI_MODULEID *module, UINT_PTR table )
+++{
+++    static LONG reported;
+++    DWORD err = GetLastError();
+++    int i;
+++
+++    if (!InterlockedExchange( &reported, 1 ))
+++        MESSAGE( "wine: no nsiproxy (\\\\.\\Nsi: error %lu), NSI answers with the loopback interface alone\n", err );
+++    TRACE( "module %s, table %Iu\n", module ? debugstr_guid( &module->Guid ) : "(null)", table );
+++
+++    if (!module) return NULL;
+++    for (i = 0; i < ARRAY_SIZE(nsi_fallback_tables); i++)
+++        if (NmrIsEqualNpiModuleId( nsi_fallback_tables[i].module, module ) && nsi_fallback_tables[i].table == table)
+++            return nsi_fallback_tables + i;
+++    return NULL;
+++}
+++
+++/* nsiproxy.sys's nsi_enumerate_all_ex() and the tables' enumerate_all() */
+++static DWORD nsi_fallback_enumerate_all( struct nsi_enumerate_all_ex *params )
+++{
+++    const struct nsi_fallback_table *entry = nsi_fallback_find( params->module, params->table );
+++    UINT sizes[4] = { params->key_size, params->rw_size, params->dynamic_size, params->static_size };
+++    void *data[4] = { params->key_data, params->rw_data, params->dynamic_data, params->static_data };
+++    BOOL want_data = params->key_size || params->rw_size || params->dynamic_size || params->static_size;
+++    int i;
+++
+++    if (!entry || !entry->fill)
+++    {
+++        params->count = 0;
+++        return ERROR_SUCCESS;
+++    }
+++
+++    for (i = 0; i < ARRAY_SIZE(sizes); i++)
+++    {
+++        if (!sizes[i]) data[i] = NULL;
+++        else if (sizes[i] != entry->sizes[i]) return ERROR_INVALID_PARAMETER;
+++    }
+++
+++    if (want_data)
+++    {
+++        if (!params->count) return ERROR_MORE_DATA; /* STATUS_BUFFER_OVERFLOW, with no rows */
+++        entry->fill( data[0], data[1], data[2], data[3] );
+++    }
+++    params->count = 1;
+++    return ERROR_SUCCESS;
+++}
+++
+++/* nsiproxy.sys's nsi_get_all_parameters_ex() and the tables' get_all_parameters() */
+++static DWORD nsi_fallback_get_all_parameters( struct nsi_get_all_parameters_ex *params )
+++{
+++    const struct nsi_fallback_table *entry = nsi_fallback_find( params->module, params->table );
+++    UINT sizes[3] = { params->rw_size, params->dynamic_size, params->static_size };
+++    void *data[3] = { params->rw_data, params->dynamic_data, params->static_data };
+++    int i;
+++
+++    if (!entry || !entry->fill) return ERROR_NOT_FOUND;
+++    if (params->key_size != entry->sizes[0] || !params->key) return ERROR_INVALID_PARAMETER;
+++    for (i = 0; i < ARRAY_SIZE(sizes); i++)
+++    {
+++        if (!sizes[i]) data[i] = NULL;
+++        else if (sizes[i] != entry->sizes[i + 1]) return ERROR_INVALID_PARAMETER;
+++    }
+++
+++    if (!entry->is_loopback( params->key )) return entry->not_found;
+++    entry->fill( NULL, data[0], data[1], data[2] );
+++    return ERROR_SUCCESS;
+++}
+++
+++/* nsiproxy.sys's nsi_get_parameter_ex() and the tables' get_parameter() */
+++static DWORD nsi_fallback_get_parameter( struct nsi_get_parameter_ex *params )
+++{
+++    const struct nsi_fallback_table *entry = nsi_fallback_find( params->module, params->table );
+++    UINT size;
+++
+++    if (!entry || !entry->get_parameter) return ERROR_NOT_FOUND;
+++    if (params->param_type > NSI_PARAM_TYPE_STATIC) return ERROR_INVALID_PARAMETER;
+++    if (params->key_size != entry->sizes[0] || !params->key) return ERROR_INVALID_PARAMETER;
+++    size = entry->sizes[params->param_type + 1];
+++    if (params->data_offset > size || params->data_size > size - params->data_offset) return ERROR_INVALID_PARAMETER;
+++    if (params->data_size && !params->data) return ERROR_INVALID_PARAMETER;
+++
+++    return entry->get_parameter( params->key, params->param_type, params->data, params->data_size,
+++                                 params->data_offset );
+++}
+++
+++/* end of the PS5 fallback */
+++
++ DWORD WINAPI NsiAllocateAndGetTable( DWORD unk, const NPI_MODULEID *module, DWORD table, void **key_data, DWORD key_size,
++                                      void **rw_data, DWORD rw_size, void **dynamic_data, DWORD dynamic_size,
++                                      void **static_data, DWORD static_size, DWORD *count, DWORD unk2 )
++@@ -168,7 +540,7 @@ DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *pa
++     struct nsiproxy_enumerate_all in;
++     BYTE *out, *ptr;
++ 
++-    if (device == INVALID_HANDLE_VALUE) return GetLastError();
+++    if (device == INVALID_HANDLE_VALUE) return nsi_fallback_enumerate_all( params );
++ 
++     out_size = sizeof(DWORD) +
++         (params->key_size + params->rw_size + params->dynamic_size + params->static_size) * params->count;
++@@ -251,7 +623,7 @@ DWORD WINAPI NsiGetAllParametersEx( struct nsi_get_all_parameters_ex *params )
++     DWORD err = ERROR_SUCCESS;
++     BYTE *out, *ptr;
++ 
++-    if (device == INVALID_HANDLE_VALUE) return GetLastError();
+++    if (device == INVALID_HANDLE_VALUE) return nsi_fallback_get_all_parameters( params );
++ 
++     in = malloc( in_size );
++     out = malloc( out_size );
++@@ -318,7 +690,7 @@ DWORD WINAPI NsiGetParameterEx( struct nsi_get_parameter_ex *params )
++     ULONG in_size = FIELD_OFFSET( struct nsiproxy_get_parameter, key[params->key_size] ), received;
++     DWORD err = ERROR_SUCCESS;
++ 
++-    if (device == INVALID_HANDLE_VALUE) return GetLastError();
+++    if (device == INVALID_HANDLE_VALUE) return nsi_fallback_get_parameter( params );
++ 
++     in = malloc( in_size );
++     if (!in) return ERROR_OUTOFMEMORY;
++-- 
++2.43.0
++
+-- 
+2.43.0
+

@@ -42,7 +42,7 @@ The zip holds everything a report needs:
 
 | In the zip | What it is |
 | --- | --- |
-| `issue-…_<game>.log` (with `-earlier` and `-start` for a long session) | PC5's log of the session |
+| `issue-…_<game>.log` (with `-earlier` and `-start` for a long session, and `-crash` when it went on long after a crash) | PC5's log of the session; `-crash` is the part with the crash |
 | `about.txt` | what PC5 saw, the program, the console's firmware, and the list of the game's files below |
 | `game/…` | the files the game itself wrote while it ran: its own logs, crash reports and crash dumps (Unity's `Player.log`, a `log.txt` in My Games, `crash.xml`, `.dmp` files), from its folders under `C:\users` and its own folder |
 
@@ -62,7 +62,7 @@ When a session went wrong, PC5 tells you the next time it opens, and names the z
 
 ### Report on GitHub from PC5
 
-In that message, press **△**. PC5 shows a QR code: scan it with your phone, and GitHub's form for a new issue opens, already filled in with the game, its program, PC5's version, the console's firmware and what PC5 saw. Say what happened, attach the zip it names, and submit.
+In that message, press **△**. PC5 shows a QR code: scan it with your phone, and GitHub's issue form opens, already filled in with the game, its program, PC5's version, the console's firmware and what PC5 saw. Choose what goes wrong, say what happened, attach the zip PC5 names in **Log**, and submit.
 
 ![Report on GitHub](images/report-on-github.png)
 *The QR code opens the issue form; the zip to attach is named beside it.*

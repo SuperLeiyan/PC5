@@ -30,10 +30,17 @@ static const char *program_name(const char *exe)
     return slash ? slash + 1 : exe;
 }
 
+/* One field of the form, filled in: &id=text. */
+static int put_field(Pc5Buf *out, const char *id, const char *text)
+{
+    return pc5_buf_printf(out, "&%s=", id) || put_encoded(out, text);
+}
+
 int pc5_report_url(const Pc5LogIssue *issue, const char *game, char *out, size_t size)
 {
-    Pc5Buf title = { 0 }, body = { 0 }, url = { 0 };
-    const char *name = game && game[0] ? game : strcmp(issue->profile, "launcher") ? issue->profile : "PC5";
+    Pc5Buf title = { 0 }, saw = { 0 }, url = { 0 };
+    int own = !(game && game[0]) && !strcmp(issue->profile, "launcher");   /* PC5's own session */
+    const char *name = game && game[0] ? game : own ? "PC5" : issue->profile;
     char detail[161];
     int failed;
 
@@ -41,23 +48,25 @@ int pc5_report_url(const Pc5LogIssue *issue, const char *game, char *out, size_t
     pc5_copy(detail, sizeof(detail), issue->detail);
     for (char *p = detail; *p; p++)
         if (*p == '`') *p = '\'';
+    /* GitHub's issue form (.github/ISSUE_TEMPLATE): a game's, or PC5's own for PC5's session,
+     * its fields filled in by their ids. What happened, what goes wrong and the log are the
+     * player's to give: the form asks for them. */
     failed = pc5_buf_printf(&title, "%s: %s", name, pc5_log_problem_text(issue->problem)) ||
-             pc5_buf_printf(&body, "**What happened**\n(what you did, where it stopped, and whether it happens every time)\n\n\n"
-                                   "**Game:** %s", name) ||
-             (issue->exe[0] && pc5_buf_printf(&body, " (`%s`)", program_name(issue->exe))) ||
-             pc5_buf_printf(&body, "\n**PC5:** %s", PC5_VERSION) ||
-             (issue->firmware[0] && pc5_buf_printf(&body, " \xc2\xb7 **Firmware:** %s", issue->firmware)) ||
-             pc5_buf_printf(&body, "\n**PC5 saw:** %s\n", pc5_log_problem_text(issue->problem)) ||
-             (detail[0] && pc5_buf_printf(&body, "`%s`\n", detail)) ||
-             pc5_buf_printf(&body, "\n**Log:** please attach `%s` from `/data/prospero-win/logs/` (drag it into this box).\n",
-                            pc5_report_file(issue)) ||
-             pc5_buf_terminate(&title) || pc5_buf_terminate(&body) ||
-             pc5_buf_puts(&url, PC5_ISSUES_NEW "?title=") || put_encoded(&url, (const char *)title.data) ||
-             pc5_buf_puts(&url, "&body=") || put_encoded(&url, (const char *)body.data) || pc5_buf_terminate(&url) ||
+             pc5_buf_puts(&saw, pc5_log_problem_text(issue->problem)) ||
+             (detail[0] && pc5_buf_printf(&saw, "\n`%s`", detail)) ||
+             pc5_buf_terminate(&title) || pc5_buf_terminate(&saw) ||
+             pc5_buf_puts(&url, PC5_ISSUES_NEW) ||
+             pc5_buf_puts(&url, own ? "?template=2-pc5.yml" : "?template=1-game.yml") ||
+             put_field(&url, "title", (const char *)title.data) ||
+             (!own && put_field(&url, "game", name)) ||
+             (!own && issue->exe[0] && put_field(&url, "program", program_name(issue->exe))) ||
+             put_field(&url, "pc5", PC5_VERSION) ||
+             (issue->firmware[0] && put_field(&url, "firmware", issue->firmware)) ||
+             put_field(&url, "saw", (const char *)saw.data) || pc5_buf_terminate(&url) ||
              url.len >= size;
     if (!failed) memcpy(out, url.data, url.len + 1);
     pc5_buf_free(&title);
-    pc5_buf_free(&body);
+    pc5_buf_free(&saw);
     pc5_buf_free(&url);
     return failed ? -1 : 0;
 }

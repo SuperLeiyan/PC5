@@ -264,7 +264,7 @@ With ShadowMountPlus and elfldr running.
 | 121 | A game that looks up kernel32's UTRegister (Brian Lara International Cricket 2007), without a krnl386 override | it doesn't close at once; no `i386_set_ldt: Invalid argument` | `process_attach failed for forward 'krnl386.exe16.UTRegister'` |
 | 122 | △ › Graphics › CPU sharing On on a game; start it | it plays; for a game that stopped for seconds at a time (Ori and the Blind Forest in Xbox mode), it no longer stops | `PW_WINE64 runtime thread_scheduling=1` |
 | 123 | Open PC5 | the log names the firmware the console's Settings › System › System Software shows | `PC5 system firmware=13.60 …` (with `reported=…` when libkernel answers another): send the line |
-| 124 | A 4:3 game that draws its own pointer from DirectInput, Aspect ratio Keep (Sacred Underworld at 1024x768), Keyboard and mouse with the pointer on; push the pointer right and down | the game's pointer reaches the right and bottom edges | |
+| 124 | A 4:3 game that draws its own pointer from DirectInput's motion, Aspect ratio Keep, Keyboard and mouse with the pointer on; push the pointer right and down | the game's pointer reaches the right and bottom edges | |
 | 125 | Open PC5 with a startup sound chosen, on a console whose own system is older (9.60, for one) | it opens and plays the sound | `PC5 startup sound … percent=100 level=32768`, then `played=… output=0`: send the lines |
 
 A non-zero `rc=` on the light bar or triggers lines means the console refused that call; send
@@ -278,3 +278,16 @@ controller's speaker.
 | 126 | A game whose 32-bit launcher starts a 64-bit game (or a launcher and game that draw differently), installed on its launcher: start it | the launcher closes and the game starts, and plays as when it is chosen with △ › Manage › Change program | `PC5 hand-off: … starts the program its launcher started` |
 | 127 | Options: the first page; Game maintenance | Game maintenance, In games, Overlay, System, About; Game maintenance has Install games from USB, Uninstall game, Game compatibility list; ○ from Install's and Uninstall's lists comes back to their rows there | |
 | 128 | Game maintenance › Game compatibility list; scan the code with a phone | the phone opens the wiki's Game compatibility page; ○ comes back to the row | `PC5 compatibility list qr=…` (not 0) |
+
+## Settings tools, a smaller display mode, XInput by WMI, a loopback network, crash logs (1.8.8)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 129 | Far Cry (FarCry.exe), which starts `Bin32\FarCryConfigurator.exe /Caller=FarCry` as it opens | it goes on to its own screens; it doesn't close and start the configurator | `wine-ps5: …FarCryConfigurator.exe is a helper: not handed off` |
+| 130 | A game that follows the system's pointer, at a display mode smaller than the desktop (Sacred Underworld at 1024x768), Keyboard and mouse with the pointer on; push the pointer right and down | the game's pointer reaches the right and bottom edges; the picture is where it was | |
+| 131 | Batman: Arkham Knight, Controller mode Xbox controller | the controller plays the game | |
+| 132 | A Java game that lists the network interfaces (Shattered Pixel Dungeon: start a new game) | the new game starts | `wine: no nsiproxy (\\.\Nsi: error 2), NSI answers with the loopback interface alone` |
+| 133 | An Unreal Engine 5 game on Direct3D 12 that makes a shared resource as it starts (STRETCHER.MEN) | it gets past its start, with no crash in `vkGetMemoryWin32HandleKHR` | |
+| 134 | A game that crashes, then keeps logging (its own crash handler, or a game with a `winedebug.txt`) for a minute or more | its `issue-…zip` has `…-crash.log` with Wine's `Unhandled …` line in it | |
+| 135 | Brian Lara International Cricket 2007: △ › Manage › Change program | ICC2007.exe first, HardwareSetup.exe after it | |
+| 136 | After a game crashed: △ on PC5's message, scan the code with a phone | GitHub's form **A game doesn't run** opens, its title, Game, Program, PC5 version, Firmware and What PC5 saw filled in | `PC5 report log=… link=…` |

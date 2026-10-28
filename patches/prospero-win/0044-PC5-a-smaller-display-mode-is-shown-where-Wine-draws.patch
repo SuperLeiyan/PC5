@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 08:10:00 +0000
+Subject: [PATCH 44/47] PC5: a smaller display mode is shown where Wine draws
+ it (Wine patch 0932)
+
+Wine maps a display mode smaller than the desktop about the desktop's
+centre, but the PS5 driver showed it, and stopped the pointer, from the
+top left. A game that follows the system's pointer could reach only
+part of its width: Sacred Underworld at 1024x768, about five sixths.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...entre-the-part-a-display-mode-covers.patch | 114 ++++++++++++++++++
+ 3 files changed, 116 insertions(+)
+ create mode 100644 wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 8e77508..bd722b7 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -577,6 +577,7 @@ wine/patches/0928-ntdll-ps5-repair-the-fs-base-a-32-bit-program-loaded.patch
+ wine/patches/0929-ntdll-ps5-no-ldt-and-no-16-bit-kernel.patch
+ wine/patches/0930-win32u-ps5-report-pointer-motion-at-a-shown-edge.patch
+ wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
++wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 14d5693..7682fbb 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -135,6 +135,7 @@ before evaluating a candidate built from that cache.
+ | 0929 | `ntdll`, `krnl386`: `NtSetLdtEntries` returns `STATUS_NOT_IMPLEMENTED`, as for a 64-bit process: the console refuses I386_SET_LDT (EINVAL), and `ldt_set_entry` ended the process on that. krnl386.exe16 doesn't load without LDT entries, so a lookup of a forwarded 16-bit export (`kernel32.UTRegister`, Brian Lara International Cricket 2007) fails instead of ending the game |
+ | 0930 | `win32u`: where a frame shows less than the screen (one window, or a display mode smaller than the desktop), the PS5 pointer still stops at the shown edge, but each motion goes to the server whole as raw input (`SEND_HWMSG_RAWINPUT` with a `struct raw_mouse`), as a mouse held against the screen's edge keeps reporting its motion on Windows. A game that moves a pointer of its own by `WM_INPUT` (DirectInput) stopped short of its far side once the system's pointer reached the edge first (Sacred Underworld at 1024x768) |
+ | 0931 | `ntdll`: a program whose name says it is a settings tool (`config`, `setting`) is a helper for the PS5 title's hand-off (`PW_HANDOFF`), as a crash reporter or an installer is: it isn't handed off, its start fails, and the game that started it carries on. Far Cry starts `Bin32\FarCryConfigurator.exe /Caller=FarCry` each time it opens and waits for it; it was handed off, so Far Cry ended and the configurator, which shows nothing after a first launch, closed at once |
++| 0932 | `win32u`: the part of the desktop a display mode smaller than it covers is centred, as win32u's `map_monitor_rect` maps the mode (scaled by the ratio of the sides that fit, about the desktop's centre); the driver took it to start at the top left. Frames show that part and the pointer stops at its edges: a 1024x768 game on a 1920x1080 desktop covers 240,0 to 1680,1080, and a game that follows the system's pointer (Sacred Underworld) reached only about five sixths of its width |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch b/wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+new file mode 100644
+index 0000000..fd78868
+--- /dev/null
++++ b/wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+@@ -0,0 +1,114 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Wed, 28 Oct 2026 08:10:00 +0000
++Subject: [PATCH] win32u: Centre the part of the desktop a PS5 display mode
++ covers.
++
++win32u maps a display mode smaller than the desktop onto it scaled
++uniformly about the desktop's centre (map_monitor_rect), but the driver
++took that part to start at the desktop's top left. A 1024x768 game on a
++1920x1080 desktop is drawn from 240,0 to 1680,1080, while the driver
++showed and stopped the pointer at 0,0 to 1440,1080: a game that follows
++the system's pointer (Sacred Underworld) could reach only about five
++sixths of its width, and a picture drawn with GDI was shown off centre.
++The part shown is now the one win32u maps the mode to.
++---
++ dlls/win32u/ps5drv.c | 49 ++++++++++++++++++++++++++------------------
++ 1 file changed, 29 insertions(+), 20 deletions(-)
++
++diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
++--- a/dlls/win32u/ps5drv.c
+++++ b/dlls/win32u/ps5drv.c
++@@ -41,6 +41,7 @@
++ #include "config.h"
++ 
++ #include <dlfcn.h>
+++#include <math.h>
++ #include <pthread.h>
++ #include <stdint.h>
++ #include <stdio.h>
++@@ -86,11 +87,12 @@ static int (*input_fd)(void);
++ 
++ static pthread_mutex_t screen_lock = PTHREAD_MUTEX_INITIALIZER;
++ static UINT screen_width = 800, screen_height = 600;
++-/* The display mode an application set, at most the desktop's. win32u maps
++- * a smaller mode onto the desktop scaled uniformly from its top left, so
++- * frames show that part, content_width x content_height, which the title
++- * then centres on the TV as it does any frame. */
++-static UINT content_width, content_height;
+++/* The part of the desktop the display mode an application set covers, at
+++ * most the whole of it. win32u maps a smaller mode onto the desktop scaled
+++ * uniformly about the desktop's centre (map_monitor_rect), so frames show
+++ * that part, which the title then centres on the TV as it does any frame,
+++ * and the pointer stops at its edges. */
+++static RECT content;
++ static UINT32 *screen;
++ static struct ps5_window windows[PS5_MAX_WINDOWS];
++ static UINT window_count;
++@@ -160,13 +162,13 @@ static void draw_cursor( UINT32 *out, POINT origin, INT width, INT height )
++ /* screen_lock held: the part of the screen a frame shows */
++ static RECT view_rect(void)
++ {
++-    RECT screen_rect = {0, 0, content_width, content_height}, box = {0, 0, 0, 0};
+++    RECT box = {0, 0, 0, 0};
++     UINT i;
++ 
++-    if (!view_windows) return screen_rect;
+++    if (!view_windows) return content;
++     for (i = 0; i < window_count; i++)
++         if (windows[i].shown) union_rect( &box, &box, &windows[i].visible );
++-    if (!intersect_rect( &box, &box, &screen_rect )) return screen_rect;
+++    if (!intersect_rect( &box, &box, &content )) return content;
++     return box;
++ }
++ 
++@@ -239,18 +241,26 @@ static LONG ps5_ChangeDisplaySettings( DEVMODEW *displays, const WCHAR *primary_
++         if (!width || !height || width > screen_width || height > screen_height) return DISP_CHANGE_BADMODE;
++         if (flags & CDS_TEST) return DISP_CHANGE_SUCCESSFUL;
++         pthread_mutex_lock( &screen_lock );
++-        /* scaled uniformly to fit the desktop, as win32u maps it */
++-        if ((UINT64)width * screen_height <= (UINT64)height * screen_width)
++-        {
++-            content_width = (UINT)((UINT64)width * screen_height / height);
++-            content_height = screen_height;
++-        }
++-        else
+++        /* As win32u's map_monitor_rect maps the mode's corners: by the ratio of the sides
+++         * that fit (source_virt_to_raw_ratio), about the desktop's centre. A 1024x768 mode
+++         * on a 1920x1080 desktop covers 240,0 to 1680,1080. */
++         {
++-            content_width = screen_width;
++-            content_height = (UINT)((UINT64)height * screen_width / width);
+++            UINT num = screen_width, den = width;
+++            double ratio, from[2] = {width / 2.0, height / 2.0}, to[2] = {screen_width / 2.0, screen_height / 2.0};
+++            double points[4] = {0, 0, width, height};
+++            int i;
+++
+++            if ((UINT64)screen_width * height > (UINT64)screen_height * width)
+++            {
+++                num = screen_height;
+++                den = height;
+++            }
+++            ratio = (double)num / den;
+++            for (i = 0; i < 4; i++) points[i] = roundf( (points[i] - from[i & 1]) * ratio + to[i & 1] );
+++            SetRect( &content, max( 0, (INT)points[0] ), max( 0, (INT)points[1] ),
+++                     min( (INT)screen_width, (INT)points[2] ), min( (INT)screen_height, (INT)points[3] ));
++         }
++-        TRACE( "mode %ux%u shown as %ux%u\n", width, height, content_width, content_height );
+++        TRACE( "mode %ux%u shown as %s\n", width, height, wine_dbgstr_rect( &content ));
++         present_screen();
++         pthread_mutex_unlock( &screen_lock );
++     }
++@@ -988,8 +998,7 @@ void ps5_install_user_driver(void)
++         screen_width = width;
++         screen_height = height;
++     }
++-    content_width = screen_width;
++-    content_height = screen_height;
+++    SetRect( &content, 0, 0, screen_width, screen_height );
++     view_windows = mode && !strcmp( mode, "window" );
++     SetRect( &view, 0, 0, screen_width, screen_height );
++     if (!(screen = calloc( (size_t)screen_width * screen_height, sizeof(*screen) )) ||
++-- 
++2.43.0
++
+-- 
+2.43.0
+

@@ -2613,8 +2613,11 @@ static void test_logs(void)
     pc5_mkdirs(logs);
     path(file, sizeof(file), "%s/next.txt", logs);
     write_text(file, "2\n");                                     /* session 1 is the one running */
-    log_file(logs, "session-0.log", "gtaiv", now - 600, crash);
-    /* every part of a session repeats its first line, the time it began among it */
+    /* A long session whose crash came early: the crash in its own part, the game's crash
+     * handler logging on after it. Every part repeats the session's first line, the time it
+     * began among it. */
+    log_file(logs, "session-0.crash.log", "gtaiv", now - 600, crash);
+    log_file(logs, "session-0.log", "gtaiv", now - 600, "REC seq=7 t=130.600 WINE its crash handler waits\n");
     log_file(logs, "session-0.previous.log", "gtaiv", now - 600, "REC seq=1 t=1.0 earlier\n");
     log_file(logs, "session-0.start.log", "gtaiv", now - 600, "REC seq=1 t=1.0 how it began\n");
     /* What GTA IV wrote while it ran (its session: now - 600 for 30 seconds), and what it didn't. */
@@ -2683,7 +2686,8 @@ static void test_logs(void)
     CHECK(pc5_is_file(file), "the crash kept with the game's name and when it began");
     CHECK(!zip_names(file, names, sizeof(names)) && strstr(names, "issue-2026-10-22_21-03_gtaiv.log\n") &&
           strstr(names, "issue-2026-10-22_21-03_gtaiv-earlier.log\n") && strstr(names, "issue-2026-10-22_21-03_gtaiv-start.log\n") &&
-          strstr(names, "about.txt\n"), "with its parts: %s", names);
+          strstr(names, "issue-2026-10-22_21-03_gtaiv-crash.log\n") && strstr(names, "about.txt\n"),
+          "with its parts, the one with the crash among them: %s", names);
     CHECK(strstr(names, "game/users/prospero/Documents/Rockstar Games/GTA IV/log.txt\n") &&
           strstr(names, "game/users/prospero/AppData/Local/Temp/1234/crash.xml\n") && strstr(names, "game/Games/GTA IV/crash.dmp\n"),
           "and the game's own log, crash report and dump: %s", names);
@@ -2691,6 +2695,8 @@ static void test_logs(void)
           "not what it wrote another time, a save, or another game's");
     path(file, sizeof(file), "%s/session-0.start.log", logs);
     CHECK(!pc5_exists(file), "its session's parts are in the zip, not beside it");
+    path(file, sizeof(file), "%s/session-0.crash.log", logs);
+    CHECK(!pc5_exists(file), "the crash's part too");
     CHECK(!pc5_logs_newest(root_dir, "gtaiv", file, sizeof(file)) && strstr(file, "issue-2026-10-22_21-03_gtaiv.zip"),
           "GTA IV's newest log: %s", file);
     CHECK(!pc5_logs_newest(root_dir, "blur", file, sizeof(file)) && strstr(file, "log-2026-10-22_20-22_blur.zip"),
@@ -4505,12 +4511,29 @@ static void test_report(const char *fonts)
     pc5_copy(issue.file, sizeof(issue.file), "/data/prospero-win/logs/issue-2026-10-25_09-19_grim-dawn.zip");
     CHECK(!strcmp(pc5_report_file(&issue), "issue-2026-10-25_09-19_grim-dawn.zip"), "the zip's name");
     CHECK(!pc5_report_url(&issue, "Grim Dawn", url, sizeof(url)), "the link");
-    CHECK(!strncmp(url, "https://github.com/bornaradusin/PC5/issues/new?title=Grim%20Dawn%3A%20stopped%20with%20an%20error&body=",
-                   strlen("https://github.com/bornaradusin/PC5/issues/new?title=Grim%20Dawn%3A%20stopped%20with%20an%20error&body=")),
-          "GitHub's form for PC5, its title filled in: %.120s", url);
-    CHECK(strstr(url, "Grim%20Dawn.exe") && strstr(url, "12.40") && strstr(url, PC5_VERSION) &&
-          strstr(url, "issue-2026-10-25_09-19_grim-dawn.zip") && strstr(url, "%27address%27") && !strchr(url, ' ') &&
-          !strchr(url, '\n') && !strchr(url, '`'), "the game, program, firmware, PC5, the zip, and nothing unencoded");
+    {
+        /* The fields of .github/ISSUE_TEMPLATE/1-game.yml by their ids, in this order. */
+        char want[PC5_REPORT_URL];
+        snprintf(want, sizeof(want),
+                 "https://github.com/bornaradusin/PC5/issues/new?template=1-game.yml"
+                 "&title=Grim%%20Dawn%%3A%%20stopped%%20with%%20an%%20error&game=Grim%%20Dawn&program=Grim%%20Dawn.exe"
+                 "&pc5=%s&firmware=12.40&saw=stopped%%20with%%20an%%20error%%0A%%60wine%%3A%%20Unhandled%%20page%%20fault"
+                 "%%20on%%20read%%20access%%20to%%200000000000000000%%20at%%20%%27address%%27%%60",
+                 PC5_VERSION);
+        CHECK(!strcmp(url, want), "the game's issue form, its title, game, program, PC5, firmware and what PC5 saw filled in: %s", url);
+        CHECK(!strchr(url, ' ') && !strchr(url, '\n') && !strstr(url, "body="), "nothing unencoded, and no text of its own");
+        Pc5LogIssue own = issue;
+        pc5_copy(own.profile, sizeof(own.profile), "launcher");
+        own.exe[0] = 0;
+        CHECK(!pc5_report_url(&own, NULL, url, sizeof(url)) &&
+                  !strncmp(url, "https://github.com/bornaradusin/PC5/issues/new?template=2-pc5.yml&title=PC5%3A%20",
+                           strlen("https://github.com/bornaradusin/PC5/issues/new?template=2-pc5.yml&title=PC5%3A%20")) &&
+                  !strstr(url, "&game=") && strstr(url, "&firmware=12.40&saw="),
+              "PC5's own session: PC5's issue form: %s", url);
+        CHECK(!pc5_report_url(&issue, NULL, url, sizeof(url)) && strstr(url, "template=1-game.yml&title=grim-dawn%3A") &&
+                  strstr(url, "&game=grim-dawn&"),
+              "a game not in the library: its id: %s", url);
+    }
     CHECK(pc5_report_url(&issue, "Grim Dawn", url, 200) == -1, "a link that doesn't fit");
     CHECK(!pc5_report_url(&issue, "Grim Dawn", url, sizeof(url)) && !pc5_qr_make(url, &qr) && qr.size >= 21 &&
           (qr.size - 17) % 4 == 0 && qr.size <= 177, "as a QR code: %d modules", qr.size);
