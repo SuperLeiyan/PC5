@@ -654,9 +654,11 @@ void pc5_game_pad(Pc5GameSession *game, int pad, uint64_t now_ms, uint32_t scree
 
 unsigned pc5_game_overlay_lines(const Pc5Settings *settings)
 {
-    return (settings->fps ? PW_PC5_HUD_FPS : 0u) | (settings->frame_time ? PW_PC5_HUD_FRAME_TIME : 0u) |
-           (settings->cpu_usage ? PW_PC5_HUD_CPU : 0u) | (settings->cpu_temperature ? PW_PC5_HUD_CPU_TEMP : 0u) |
-           (settings->soc_temperature ? PW_PC5_HUD_SOC_TEMP : 0u) | (settings->memory ? PW_PC5_HUD_MEMORY : 0u);
+    unsigned lines = (settings->fps ? PW_PC5_HUD_FPS : 0u) | (settings->frame_time ? PW_PC5_HUD_FRAME_TIME : 0u) |
+                     (settings->cpu_usage ? PW_PC5_HUD_CPU : 0u) | (settings->cpu_temperature ? PW_PC5_HUD_CPU_TEMP : 0u) |
+                     (settings->soc_temperature ? PW_PC5_HUD_SOC_TEMP : 0u) | (settings->memory ? PW_PC5_HUD_MEMORY : 0u);
+    /* Large: the same lines, twice the size (pw_pc5_hud.h), only with a line to show. */
+    return lines && settings->overlay_large ? lines | PW_PC5_HUD_LARGE : lines;
 }
 
 /* A sensor's temperature, -1 when it can't be read; *rc what the console said. */
@@ -729,6 +731,7 @@ void pc5_game_hud(Pc5GameSession *game, int videoout, uint64_t frames, uint64_t 
     uint64_t shown = frames - game->hud_second_frames, elapsed = now_ms - game->hud_second_at;
     stats.fps = (unsigned)((shown * 1000 + elapsed / 2) / elapsed);
     stats.frame_us = shown ? (uint32_t)(elapsed * 1000 / shown) : 0;
+    stats.seconds = ++game->hud_seconds;
     game->hud_second_at = now_ms;
     game->hud_second_frames = frames;
     if (!(height = pw_pc5_hud_draw_stats(image, &stats))) {

@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 15:00:00 +0000
+Subject: [PATCH 49/49] PC5: a large overlay, and Wine's own Direct3D on Vulkan for a
+ game ([debug] env WINE_D3D_CONFIG)
+
+The overlay's lines (PW_PC5_HUD_*) take a flag, PW_PC5_HUD_LARGE: up to
+two lines at a time, each its value in glyphs twice the size over its
+label, the next two every 3 seconds when more are on. The overlay is
+VideoOut's 64x64 hardware cursor, so its lines were 5x7 glyphs and hard
+to read on a TV; the large overlay keeps that image and its cost. The
+memory shows the gigabytes used ("5.1G"). PwPc5HudStats counts the
+updates (seconds), and libvulkan.prx keeps the flag and counts them.
+
+A profile's [debug] env takes WINE_D3D_CONFIG, so PC5 can set Wine's
+own Direct3D (wined3d) to draw with Vulkan instead of OpenGL for a game
+whose Direct3D is set to Wine's (renderer=vulkan).
+---
+ src/pw_game_profile.c        |  6 ++-
+ src/pw_game_profile.h        |  2 +
+ tests/test_pw_game_profile.c |  5 ++
+ wine/ps5/pw_pc5_hud.h        | 88 +++++++++++++++++++++++++++++++++++-
+ wine/ps5/pw_vulkan_radv.c    |  4 +-
+ 5 files changed, 101 insertions(+), 4 deletions(-)
+
+diff --git a/src/pw_game_profile.c b/src/pw_game_profile.c
+index 8bf102b..25a3b98 100644
+--- a/src/pw_game_profile.c
++++ b/src/pw_game_profile.c
+@@ -263,8 +263,9 @@ static int same(const uint8_t *text, size_t length, const char *name)
+ }
+ 
+ /* [debug] env = NAME=VALUE (src/pw_game_profile.h): only the families of
+- * variables a game's graphics and the native CPU read, never one the title
+- * sets itself, so a profile adds diagnostics but cannot change what the
++ * variables a game's graphics and the native CPU read, and WINE_D3D_CONFIG
++ * (Wine's own Direct3D: renderer=vulkan draws without OpenGL), never one the
++ * title sets itself, so a profile adds diagnostics but cannot change what the
+  * title decides. DXVK_HUD/GALLIUM_HUD are checked against show_fps after
+  * the whole profile is read. */
+ static int debug_env_field(PwGameProfile *profile, const uint8_t *value, size_t value_length)
+@@ -288,6 +289,7 @@ static int debug_env_field(PwGameProfile *profile, const uint8_t *value, size_t
+     }
+     for (size_t i = 0; i < sizeof(families) / sizeof(families[0]); i++)
+         family |= starts(value, name_length, families[i]);
++    family |= same(value, name_length, "WINE_D3D_CONFIG");
+     if (!family || starts(value, name_length, "PW_QPC_TSC_")) return PW_ERR_UNSUPPORTED;
+     for (size_t i = 0; i < sizeof(title_set) / sizeof(title_set[0]); i++)
+         if (same(value, name_length, title_set[i])) return PW_ERR_UNSUPPORTED;
+diff --git a/src/pw_game_profile.h b/src/pw_game_profile.h
+index 99cf08f..83e8287 100644
+--- a/src/pw_game_profile.h
++++ b/src/pw_game_profile.h
+@@ -34,6 +34,8 @@
+  *   env = PW_NATIVE_PROFILE=1   ; one more variable for Wine's environment,
+  *                               ; up to 5 env lines: names start with PW_,
+  *                               ; DXVK_, MESA_, GALLIUM_, ZINK_, RADV_ or VK_,
++ *                               ; or WINE_D3D_CONFIG (renderer=vulkan: Wine's
++ *                               ; own Direct3D draws without OpenGL),
+  *                               ; and may not be one the title sets itself
+  *                               ; (PW_VK_BATCH, PW_INPUT_SHARED_FAST,
+  *                               ; PW_QPC_TSC_*, GALLIUM_DRIVER, and DXVK_HUD
+diff --git a/tests/test_pw_game_profile.c b/tests/test_pw_game_profile.c
+index de5a38d..1e67235 100644
+--- a/tests/test_pw_game_profile.c
++++ b/tests/test_pw_game_profile.c
+@@ -474,6 +474,11 @@ static void test_debug_env(void)
+                  "env = GALLIUM_PRINT_OPTIONS=1\nenv = PW_VK_BATCH_MASK=0x7f\n", &p) == PW_OK);
+     assert(p.debug_env_count == 4 && !strcmp(p.debug_env[0].value, "nocache,hang"));
+     /* Zink's own options, for the OpenGL games it draws. */
++    /* Wine's own Direct3D on Vulkan; another WINE_ variable isn't taken. */
++    assert(parse(APP "[debug]\nenv = WINE_D3D_CONFIG=renderer=vulkan\n", &p) == PW_OK);
++    assert(p.debug_env_count == 1 && !strcmp(p.debug_env[0].name, "WINE_D3D_CONFIG") &&
++           !strcmp(p.debug_env[0].value, "renderer=vulkan"));
++    assert(parse(APP "[debug]\nenv = WINEDLLOVERRIDES=d3d11=b\n", &p) == PW_ERR_UNSUPPORTED);
+     assert(parse(APP "[debug]\nenv = ZINK_DESCRIPTORS=lazy\n", &p) == PW_OK);
+     assert(p.debug_env_count == 1 && !strcmp(p.debug_env[0].name, "ZINK_DESCRIPTORS") &&
+            !strcmp(p.debug_env[0].value, "lazy"));
+diff --git a/wine/ps5/pw_pc5_hud.h b/wine/ps5/pw_pc5_hud.h
+index f24d227..547ff64 100644
+--- a/wine/ps5/pw_pc5_hud.h
++++ b/wine/ps5/pw_pc5_hud.h
+@@ -95,8 +95,14 @@ enum {
+     PW_PC5_HUD_SOC_TEMP = 16u,
+     PW_PC5_HUD_MEMORY = 32u,
+     PW_PC5_HUD_ALL = 63u,
++    /* Not a line: the lines in twice the size, two at a time, taking turns every
++     * PW_PC5_HUD_TURN_S seconds when more are on (Settings › Overlay › Size). */
++    PW_PC5_HUD_LARGE = 64u,
++    PW_PC5_HUD_FLAGS = 127u,     /* the lines and LARGE */
+     PW_PC5_HUD_LINES = 6,
+     PW_PC5_HUD_PITCH = 9,        /* a line: 7 rows of glyph and 2 of space */
++    PW_PC5_HUD_LARGE_PITCH = 30, /* a large line: its value 14 rows high, its label 7 under it */
++    PW_PC5_HUD_TURN_S = 3,
+ };
+ 
+ typedef struct PwPc5HudStats {
+@@ -107,6 +113,7 @@ typedef struct PwPc5HudStats {
+     int cpu_celsius, soc_celsius;/* -1 unknown */
+     uint64_t memory_used;        /* bytes */
+     uint64_t memory_total;       /* bytes, 0 unknown */
++    unsigned seconds;            /* updates so far, a second apart: which lines a large overlay shows */
+ } PwPc5HudStats;
+ 
+ /* A glyph of the overlay's lines: its width (1 to 5 columns, bit width-1
+@@ -118,6 +125,7 @@ static inline int pw_pc5_hud_line_glyph(char c, const uint8_t **rows)
+         { 'A', 5, { 0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11 } },
+         { 'C', 5, { 0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e } },
+         { 'F', 5, { 0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10 } },
++        { 'G', 5, { 0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f } },
+         { 'M', 5, { 0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11 } },
+         { 'O', 5, { 0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e } },
+         { 'P', 5, { 0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10 } },
+@@ -172,6 +180,32 @@ static inline void pw_pc5_hud_text(uint32_t *image, int x, int y, const char *te
+     }
+ }
+ 
++/* How wide text is in the line glyphs at scale times their size. */
++static inline int pw_pc5_hud_text_width_scaled(const char *text, int scale)
++{
++    return pw_pc5_hud_text_width(text) * scale;
++}
++
++/* text in the line glyphs, each pixel a scale x scale square. */
++static inline void pw_pc5_hud_text_scaled(uint32_t *image, int x, int y, const char *text, int scale, uint32_t color)
++{
++    for (const char *p = text; *p; p++) {
++        const uint8_t *rows;
++        int w = pw_pc5_hud_line_glyph(*p, &rows);
++        if (!w) continue;
++        for (int row = 0; row < 7; row++)
++            for (int column = 0; column < w; column++)
++                if (rows[row] & (1u << (w - 1 - column)))
++                    for (int dy = 0; dy < scale; dy++)
++                        for (int dx = 0; dx < scale; dx++) {
++                            int px = x + column * scale + dx, py = y + row * scale + dy;
++                            if (px >= 0 && px < PW_PC5_HUD_SIDE && py >= 0 && py < PW_PC5_HUD_SIDE)
++                                image[py * PW_PC5_HUD_SIDE + px] = color;
++                        }
++        x += (w + 1) * scale;
++    }
++}
++
+ /* A decimal with one digit after the point, from tenths. */
+ static inline void pw_pc5_hud_tenths(char *out, size_t size, uint64_t tenths, int point)
+ {
+@@ -281,10 +315,62 @@ static inline uint32_t pw_pc5_hud_draw_lines(uint32_t *image, const PwPc5HudStat
+     return height;
+ }
+ 
++/* A dark box h rows high at the top of the image, its corners rounded to radius r. */
++static inline void pw_pc5_hud_box(uint32_t *image, uint32_t h, int r)
++{
++    for (uint32_t y = 0; y < h; y++)
++        for (uint32_t x = 0; x < PW_PC5_HUD_SIDE; x++) {
++            int cx = x < (uint32_t)r ? r - (int)x : x > PW_PC5_HUD_SIDE - 1 - (uint32_t)r ? (int)x - (PW_PC5_HUD_SIDE - 1 - r) : 0;
++            int cy = y < (uint32_t)r ? r - (int)y : y > h - 1 - (uint32_t)r ? (int)y - (int)(h - 1 - r) : 0;
++            if (cx * cx + cy * cy <= r * r) image[y * PW_PC5_HUD_SIDE + x] = 0xc0101216u;
++        }
++}
++
++/* The large overlay (PW_PC5_HUD_LARGE): up to two lines, each its value in glyphs twice the
++ * size over its label, centred; with more lines on, the next two every PW_PC5_HUD_TURN_S
++ * seconds. The memory shows the gigabytes used ("5.1G"), the whole being too wide at that
++ * size. The box's height, 0 when no line is shown. */
++static inline uint32_t pw_pc5_hud_draw_large(uint32_t *image, const PwPc5HudStats *stats)
++{
++    static const unsigned order[PW_PC5_HUD_LINES] = { PW_PC5_HUD_FPS, PW_PC5_HUD_FRAME_TIME, PW_PC5_HUD_CPU,
++                                                      PW_PC5_HUD_CPU_TEMP, PW_PC5_HUD_SOC_TEMP, PW_PC5_HUD_MEMORY };
++    const char *labels[PW_PC5_HUD_LINES];
++    char values[PW_PC5_HUD_LINES][24];
++    unsigned count = 0, first, shown;
++    uint32_t height;
++
++    memset(image, 0, PW_PC5_HUD_SIDE * PW_PC5_HUD_SIDE * 4);
++    for (unsigned i = 0; i < PW_PC5_HUD_LINES; i++) {
++        if (!pw_pc5_hud_line(stats, order[i], &labels[count], values[count], sizeof(values[count]))) continue;
++        if (order[i] == PW_PC5_HUD_MEMORY) {
++            uint64_t tenths = (stats->memory_used * 10 + ((uint64_t)1 << 29)) >> 30;
++            pw_pc5_hud_tenths(values[count], sizeof(values[count]) - 1, tenths > 999 ? tenths / 10 * 10 : tenths,
++                              tenths <= 999);
++            strcat(values[count], "G");
++        }
++        count++;
++    }
++    if (!count) return 0;
++    first = count > 2 ? (stats->seconds / PW_PC5_HUD_TURN_S * 2) % ((count + 1) / 2 * 2) : 0;
++    shown = count - first < 2 ? count - first : 2;
++    height = 2 + shown * PW_PC5_HUD_LARGE_PITCH + 2;
++    pw_pc5_hud_box(image, height, 8);
++    for (unsigned i = 0; i < shown; i++) {
++        const char *value = values[first + i], *label = labels[first + i];
++        int y = 3 + (int)i * PW_PC5_HUD_LARGE_PITCH, scale = pw_pc5_hud_text_width_scaled(value, 2) <= PW_PC5_HUD_SIDE - 4 ? 2 : 1;
++        pw_pc5_hud_text_scaled(image, (PW_PC5_HUD_SIDE - pw_pc5_hud_text_width_scaled(value, scale)) / 2,
++                               y + (scale == 2 ? 0 : 4), value, scale, 0xffffffffu);
++        pw_pc5_hud_text(image, (PW_PC5_HUD_SIDE - pw_pc5_hud_text_width(label)) / 2, y + 17, label, 0xff9aa3afu);
++    }
++    return height;
++}
++
+ /* The overlay for stats: the large counter for FPS alone (its box's
+- * height), else the lines. */
++ * height), the large lines when LARGE is on, else the lines. */
+ static inline uint32_t pw_pc5_hud_draw_stats(uint32_t *image, const PwPc5HudStats *stats)
+ {
++    if ((stats->lines & PW_PC5_HUD_ALL) != PW_PC5_HUD_FPS && (stats->lines & PW_PC5_HUD_LARGE))
++        return pw_pc5_hud_draw_large(image, stats);
+     if ((stats->lines & PW_PC5_HUD_ALL) == PW_PC5_HUD_FPS) {
+         pw_pc5_hud_draw(image, stats->fps);
+         return PW_PC5_HUD_BOX_HEIGHT;
+diff --git a/wine/ps5/pw_vulkan_radv.c b/wine/ps5/pw_vulkan_radv.c
+index 1e3a22d..eb4288f 100644
+--- a/wine/ps5/pw_vulkan_radv.c
++++ b/wine/ps5/pw_vulkan_radv.c
+@@ -249,6 +249,7 @@ static struct {
+     struct { const uint32_t *texels; uint32_t width, height; int set; } buffer[PC5_BUFFERS];
+     int shown;                              /* the buffer flipped last; -1 none */
+     unsigned hud_lines;                     /* PW_PC5_HUD_*, 0 off */
++    unsigned hud_seconds;                   /* the overlay's updates, for the lines a large one shows */
+     int hud_corner, hud_enabled, hud_current;
+     PwPc5HudStats hud_stats;                /* PC5's numbers: the CPU, the temperatures, the memory */
+     uint64_t flips, second_flips, second_at;
+@@ -378,7 +379,7 @@ void pw_pc5_hud(int lines, int corner)
+     pc5_lock();
+     pc5.hud_corner = corner;
+     pc5.second_at = 0;
+-    pc5.hud_lines = (unsigned)lines & PW_PC5_HUD_ALL;
++    pc5.hud_lines = (unsigned)lines & PW_PC5_HUD_FLAGS;
+     pc5_unlock();
+     if (!(lines & PW_PC5_HUD_ALL) && handle >= 0) {
+         cursor_lock();
+@@ -426,6 +427,7 @@ void pw_pc5_hud_tick(void)
+             stats.frame_us = frames ? (uint32_t)((elapsed / frames + 500) / 1000) : 0;
+             pc5.second_at = now;
+             pc5.second_flips = pc5.flips;
++            stats.seconds = ++pc5.hud_seconds;
+             show = 1;
+         }
+     }
+-- 
+2.43.0
+

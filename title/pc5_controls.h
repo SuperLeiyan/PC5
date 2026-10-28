@@ -28,6 +28,21 @@ typedef enum Pc5StickUse {
     PC5_STICK_USES
 } Pc5StickUse;
 
+/* A game's Graphics API (Triangle › Graphics): PC5's choice, or Wine's own Direct3D for
+ * a game that doesn't run that way (pc5_profile_text_at in pc5_library.c).
+ *   AUTO         DXVK for Direct3D 8 to 11, VKD3D-Proton for Direct3D 12, Wine's
+ *                own Direct3D (WineD3D) on OpenGL for DirectDraw
+ *   WINE         Wine's own: WineD3D on OpenGL (Mesa Zink) for Direct3D 8 to 11 and
+ *                DirectDraw, Wine's VKD3D for Direct3D 12
+ *   WINE_VULKAN  WineD3D drawing with Vulkan itself, without OpenGL (Wine's VKD3D
+ *                for Direct3D 12, as WINE) */
+typedef enum Pc5Graphics {
+    PC5_GRAPHICS_AUTO,
+    PC5_GRAPHICS_WINE,
+    PC5_GRAPHICS_WINE_VULKAN,
+    PC5_GRAPHICS_COUNT
+} Pc5Graphics;
+
 /* What can be bound: the 17 buttons, then the sticks' directions (left stick up,
  * down, left, right, then the right stick's), in prospero-win's order. */
 enum {
@@ -48,6 +63,7 @@ typedef struct Pc5Controls {
     int stretch;                  /* 1: the picture stretched to fill the 16:9 screen, 0: its own shape */
     int cpu_sharing;              /* 1: the game's threads take turns on the CPUs, as on a PC (prospero-win's
                                    * [runtime] thread_scheduling); 0: each keeps its CPU until it waits */
+    Pc5Graphics graphics;         /* who turns the game's Direct3D or DirectDraw into Vulkan */
 } Pc5Controls;
 
 /* A key, mouse button or nothing, as prospero-win names it in a profile, and as
@@ -73,6 +89,11 @@ int pc5_controls_input(const Pc5Controls *controls, char *out, size_t size);
 
 /* "Cross", "Left stick up": a control's name in PC5. */
 const char *pc5_control_name(int control);
+/* The choices of Graphics API a game drawing with api (Pc5Api, pc5_pe.h) has, in order:
+ * their count, 0 for a game that draws no other way (OpenGL, Vulkan, Windows' own drawing). */
+int pc5_graphics_choices(int api, Pc5Graphics choices[PC5_GRAPHICS_COUNT]);
+/* The choice as the game menu shows it: "Auto", "WineD3D", "WineD3D on Vulkan", "Wine's VKD3D". */
+const char *pc5_graphics_name(Pc5Graphics graphics, int api);
 /* "Xbox controller", "DualSense", "Keyboard & mouse". */
 const char *pc5_pad_mode_name(Pc5PadMode mode);
 /* A stick's use: "Keys", "Mouse pointer", "Nothing". */

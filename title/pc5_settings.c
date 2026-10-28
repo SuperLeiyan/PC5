@@ -118,7 +118,10 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
         else if (!strcmp(name, "cpu_temperature")) settings->cpu_temperature = on_off(value, settings->cpu_temperature);
         else if (!strcmp(name, "soc_temperature")) settings->soc_temperature = on_off(value, settings->soc_temperature);
         else if (!strcmp(name, "memory")) settings->memory = on_off(value, settings->memory);
-        else if (!strcmp(name, "fps_corner"))
+        else if (!strcmp(name, "overlay_size")) {
+            if (!strcmp(value, "large")) settings->overlay_large = 1;
+            else if (!strcmp(value, "normal")) settings->overlay_large = 0;
+        } else if (!strcmp(name, "fps_corner"))
             settings->fps_corner = (Pc5Corner)pick(value, corner_keys, PC5_CORNERS, (int)settings->fps_corner);
         else if (!strcmp(name, "vibration")) settings->vibration = percent(value, 0, settings->vibration);
         else if (!strcmp(name, "trigger_rumble")) settings->trigger_rumble = percent(value, 25, settings->trigger_rumble);
@@ -154,13 +157,14 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
     length = snprintf(text, sizeof(text),
                       "# PC5's settings (Settings in PC5 changes them)\n"
                       "fps = %s\nframe_time = %s\ncpu_usage = %s\ncpu_temperature = %s\nsoc_temperature = %s\n"
-                      "memory = %s\nfps_corner = %s\nvibration = %d\nlight_bar = %s\ntriggers = %s\n"
+                      "memory = %s\nfps_corner = %s\noverlay_size = %s\nvibration = %d\nlight_bar = %s\ntriggers = %s\n"
                       "trigger_rumble = %d\ntrigger_resistance = %d\ncheck_updates = %s\nkeep_logs = %s\nstartup_sound = %s\n"
                       "startup_volume = %d\n",
                       settings->fps ? "on" : "off", settings->frame_time ? "on" : "off",
                       settings->cpu_usage ? "on" : "off", settings->cpu_temperature ? "on" : "off",
                       settings->soc_temperature ? "on" : "off", settings->memory ? "on" : "off",
-                      corner_keys[settings->fps_corner % PC5_CORNERS], settings->vibration,
+                      corner_keys[settings->fps_corner % PC5_CORNERS], settings->overlay_large ? "large" : "normal",
+                      settings->vibration,
                       light_keys[settings->light_bar % PC5_LIGHTS], trigger_keys[settings->triggers % PC5_TRIGGERS_COUNT],
                       settings->trigger_rumble, settings->trigger_resistance, settings->check_updates ? "on" : "off",
                       settings->keep_logs ? "on" : "off", settings->startup_sound, settings->startup_volume);

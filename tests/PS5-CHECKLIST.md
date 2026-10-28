@@ -310,3 +310,15 @@ controller's speaker.
 | 143 | Fallout 1's falloutwHR.exe (the high-resolution patch's program): start it | it gets past its start to its intro or menu, with no crash in `ntdll.dll` reading FF81C098 | `wine-ps5: 32-bit FS base repaired (1)`, then if the console didn't take a repair, `the 32-bit FS base repair didn't take at …` once and `32-bit %fs: access done by Wine (1): …`; no `the 32-bit FS base was not repaired` |
 | 144 | Fallout 1's falloutw.exe and Fallout 2's Fallout2.exe and HR.exe | they start as on 1.9.0 | as on 1.9.0 |
 | 145 | Update from 1.9.0 to 1.9.1 with PC5's updater | the download is about the update zip's size, far less than the whole app | `PC5 update using PPSA11018-update.zip size=…` |
+
+## Graphics API per game, a large overlay (1.9.2)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 146 | △ on a Direct3D 11 game › Graphics | Graphics API first: Auto, then WineD3D, WineD3D on Vulkan, Auto again with ✕ or right | `PC5 controls id=… graphics_api=WineD3D` |
+| 147 | Start it with WineD3D | it starts and draws, slower than with DXVK | `dll_overrides=d3d8,d3d9,d3d10core,d3d11,dxgi,d3d12,d3d12core=b;opengl32=n`, `zink provider=ok`, wined3d's `GL_RENDERER "zink …"` |
+| 148 | Start it with WineD3D on Vulkan | it starts and draws | `PW_WINE64 debug_env=WINE_D3D_CONFIG`, no `zink provider` line |
+| 149 | A Direct3D 12 game: Graphics API › Wine's VKD3D, start it | it starts (or fails differently than with VKD3D-Proton) | `dll_overrides=…d3d12,d3d12core=b`, no `vkd3d-proton` lines |
+| 150 | A DirectDraw game (Baldur's Gate II): Graphics API › WineD3D on Vulkan, start it | it draws; compare its pauses with Auto | `PW_WINE64 debug_env=WINE_D3D_CONFIG` |
+| 151 | An OpenGL or Vulkan game › Graphics | no Graphics API row | |
+| 152 | Settings › Overlay: every line on, Size › Large; start a game | two lines at a time in big digits, the next two every 3 seconds, the memory as "…G"; Normal again shows every line at once | `PC5 settings … size=large` |

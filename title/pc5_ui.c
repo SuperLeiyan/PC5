@@ -81,12 +81,12 @@ typedef struct QueueGame {
 typedef enum SettingRow {
     SR_INSTALL, SR_UNINSTALL, SR_COMPATIBILITY, SR_MAINTENANCE, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
-    SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
+    SR_OVERLAY_SIZE, SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
-enum { PAGE_ROWS = 7, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, PAGE_MAINTENANCE = 5,
+enum { PAGE_ROWS = 8, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, PAGE_MAINTENANCE = 5,
        SETTING_PAGES = 6 };
 static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources",
                                                         "Game maintenance" };
@@ -112,6 +112,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_SOC_TEMPERATURE;
         rows[n++] = SR_MEMORY;
         rows[n++] = SR_FPS_CORNER;
+        rows[n++] = SR_OVERLAY_SIZE;
     } else if (page == PAGE_GAMES) {
         rows[n++] = SR_VIBRATION;
         rows[n++] = SR_LIGHT;
@@ -145,7 +146,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
  * and mouse) and the three groups on the first; each group's rows on a page of its own. */
 typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
-    GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_CPU_SHARING,
+    GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_CPU_SHARING,
     GR_COVER, GR_BACKGROUND, GR_HOME,
     GR_PROGRAM, GR_UPDATE, GR_UNINSTALL
 } GameRow;
@@ -154,14 +155,16 @@ static const char *const game_page_titles[GAME_PAGES] = { "", "Graphics", "Appea
 /* The first page's row that opens each page. */
 static const GameRow game_page_rows[GAME_PAGES] = { GR_PLAY, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE };
 /* What a game is, for its menu's rows. */
-enum { GAME_32BIT = 1, GAME_VULKAN = 2, GAME_PC5 = 4 };
+enum { GAME_32BIT = 1, GAME_VULKAN = 2, GAME_PC5 = 4, GAME_API = 8 };
 
-/* kind: GAME_32BIT for Memory, GAME_VULKAN for Resolution, GAME_PC5 (PC5 installed it) for Update. */
+/* kind: GAME_32BIT for Memory, GAME_VULKAN for Resolution, GAME_PC5 (PC5 installed it) for Update,
+ * GAME_API (it draws with DirectDraw or Direct3D) for Graphics API. */
 static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow rows[GAME_ROWS])
 {
     int n = 0;
     switch (page) {
     case GP_GRAPHICS:
+        if (kind & GAME_API) rows[n++] = GR_GRAPHICS_API;
         rows[n++] = GR_FRAMEGEN;
         if (kind & GAME_VULKAN) rows[n++] = GR_RESOLUTION;
         rows[n++] = GR_ASPECT;
@@ -385,8 +388,17 @@ static int ui_game_kind(const Pc5Ui *ui)
 {
     int index = pc5_library_find(&ui->library, ui->launch_id);
     if (index < 0) return 0;
+    Pc5Graphics choices[PC5_GRAPHICS_COUNT];
     return (ui->library.games[index].bits == 32 ? GAME_32BIT : 0) | (ui->library.games[index].vulkan ? GAME_VULKAN : 0) |
-           (ui->library.games[index].pc5 ? GAME_PC5 : 0);
+           (ui->library.games[index].pc5 ? GAME_PC5 : 0) |
+           (pc5_graphics_choices(ui->library.games[index].api, choices) > 1 ? GAME_API : 0);
+}
+
+/* What the game whose menu is open draws with (Pc5Api), PC5_API_GDI when it isn't found. */
+static int ui_game_api(const Pc5Ui *ui)
+{
+    int index = pc5_library_find(&ui->library, ui->launch_id);
+    return index < 0 ? PC5_API_GDI : ui->library.games[index].api;
 }
 
 /* The game menu on row's page, at row. */
@@ -1859,6 +1871,12 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         pc5_copy(about, about_size, "Where the overlay sits on the screen");
         pc5_copy(value, value_size, pc5_corner_name(set->fps_corner));
         break;
+    case SR_OVERLAY_SIZE:
+        *label = "Size";
+        pc5_copy(about, about_size, set->overlay_large ? "Twice the size, two lines at a time, taking turns"
+                                                       : "Every line at once, in small text");
+        pc5_copy(value, value_size, set->overlay_large ? "Large" : "Normal");
+        break;
     case SR_VIBRATION:
         *label = "Vibration";
         pc5_copy(about, about_size, set->vibration ? "How strongly the controller rumbles with the game"
@@ -1942,6 +1960,7 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
     case SR_SOC_TEMPERATURE: set->soc_temperature = !set->soc_temperature; break;
     case SR_MEMORY: set->memory = !set->memory; break;
     case SR_FPS_CORNER: set->fps_corner = (Pc5Corner)((set->fps_corner + PC5_CORNERS + step) % PC5_CORNERS); break;
+    case SR_OVERLAY_SIZE: set->overlay_large = !set->overlay_large; break;
     case SR_VIBRATION: set->vibration = pc5_strength_next(set->vibration, 0, step); break;
     case SR_TRIGGER_RUMBLE: set->trigger_rumble = pc5_strength_next(set->trigger_rumble, 25, step); break;
     case SR_TRIGGER_RESISTANCE: set->trigger_resistance = pc5_strength_next(set->trigger_resistance, 25, step); break;
@@ -1974,11 +1993,11 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
         break;
     }
     if (pc5_settings_save(ui->root, set)) say(ui, "PC5 problem settings: can't write them");
-    say(ui, "PC5 settings fps=%d frame_time=%d cpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d vibration=%d light=%d "
+    say(ui, "PC5 settings fps=%d frame_time=%d cpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d size=%s vibration=%d light=%d "
         "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s startup_volume=%d "
         "pictures_off=%#x",
         set->fps, set->frame_time, set->cpu_usage, set->cpu_temperature, set->soc_temperature, set->memory,
-        (int)set->fps_corner, set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
+        (int)set->fps_corner, set->overlay_large ? "large" : "normal", set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
         set->trigger_resistance, set->check_updates, set->keep_logs, set->startup_sound, set->startup_volume,
         (unsigned)set->pictures_off);
     return 1;
@@ -1990,10 +2009,10 @@ static void controls_changed(Pc5Ui *ui)
     const Pc5Controls *k = &ui->controls;
     if (pc5_controls_save(ui->root, ui->launch_id, k)) say(ui, "PC5 problem controls %s: can't write them", ui->launch_id);
     say(ui, "PC5 controls id=%s mode=%s left=%s right=%s speed=%d frame_generation=%d memory_32bit=%s resolution=%s "
-        "aspect_ratio=%s cpu_sharing=%d", ui->launch_id, pc5_pad_mode_name(k->mode), pc5_stick_use_name(k->stick[0]),
-        pc5_stick_use_name(k->stick[1]), k->speed, k->frame_generation, k->memory_2gb ? "2gb" : "4gb",
-        k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p", k->stretch ? "stretch" : "keep",
-        k->cpu_sharing);
+        "aspect_ratio=%s cpu_sharing=%d graphics_api=%s", ui->launch_id, pc5_pad_mode_name(k->mode),
+        pc5_stick_use_name(k->stick[0]), pc5_stick_use_name(k->stick[1]), k->speed, k->frame_generation,
+        k->memory_2gb ? "2gb" : "4gb", k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p",
+        k->stretch ? "stretch" : "keep", k->cpu_sharing, pc5_graphics_name(k->graphics, ui_game_api(ui)));
 }
 
 /* A Button mapping row moves to its next (step 1) or previous (-1) value: 1 when it changed. */
@@ -2673,6 +2692,18 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->controls.mode = (Pc5PadMode)((ui->controls.mode + PC5_PAD_MODES + step) % PC5_PAD_MODES);
             controls_changed(ui);
             ui->dirty = 1;
+        } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_GRAPHICS_API) {
+            /* The next of the choices the game's graphics have (pc5_graphics_choices). */
+            Pc5Graphics choices[PC5_GRAPHICS_COUNT];
+            int count = pc5_graphics_choices(ui_game_api(ui), choices), at = 0;
+            for (int i = 0; i < count; i++)
+                if (choices[i] == ui->controls.graphics) at = i;
+            if (count) {
+                at = (at + count + ((k & PC5_KEY_LEFT) ? -1 : 1)) % count;
+                ui->controls.graphics = choices[at];
+                controls_changed(ui);
+                ui->dirty = 1;
+            }
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_FRAMEGEN) {
             ui->controls.frame_generation = !ui->controls.frame_generation;
             controls_changed(ui);
@@ -3615,6 +3646,19 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
                        kind & GAME_PC5 ? "Its program, updating it and uninstalling it" : "Its program and uninstalling it",
                        more);
             break;
+        case GR_GRAPHICS_API: {
+            int api = ui_game_api(ui);
+            const char *about_api =
+                ui->controls.graphics == PC5_GRAPHICS_AUTO
+                    ? (api == PC5_API_D3D12  ? "VKD3D-Proton turns its Direct3D 12 into Vulkan"
+                       : api == PC5_API_DDRAW ? "Wine's own Direct3D draws it, with OpenGL"
+                                              : "DXVK turns its Direct3D into Vulkan")
+                : api == PC5_API_D3D12 ? "Wine's own Direct3D 12; try it if the game won't run"
+                : ui->controls.graphics == PC5_GRAPHICS_WINE_VULKAN ? "Wine's own Direct3D, drawing with Vulkan"
+                                                                     : "Wine's own Direct3D, with OpenGL; try it if the game won't run";
+            drawer_row(ui, c, x, y, ROW_PITCH, on, "Graphics API", about_api, pc5_graphics_name(ui->controls.graphics, api));
+            break;
+        }
         case GR_FRAMEGEN:
             drawer_row(ui, c, x, y, ROW_PITCH, on, "Frame generation",
                        ui->controls.frame_generation ? "Held at 30 fps and shown at 60"

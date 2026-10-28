@@ -30,7 +30,7 @@ typedef enum Pc5Triggers {
 typedef struct Pc5Settings {
     /* The overlay in games (Settings › Overlay), a line each: the frame
      * counter, the frames' average time, the game's share of the CPU, the
-     * CPU's and the chip's temperatures, the memory in use; and its corner. */
+     * CPU's and the chip's temperatures, the memory in use; its corner and size. */
     int fps;
     int frame_time;
     int cpu_usage;
@@ -38,6 +38,7 @@ typedef struct Pc5Settings {
     int soc_temperature;
     int memory;
     Pc5Corner fps_corner;
+    int overlay_large;        /* the lines in twice the size, two at a time, taking turns (Size: Large) */
     int vibration;            /* how strong the game's rumble is on the controller: 0 (off), 25, 50, 75, 100 % */
     Pc5Light light_bar;
     Pc5Triggers triggers;

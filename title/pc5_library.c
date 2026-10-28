@@ -229,6 +229,23 @@ int pc5_profile_text_at(const char *id, const Pc5Info *info, const char *argumen
      * quietly instead of getting further and crashing. */
     const char *overrides = info->api == PC5_API_D3D12 ? "d3d8,d3d9,d3d10core,d3d11,d3d12,d3d12core,dxgi=n"
                                                        : "d3d8,d3d9,d3d10core,d3d11,dxgi=n;d3d12,d3d12core=b";
+    /* Graphics API (pc5_controls.h): Wine's own Direct3D, all of it Wine's (its dxgi with
+     * its d3d11 or d3d12), on OpenGL through Zink or, WineD3D on Vulkan, drawing with
+     * Vulkan itself (WINE_D3D_CONFIG, which prospero-win's [debug] env passes on). A
+     * DirectDraw game is WineD3D's already: on Vulkan it only gets that setting. */
+    const char *wine_d3d = "";
+    Pc5Graphics chosen = controls ? controls->graphics : PC5_GRAPHICS_AUTO;
+    {
+        Pc5Graphics choices[PC5_GRAPHICS_COUNT];
+        int n = pc5_graphics_choices((int)info->api, choices), offered = 0;
+        for (int i = 0; i < n; i++) offered |= choices[i] == chosen;
+        if (!offered) chosen = PC5_GRAPHICS_AUTO;
+    }
+    if (chosen != PC5_GRAPHICS_AUTO && info->api != PC5_API_DDRAW) {
+        overrides = "d3d8,d3d9,d3d10core,d3d11,dxgi,d3d12,d3d12core=b";
+        graphics = chosen == PC5_GRAPHICS_WINE && info->api != PC5_API_D3D12 ? "opengl" : "dxvk";
+    }
+    if (chosen == PC5_GRAPHICS_WINE_VULKAN) wine_d3d = "\n[debug]\nenv = WINE_D3D_CONFIG=renderer=vulkan\n";
 
     windows_path(info->folder, info->exe, 1, exe, sizeof(exe));
     if (working_directory) pc5_copy(cwd, sizeof(cwd), working_directory);
@@ -270,10 +287,10 @@ int pc5_profile_text_at(const char *id, const Pc5Info *info, const char *argumen
         "scaling = %s\n"
         "show_fps = false\n"
         "\n"
-        "%s",
+        "%s%s",
         info->title, info->folder, id, info->title, exe, cwd, options, dlls, id,
         info->bits == 64 ? "pe64" : "pe32", graphics, desktop_size(info, controls),
-        controls->stretch ? "stretch" : "fit", input);
+        controls->stretch ? "stretch" : "fit", input, wine_d3d);
 }
 
 /* The folder the game's program is in, on the console. */
@@ -541,7 +558,11 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
         char channels[128];
         size_t n = strlen(text);
         game_winedebug(root, id, channels, sizeof(channels));
-        if (channels[0] && pc5_format(text + n, sizeof(text) - n, "\n[debug]\nwinedebug = %s\n", channels)) text[n] = 0;
+        /* In the profile's [debug] when it has one (it is the last section: WineD3D on Vulkan). */
+        if (channels[0] && pc5_format(text + n, sizeof(text) - n, strstr(text, "\n[debug]\n") ? "winedebug = %s\n"
+                                                                                               : "\n[debug]\nwinedebug = %s\n",
+                                      channels))
+            text[n] = 0;
     }
     if (pc5_read_file(path, &old, sizeof(text)) || old.len != strlen(text) || memcmp(old.data, text, old.len))
         status = pc5_write_file(path, text, strlen(text));
@@ -799,12 +820,14 @@ int pc5_library_load(const char *root, Pc5Library *library)
             game->pc5 = 1;
             game->bits = info.bits == 64 ? 64 : 32;
             game->vulkan = info.api > PC5_API_DDRAW;
+            game->api = (int)info.api;
             pc5_detail_text(info.bits, info.api, info.bytes, game->detail, sizeof(game->detail));
         } else {
             Pc5Api api = app->graphics == PW_APP_GRAPHICS_ZINK ? PC5_API_OPENGL :
                          app->graphics == PW_APP_GRAPHICS_DXVK ? PC5_API_D3D9 : PC5_API_GDI;
             game->bits = app->architecture == PW_APP_ARCH_PE64 ? 64 : 32;
             game->vulkan = 0;   /* not PC5's: its profile's desktop is its own */
+            game->api = PC5_API_GDI;   /* nor its graphics */
             snprintf(game->detail, sizeof(game->detail), "%d-bit \xc2\xb7 %s",
                      game->bits,
                      api == PC5_API_D3D9 ? "DirectX" : pc5_api_name(api));

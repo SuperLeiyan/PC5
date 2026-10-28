@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: a game's controller (pc5_controls.h). */
 #include "pc5_controls.h"
+#include "pc5_pe.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -59,6 +60,31 @@ static int key_index(const char *name)
     return -1;
 }
 
+/* controls.txt's names for a game's Graphics API (Pc5Graphics). */
+static const char *const graphics_keys[PC5_GRAPHICS_COUNT] = { "auto", "wine", "wine_vulkan" };
+
+int pc5_graphics_choices(int api, Pc5Graphics choices[PC5_GRAPHICS_COUNT])
+{
+    int n = 0;
+    if (api == PC5_API_DDRAW || (api >= PC5_API_D3D8 && api <= PC5_API_D3D11)) {
+        choices[n++] = PC5_GRAPHICS_AUTO;
+        /* For DirectDraw, PC5's choice is already WineD3D on OpenGL. */
+        if (api != PC5_API_DDRAW) choices[n++] = PC5_GRAPHICS_WINE;
+        choices[n++] = PC5_GRAPHICS_WINE_VULKAN;
+    } else if (api == PC5_API_D3D12) {
+        choices[n++] = PC5_GRAPHICS_AUTO;
+        choices[n++] = PC5_GRAPHICS_WINE;
+    }
+    return n;
+}
+
+const char *pc5_graphics_name(Pc5Graphics graphics, int api)
+{
+    if (graphics == PC5_GRAPHICS_AUTO) return "Auto";
+    if (api == PC5_API_D3D12) return "Wine's VKD3D";
+    return graphics == PC5_GRAPHICS_WINE_VULKAN ? "WineD3D on Vulkan" : "WineD3D";
+}
+
 void pc5_controls_default(Pc5Controls *controls)
 {
     memset(controls, 0, sizeof(*controls));
@@ -111,6 +137,9 @@ int pc5_controls_load(const char *root, const char *id, Pc5Controls *controls)
         } else if (!strcmp(name, "cpu_sharing")) {
             if (!strcmp(value, "on")) controls->cpu_sharing = 1;
             else if (!strcmp(value, "off")) controls->cpu_sharing = 0;
+        } else if (!strcmp(name, "graphics_api")) {
+            for (int i = 0; i < PC5_GRAPHICS_COUNT; i++)
+                if (!strcmp(value, graphics_keys[i])) controls->graphics = (Pc5Graphics)i;
         } else if (!strcmp(name, "pointer_speed")) {
             int speed = 0, digits = 0;
             for (const char *p = value; *p >= '0' && *p <= '9' && digits < 3; p++, digits++) speed = speed * 10 + *p - '0';
@@ -146,12 +175,14 @@ int pc5_controls_save(const char *root, const char *id, const Pc5Controls *contr
                                    "# Triangle on a 32-bit game, then Memory\nmemory_32bit = %s\n"
                                    "# Triangle on the game, then Resolution\nresolution = %s\n"
                                    "# Triangle on the game, then Aspect ratio\naspect_ratio = %s\n"
-                                   "# Triangle on the game, then CPU sharing\ncpu_sharing = %s\n",
+                                   "# Triangle on the game, then CPU sharing\ncpu_sharing = %s\n"
+                                   "# Triangle on the game, then Graphics API\ngraphics_api = %s\n",
                             mode_keys[controls->mode % PC5_PAD_MODES], stick_keys[controls->stick[0] % PC5_STICK_USES],
                             stick_keys[controls->stick[1] % PC5_STICK_USES], controls->speed,
                             controls->frame_generation ? "on" : "off", controls->memory_2gb ? "2gb" : "4gb",
                             controls->resolution == 2 ? "2160p" : controls->resolution == 1 ? "1440p" : "1080p",
-                            controls->stretch ? "stretch" : "keep", controls->cpu_sharing ? "on" : "off");
+                            controls->stretch ? "stretch" : "keep", controls->cpu_sharing ? "on" : "off",
+                            graphics_keys[controls->graphics % PC5_GRAPHICS_COUNT]);
     for (int i = 0; i < PC5_CONTROLS && !status; i++)
         status = pc5_buf_printf(&text, "%s = %s\n", control_keys[i], pc5_keys[controls->key[i] % pc5_key_count].name);
     if (!status) status = pc5_write_file(path, text.data, text.len);

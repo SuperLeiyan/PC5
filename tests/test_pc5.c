@@ -1064,6 +1064,85 @@ static void test_install(void)
         pw_wine_library_load(pw, root);
         profile = pw_wine_library_find(pw, "orbital-nine");
         CHECK(profile && !profile->winedebug[0], "gone with the file");
+        /* Graphics API, a Direct3D 12 game: Wine's VKD3D (all of Direct3D Wine's own, drawn with Vulkan);
+         * WineD3D on Vulkan isn't one of its choices, so it starts as Auto. */
+        Pc5Controls k;
+        pc5_controls_load(root, "orbital-nine", &k);
+        k.graphics = PC5_GRAPHICS_WINE;
+        pc5_controls_save(root, "orbital-nine", &k);
+        CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "orbital-nine");
+        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_DXVK &&
+              strstr(profile->app.dll_overrides, "d3d8,d3d9,d3d10core,d3d11,dxgi,d3d12,d3d12core=b") &&
+              !profile->debug_env_count, "Wine's VKD3D: Wine's DLLs: %s", profile ? profile->app.dll_overrides : "-");
+        k.graphics = PC5_GRAPHICS_WINE_VULKAN;
+        pc5_controls_save(root, "orbital-nine", &k);
+        CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "orbital-nine");
+        CHECK(profile && strstr(profile->app.dll_overrides, "d3d12,d3d12core,dxgi=n") && !profile->debug_env_count,
+              "not a Direct3D 12 choice: Auto (VKD3D-Proton)");
+        k.graphics = PC5_GRAPHICS_AUTO;
+        pc5_controls_save(root, "orbital-nine", &k);
+        CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "refreshed: %s", why);
+        /* A Direct3D 11 game: WineD3D on OpenGL (Zink), then on Vulkan, its winedebug.txt in the same [debug]. */
+        char neon_debug[PC5_PATH];
+        path(neon_debug, sizeof(neon_debug), "%s/prefixes/neondrift/pc5/winedebug.txt", root);
+        pc5_controls_load(root, "neondrift", &k);
+        k.graphics = PC5_GRAPHICS_WINE;
+        pc5_controls_save(root, "neondrift", &k);
+        CHECK(!pc5_profile_refresh(root, "neondrift", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_ZINK &&
+              strstr(profile->app.dll_overrides, "d3d8,d3d9,d3d10core,d3d11,dxgi,d3d12,d3d12core=b") &&
+              !profile->debug_env_count, "WineD3D: Wine's DLLs, on OpenGL: %s", profile ? profile->app.dll_overrides : "-");
+        k.graphics = PC5_GRAPHICS_WINE_VULKAN;
+        pc5_controls_save(root, "neondrift", &k);
+        write_text(neon_debug, "+d3d\n");
+        CHECK(!pc5_profile_refresh(root, "neondrift", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_DXVK &&
+              strstr(profile->app.dll_overrides, "dxgi,d3d12,d3d12core=b") && profile->debug_env_count == 1 &&
+              !strcmp(profile->debug_env[0].name, "WINE_D3D_CONFIG") &&
+              !strcmp(profile->debug_env[0].value, "renderer=vulkan") && !strcmp(profile->winedebug, "+d3d"),
+              "WineD3D on Vulkan, with the game's channels: %s %s", profile ? profile->app.dll_overrides : "-",
+              profile ? profile->winedebug : "-");
+        unlink(neon_debug);
+        k.graphics = PC5_GRAPHICS_AUTO;
+        pc5_controls_save(root, "neondrift", &k);
+        CHECK(!pc5_profile_refresh(root, "neondrift", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "neondrift");
+        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_DXVK &&
+              strstr(profile->app.dll_overrides, "dxgi=n") && !profile->debug_env_count, "Auto: DXVK again");
+        /* An OpenGL game has no choice: what is saved for it is left out. */
+        pc5_controls_load(root, "starfall", &k);
+        k.graphics = PC5_GRAPHICS_WINE_VULKAN;
+        pc5_controls_save(root, "starfall", &k);
+        CHECK(!pc5_profile_refresh(root, "starfall", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "starfall");
+        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_ZINK && !profile->debug_env_count, "OpenGL: as it was");
+        k.graphics = PC5_GRAPHICS_AUTO;
+        pc5_controls_save(root, "starfall", &k);
+        CHECK(!pc5_profile_refresh(root, "starfall", why, sizeof(why)), "refreshed: %s", why);
+    }
+    /* The choices each kind of game has, and their names. */
+    {
+        Pc5Graphics choices[PC5_GRAPHICS_COUNT];
+        CHECK(pc5_graphics_choices(PC5_API_D3D11, choices) == 3 && choices[1] == PC5_GRAPHICS_WINE &&
+              choices[2] == PC5_GRAPHICS_WINE_VULKAN, "Direct3D 11: Auto, WineD3D, WineD3D on Vulkan");
+        CHECK(pc5_graphics_choices(PC5_API_D3D12, choices) == 2 && choices[1] == PC5_GRAPHICS_WINE &&
+              !strcmp(pc5_graphics_name(PC5_GRAPHICS_WINE, PC5_API_D3D12), "Wine's VKD3D"), "Direct3D 12: Auto, Wine's VKD3D");
+        CHECK(pc5_graphics_choices(PC5_API_DDRAW, choices) == 2 && choices[1] == PC5_GRAPHICS_WINE_VULKAN,
+              "DirectDraw: Auto (WineD3D already), WineD3D on Vulkan");
+        CHECK(!pc5_graphics_choices(PC5_API_OPENGL, choices) && !pc5_graphics_choices(PC5_API_GDI, choices) &&
+              !pc5_graphics_choices(PC5_API_VULKAN, choices), "OpenGL, Vulkan, plain drawing: none");
+        CHECK(!strcmp(pc5_graphics_name(PC5_GRAPHICS_WINE_VULKAN, PC5_API_D3D9), "WineD3D on Vulkan") &&
+              !strcmp(pc5_graphics_name(PC5_GRAPHICS_AUTO, PC5_API_D3D9), "Auto"), "the names");
     }
     /* Installing the same folder again makes a second game, never a second copy over the first. */
     CHECK(install_folder("NeonDrift", 0, 0, id, sizeof(id)) == PC5_INSTALL_DONE && !strcmp(id, "neondrift-2"), "second: %s", id);
@@ -1691,6 +1770,12 @@ static void test_settings(void)
           "1.8.0's own sound, gone, is the default: %s", back.startup_sound);
     write_text(file, "startup_sound = on\n");
     CHECK(!pc5_settings_load(dir, &back) && !strcmp(back.startup_sound, "cheap chinese speaker"), "1.7.0's on too");
+    write_text(file, "fps = on\noverlay_size = large\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.overlay_large && !pc5_settings_save(dir, &back) &&
+          !pc5_settings_load(dir, &back) && back.overlay_large &&
+          pc5_game_overlay_lines(&back) == (PW_PC5_HUD_FPS | PW_PC5_HUD_LARGE), "Size: Large, read and saved");
+    back.fps = 0;
+    CHECK(!pc5_game_overlay_lines(&back), "no line: no overlay, large or not");
     write_text(file, "vibration = 75\ntrigger_rumble = 50\n");
     CHECK(!pc5_settings_load(dir, &back) && back.vibration == 75 && back.trigger_rumble == 50, "strengths read");
     write_text(file, "frame_time = on\ncpu_usage = on\ncpu_temperature = on\nsoc_temperature = yes\nmemory = on\n");
@@ -3928,6 +4013,27 @@ static void test_game(const char *fonts_path)
             label += pad_seen.cursor_image[i] == 0xff9aa3afu;
         }
         CHECK(white > 150 && label > 100 && !pad_seen.cursor_image[60 * 64 + 32], "its lines drawn: %d %d", white, label);
+        /* Large: two of the five lines at a time, their values twice the size, the next two every 3
+         * seconds, then RAM alone, then the first two again. */
+        game.settings.overlay_large = 1;
+        uint32_t first[64 * 64];
+        int large_white = 0, turned = 0;
+        for (int second = 0; second < 9; second++) {
+            pad_seen.cursors = 0;
+            pc5_game_hud(&game, 3, 120 + (uint64_t)second * 30, 64000 + (uint64_t)second * 1000);
+            if (!pad_seen.cursors) continue;
+            int page = (int)(game.hud_seconds / 3 % 3);
+            CHECK(pad_seen.cursor_y == 1080 - (page == 2 ? 34 : 64) - 24, "large, page %d: a box %u high", page,
+                  1080 - 24 - pad_seen.cursor_y);
+            if (second == 1) memcpy(first, pad_seen.cursor_image, sizeof(first));
+            else if (memcmp(first, pad_seen.cursor_image, sizeof(first))) turned = 1;
+            if (second == 1)
+                for (int i = 0; i < 64 * 64; i++) large_white += pad_seen.cursor_image[i] == 0xffffffffu;
+        }
+        CHECK(large_white > white * 2 / 3 && turned, "large values drawn (%d white pixels for two lines, %d for five), "
+              "taking turns: %d", large_white, white, turned);
+        CHECK(pc5_game_overlay_lines(&game.settings) & PW_PC5_HUD_LARGE, "the large flag goes with the lines");
+        game.settings.overlay_large = 0;
         game.settings.fps = game.settings.frame_time = game.settings.cpu_usage = game.settings.memory = 0;
         game.settings.cpu_temperature = 0;   /* the chip alone, which can't be read: nothing shown */
         pad_seen.cursors = 0;
@@ -4697,7 +4803,19 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_DOWN, &canvas);       /* Graphics */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     save_shot(&canvas, "game-menu-graphics");
-    press(ui, PC5_KEY_ACCEPT, &canvas);     /* Frame generation, its first row: on, then off again with right */
+    /* Graphics API, the first row of a Direct3D 12 game: Wine's VKD3D, then Auto again; left goes back. */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(controls_has("orbital-nine", "graphics_api = wine\n"), "Graphics API: Wine's VKD3D");
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "game-menu-graphics-api");
+    press(ui, PC5_KEY_RIGHT, &canvas);
+    CHECK(controls_has("orbital-nine", "graphics_api = auto\n"), "then Auto again");
+    press(ui, PC5_KEY_LEFT, &canvas);
+    CHECK(controls_has("orbital-nine", "graphics_api = wine\n"), "left: back to Wine's VKD3D");
+    press(ui, PC5_KEY_LEFT, &canvas);
+    CHECK(controls_has("orbital-nine", "graphics_api = auto\n"), "and Auto");
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);     /* Frame generation, the next row: on, then off again with right */
     CHECK(!strcmp(pc5_ui_screen(ui), "game-menu") && controls_has("orbital-nine", "frame_generation = on\n"),
           "Frame generation on: %s", pc5_ui_screen(ui));
     press(ui, PC5_KEY_RIGHT, &canvas);

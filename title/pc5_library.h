@@ -42,6 +42,7 @@ typedef struct Pc5Game {
     int pc5;                     /* installed by PC5 (has its notes) */
     int bits;                    /* 32 or 64 */
     int vulkan;                  /* drawn through Vulkan (Direct3D, Vulkan, OpenGL), so Resolution applies */
+    int api;                     /* what it draws with (Pc5Api), for its Graphics API; PC5_API_GDI when not PC5's */
     int playable;                /* the profile is valid and its prefix is there */
     char problem[128];           /* why not, when it isn't */
 } Pc5Game;

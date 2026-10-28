@@ -87,6 +87,7 @@ typedef struct Pc5GameSession {
     int matrix_failed;
     int hud_shown;
     uint64_t hud_second_at, hud_second_frames;
+    unsigned hud_seconds;         /* the overlay's updates, for the lines a large one shows */
     PwPc5HudStats stats;          /* what PC5 measured last for the overlay */
     uint64_t stats_at, stats_cpu_us;
     int stats_logged;

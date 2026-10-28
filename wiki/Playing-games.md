@@ -71,7 +71,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Play | Starts the game. |
 | Controller | What the game sees: **Xbox controller** (the default), **DualSense**, or **Keyboard & mouse**. Press **✕** or left / right to change it. See [Controllers](Controllers). |
 | Button mapping | Only with Keyboard & mouse: what each button and stick sends. See [Controllers](Controllers#button-mapping). |
-| Graphics › | Frame generation, resolution, aspect ratio, memory and CPU sharing. See [Graphics](#graphics). |
+| Graphics › | Graphics API, frame generation, resolution, aspect ratio, memory and CPU sharing. See [Graphics](#graphics). |
 | Appearance › | The game's cover, its background and its home screen tile. See [Appearance](#appearance). |
 | Manage › | The program PC5 starts, updating the game and uninstalling it. See [Manage](#manage). |
 
@@ -84,6 +84,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 
 | Row | What it does |
 | --- | --- |
+| Graphics API | Only for games drawn with Direct3D or DirectDraw: what turns the game's graphics into Vulkan, which the console draws with. See [Graphics API](#graphics-api) below. |
 | Frame generation | **Off** (the default) or **30 → 60 fps**. See [Frame generation](#frame-generation) below. |
 | Resolution | Only for games drawn with Direct3D, Vulkan or OpenGL: **1080p** (the default), **1440p** or **4K**. See [Resolution](#resolution) below. |
 | Aspect ratio | **Keep** (the default) or **Stretch**. See [Aspect ratio](#aspect-ratio) below. |
@@ -138,6 +139,19 @@ A game drawn with Direct3D, Vulkan or OpenGL can be drawn at **1080p** (the defa
 - A higher resolution is slower: 1440p is nearly twice the work of 1080p, and 4K four times. A game that is already slow at 1080p gets slower.
 - Games drawn with DirectDraw or plain Windows drawing are drawn at 1080p, so the row isn't shown for them.
 - A change takes effect the next time the game starts.
+
+## Graphics API
+
+From 1.9.2, **△ › Graphics › Graphics API** chooses who turns a game's Direct3D or DirectDraw into Vulkan. **Auto** (the default) is what PC5 chooses, and suits most games; the others are for a game that doesn't run, or doesn't look right, that way:
+
+| Choice | Direct3D 8 to 11 | Direct3D 12 | DirectDraw |
+| --- | --- | --- | --- |
+| **Auto** | DXVK | VKD3D-Proton | WineD3D with OpenGL |
+| **WineD3D** | Wine's own Direct3D, with OpenGL | — | — |
+| **WineD3D on Vulkan** | Wine's own Direct3D, drawing with Vulkan itself | — | Wine's own, drawing with Vulkan itself |
+| **Wine's VKD3D** | — | Wine's own Direct3D 12 | — |
+
+It applies the next time the game starts, and stays with the game. Wine's own Direct3D is usually slower than DXVK and VKD3D-Proton, and WineD3D on Vulkan is the newest of them; if a game only runs with one of them, say so in its [issue](Reporting-a-problem) or [compatibility report](Game-compatibility).
 
 ## Aspect ratio
 
