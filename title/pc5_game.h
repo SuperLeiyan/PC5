@@ -132,6 +132,11 @@ int pc5_prefix_dotnet(const char *root, const char *prefix, const char *app);
  * pc5/prefix-fonts.reg, appended to user.reg). 1 when it added them, 0 when it had them or
  * the app has none, -1 on a failure (tried again next time). */
 int pc5_prefix_fonts(const char *root, const char *prefix, const char *app);
+/* Windows versions for the programs that refuse the one Wine reports (Windows 10): each one's
+ * HKCU\Software\Wine\AppDefaults\<program> "Version", appended to user.reg once (the
+ * template's for the default prefix). 1 when it added some, 0 when it had them all, -1 on a
+ * failure (tried again next time). */
+int pc5_prefix_versions(const char *root, const char *prefix);
 
 /* The runtime's copy on the console: the app can't be listed, and every game's prefix
  * would otherwise hold its own 230 MB. Made once, from pc5/mono.list, by the first .NET

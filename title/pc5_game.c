@@ -331,6 +331,34 @@ int pc5_prefix_fonts(const char *root, const char *prefix, const char *app)
     return append_file(from, user) ? -1 : 1;
 }
 
+/* Programs whose own check refuses Windows 10, by name, and the Windows they were made for. */
+static const struct { const char *program, *version; } program_versions[] = {
+    { "Conviction_game.exe", "win7" },   /* Splinter Cell: Conviction's system check: "Operating System not supported" */
+};
+
+int pc5_prefix_versions(const char *root, const char *prefix)
+{
+    char user[PC5_PATH], needle[PC5_NAME + 64], text[PC5_NAME + 128];
+    int added = 0;
+
+    if (!prefix || !prefix[0] || !strcmp(prefix, "default")
+            ? pc5_format(user, sizeof(user), "%s/prefix/user.reg", root)
+            : pc5_format(user, sizeof(user), "%s/prefixes/%s/user.reg", root, prefix))
+        return -1;
+    if (!pc5_is_file(user)) return 0;   /* no Windows yet: Wine makes it, and the next start adds them */
+    for (size_t i = 0; i < sizeof(program_versions) / sizeof(program_versions[0]); i++) {
+        if (pc5_format(needle, sizeof(needle), "[Software\\\\Wine\\\\AppDefaults\\\\%s]", program_versions[i].program) ||
+            pc5_format(text, sizeof(text), "\n%s\n\"Version\"=\"%s\"\n", needle, program_versions[i].version))
+            return -1;
+        int held = file_holds(user, needle);
+        if (held < 0) return -1;
+        if (held) continue;
+        if (append_text(user, text)) return -1;
+        added = 1;
+    }
+    return added;
+}
+
 /* ---- the runtime's copy ------------------------------------------------------------------- */
 
 static uint64_t now_ms(void)
@@ -447,6 +475,8 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
         if (dotnet) say(game, "PC5 prefix .NET %s", dotnet > 0 ? "updated" : "update failed");
         int fonts = pc5_prefix_fonts(root, prefix, app);
         if (fonts) say(game, "PC5 prefix fonts %s", fonts > 0 ? "named" : "naming failed");
+        int versions = pc5_prefix_versions(root, prefix);
+        if (versions) say(game, "PC5 prefix Windows versions %s", versions > 0 ? "added" : "failed");
     }
     /* Frame generation and the aspect ratio, which libvulkan.prx reads from the
      * environment (the picture of a game drawn on the CPU follows its profile's

@@ -109,6 +109,8 @@ Up to four players can play a game with local multiplayer (split screen, couch c
 
 The strength of a game's rumble, the light bar and the adaptive triggers follow **Settings › In games**, whichever mode is chosen. See [Settings](Settings#in-games).
 
+A game's rumble plays on the controller's two motors, as on a PC. From PC5 1.9.4, PC5 sets each controller to the PS5's compatible vibration mode when the game starts; before that, on many consoles the motors stayed still while the adaptive triggers still played. If a game's rumble still doesn't reach the controller, check **Settings › Accessories › Controllers › Vibration Intensity** in the PS5's own settings, and [report it](Reporting-a-problem) with the game's log: its `PW_WINE64 rumble` line shows what the console answered.
+
 ## Leaving a game
 
 Hold the **touchpad** and **Options** together for **two seconds**, whichever mode is chosen. The controller gives a short buzz, the game is asked to close (it can save), and if it hasn't closed after five seconds it is ended. You are back in PC5, or on the home screen if you started the game from its [home screen tile](Home-screen-tiles).

@@ -1,0 +1,209 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 18:00:00 +0000
+Subject: [PATCH 50/50] PC5: the controllers' rumble on their two motors (the
+ compatible vibration mode)
+
+A DualSense opens in its advanced haptics mode, where the two motor
+levels scePadSetVibration takes move nothing: the console answers 0 and
+the controller stays still, while the adaptive triggers, set apart, still
+play. pw_pad_ps5_open and pw_pad_ps5_open_user now set the compatible
+mode (scePadSetVibrationMode(handle, 2)) once the controller is open, so
+a game's XInput or DirectInput rumble reaches its motors, for every
+player. The answer is kept (vibration_mode_rc) and logged with the first
+rumble; a refusal leaves the controller working, without rumble, as
+before. The same as prospero-win's own fix (pull request 695).
+---
+ native/pw_pad_ps5.c         | 18 +++++++++++++++---
+ native/pw_pad_ps5.h         | 10 ++++++++++
+ native/wine64_main.c        |  9 +++++----
+ tests/test_pw_pad_ps5.c     | 20 +++++++++++++++++++-
+ tests/test_pw_players_ps5.c |  2 +-
+ 5 files changed, 50 insertions(+), 9 deletions(-)
+
+diff --git a/native/pw_pad_ps5.c b/native/pw_pad_ps5.c
+index fdce104..eac9fab 100644
+--- a/native/pw_pad_ps5.c
++++ b/native/pw_pad_ps5.c
+@@ -20,6 +20,7 @@ extern int scePadRead(int32_t,PwPadPs5Data *,int32_t);
+ extern int scePadClose(int32_t);
+ extern int scePadSetVibration(int32_t,const uint8_t *);
+ extern int scePadSetMotionSensorState(int32_t,_Bool);
++extern int scePadSetVibrationMode(int32_t,int32_t);
+ /* At most four signed-in users; an empty place is -1. */
+ typedef struct PwPadPs5LoginUsers { int32_t user_id[PW_PAD_PS5_USERS]; } PwPadPs5LoginUsers;
+ extern int sceUserServiceGetLoginUserIdList(PwPadPs5LoginUsers *);
+@@ -34,6 +35,7 @@ static int platform_pad_read(int32_t h,PwPadPs5Data *s,int32_t n)
+ static int platform_pad_close(int32_t h){return scePadClose(h);}
+ static int platform_pad_set_vibration(int32_t h,const uint8_t m[2]){return scePadSetVibration(h,m);}
+ static int platform_pad_set_motion(int32_t h,int32_t on){return scePadSetMotionSensorState(h,on!=0);}
++static int platform_pad_set_vibration_mode(int32_t h,int32_t m){return scePadSetVibrationMode(h,m);}
+ static int platform_login_users(int32_t users[])
+ {
+     PwPadPs5LoginUsers list;
+@@ -53,7 +55,7 @@ int pw_pad_ps5_platform_ops(PwPadPs5Ops *ops)
+     *ops=(PwPadPs5Ops){platform_user_initialize,platform_foreground_user,
+         platform_user_terminate,platform_pad_init,platform_pad_open,
+         platform_pad_read,platform_pad_close,platform_pad_set_vibration,platform_pad_set_motion,
+-        platform_login_users};return PW_OK;
++        platform_login_users,platform_pad_set_vibration_mode};return PW_OK;
+ #endif
+ }
+ 
+@@ -63,6 +65,16 @@ static int valid_ops(const PwPadPs5Ops *ops)
+         ops->pad_init && ops->pad_open && ops->pad_read && ops->pad_close;
+ }
+ 
++/* The controller's rumble on its two motors (the compatible mode), as
++ * XInput and DirectInput games ask for it. A refusal is kept, not fatal:
++ * the controller still reads, only without rumble. */
++static void compatible_vibration(PwPadPs5 *pad)
++{
++    pad->vibration_mode_rc=INT_MIN;
++    if(pad->ops.pad_set_vibration_mode)
++        pad->vibration_mode_rc=pad->ops.pad_set_vibration_mode(pad->pad_handle,PW_PAD_PS5_VIBRATION_COMPATIBLE);
++}
++
+ static void centre_analog(PwPadPs5 *pad)
+ {
+     pad->left_stick=pad->right_stick=(PwPadPs5Stick){0x80,0x80};pad->l2=pad->r2=0;
+@@ -85,7 +97,7 @@ int pw_pad_ps5_open(PwPadPs5 *pad,const PwPadPs5Ops *ops,
+     pad->pad_init_rc=pad->ops.pad_init();if(pad->pad_init_rc<0)goto failed;
+     pad->pad_handle=pad->ops.pad_open(pad->user_id,0,0,NULL);
+     if(pad->pad_handle<0)goto failed;
+-    pad->opened=1;centre_analog(pad);return PW_OK;
++    pad->opened=1;centre_analog(pad);compatible_vibration(pad);return PW_OK;
+ failed:
+     if(pad->owns_user_service){pad->terminate_rc=pad->ops.user_terminate();pad->owns_user_service=0;}
+     return PW_ERR_STATE;
+@@ -101,7 +113,7 @@ int pw_pad_ps5_open_user(PwPadPs5 *pad,const PwPadPs5Ops *ops,
+     int status=pw_pad_init(&pad->core,map,map_count);if(status!=PW_OK)return status;
+     pad->pad_handle=pad->ops.pad_open(user_id,0,0,NULL);
+     if(pad->pad_handle<0)return PW_ERR_STATE;
+-    pad->opened=1;centre_analog(pad);return PW_OK;
++    pad->opened=1;centre_analog(pad);compatible_vibration(pad);return PW_OK;
+ }
+ 
+ /* One native read converted to samples; count<0 reports a read error. */
+diff --git a/native/pw_pad_ps5.h b/native/pw_pad_ps5.h
+index 7da2ed0..e6f9043 100644
+--- a/native/pw_pad_ps5.h
++++ b/native/pw_pad_ps5.h
+@@ -32,12 +32,22 @@ typedef struct PwPadPs5Ops {
+     /* Optional: the signed-in users (sceUserServiceGetLoginUserIdList),
+      * PW_PAD_PS5_USERS of them, -1 for an empty place; NULL if none. */
+     int (*login_users)(int32_t users[]);
++    /* Optional: scePadSetVibrationMode(handle, mode), NULL if none. A
++     * DualSense opens in its advanced haptics mode, where the two motor
++     * levels scePadSetVibration takes move nothing; the compatible mode
++     * plays them on its two motors. */
++    int (*pad_set_vibration_mode)(int32_t,int32_t);
+ } PwPadPs5Ops;
+ 
++enum { PW_PAD_PS5_VIBRATION_ADVANCED=1,PW_PAD_PS5_VIBRATION_COMPATIBLE=2 };
++
+ typedef struct PwPadPs5 {
+     PwPad core;PwPadPs5Ops ops;int32_t user_id,pad_handle;
+     int user_initialize_rc,pad_init_rc,close_rc,terminate_rc,last_read_rc;
+     int vibration_rc,motion_rc;
++    /* What the console answered to the compatible vibration mode set as
++     * the controller opened (INT_MIN: not set, no call). */
++    int vibration_mode_rc;
+     uint64_t polls,empty_reads,read_errors,connected_samples,disconnected_samples,
+              intercepted_samples,generation_changes;
+     uint8_t last_generation;
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index efcb27b..098c472 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -1766,8 +1766,8 @@ int main(int argc, char **argv)
+ #endif
+                 int vibrate = pw_pad_ps5_vibrate(&pad, large, small);
+                 if (!vibrations++ || vibrate != PW_OK)
+-                    PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d", (unsigned)left,
+-                               (unsigned)right, pw_result_name(vibrate), pad.vibration_rc);
++                    PS5LOG_LOG("PW_WINE64 rumble left=%u right=%u status=%s rc=%d mode_rc=%d", (unsigned)left,
++                               (unsigned)right, pw_result_name(vibrate), pad.vibration_rc, pad.vibration_mode_rc);
+             }
+         }
+         /* Players 2 to 4: who is signed in, once a second; each one's
+@@ -1794,8 +1794,9 @@ int main(int argc, char **argv)
+ #endif
+                     int vibrate = pw_pad_ps5_vibrate(extra, large, small);
+                     if (!player_vibrations[place]++ || vibrate != PW_OK)
+-                        PS5LOG_LOG("PW_WINE64 player %u rumble left=%u right=%u status=%s rc=%d", place + 1,
+-                                   (unsigned)left, (unsigned)right, pw_result_name(vibrate), extra->vibration_rc);
++                        PS5LOG_LOG("PW_WINE64 player %u rumble left=%u right=%u status=%s rc=%d mode_rc=%d", place + 1,
++                                   (unsigned)left, (unsigned)right, pw_result_name(vibrate), extra->vibration_rc,
++                                   extra->vibration_mode_rc);
+                 }
+             }
+         }
+diff --git a/tests/test_pw_pad_ps5.c b/tests/test_pw_pad_ps5.c
+index a8f01e4..59b2b32 100644
+--- a/tests/test_pw_pad_ps5.c
++++ b/tests/test_pw_pad_ps5.c
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #include "../native/pw_pad_ps5.h"
+ #include <assert.h>
++#include <limits.h>
+ #include <string.h>
+ 
+ static PwPadPs5Data fixture[64];static int fixture_count,read_rc,user_init_rc;
+@@ -20,8 +21,10 @@ static int pad_set_vibration(int32_t h,const uint8_t m[2])
+ {assert(h==7);vibration_calls++;memcpy(motors_seen,m,2);return vibration_rc;}
+ static int motion_calls,motion_rc,motion_seen=-1;
+ static int pad_set_motion(int32_t h,int32_t on){assert(h==7);motion_calls++;motion_seen=on;return motion_rc;}
++static int mode_calls,mode_rc,mode_seen=-1;
++static int pad_set_vibration_mode(int32_t h,int32_t m){assert(h==7);mode_calls++;mode_seen=m;return mode_rc;}
+ static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
+-                              pad_set_vibration,pad_set_motion,NULL};
++                              pad_set_vibration,pad_set_motion,NULL,pad_set_vibration_mode};
+ enum { CREATE=0x1,L1=0x400 };
+ static const PwPadKeyMap map[]={{L1,'Z',0,0,"left-flipper"}};
+ 
+@@ -31,6 +34,8 @@ int main(void)
+     assert(pw_pad_ps5_open(&pad,&ops,map,1)==PW_OK && pad.opened && pad.pad_handle==7);
+     assert(pad.left_stick.x==0x80 && pad.right_stick.y==0x80 && !pad.l2 && !pad.r2);
+     assert(init_calls==1&&foreground_calls==1&&pad_init_calls==1&&open_calls==1);
++    /* Opened in the compatible vibration mode, once: the motor levels move its motors. */
++    assert(mode_calls==1&&mode_seen==PW_PAD_PS5_VIBRATION_COMPATIBLE&&pad.vibration_mode_rc==0);
+     fixture[0]=(PwPadPs5Data){.buttons=L1|CREATE,.connected=1,.timestamp=1000,.connected_count=1};
+     fixture_count=1;assert(pw_pad_ps5_read(&pad)==PW_OK);
+     assert(pad.connected_samples==1 && pad.core.pressed_edges==(L1|CREATE));
+@@ -111,5 +116,18 @@ int main(void)
+     assert(pw_pad_ps5_close(&pad)==PW_OK && terminate_calls==1);
+     assert(pw_pad_ps5_close(NULL)==PW_ERR_PRECONDITION);
+     assert(pw_pad_ps5_read(&pad)==PW_ERR_PRECONDITION);
++    /* Refused, or no such call: the controller opens all the same. */
++    {
++        PwPadPs5 other;PwPadPs5Ops without=ops;
++        mode_rc=-5;assert(pw_pad_ps5_open(&other,&ops,map,1)==PW_OK&&other.opened&&other.vibration_mode_rc==-5);
++        pw_pad_ps5_close(&other);mode_rc=0;
++        without.pad_set_vibration_mode=NULL;int before=mode_calls;
++        assert(pw_pad_ps5_open(&other,&without,map,1)==PW_OK&&other.opened&&other.vibration_mode_rc==INT_MIN&&
++               mode_calls==before);
++        pw_pad_ps5_close(&other);
++        /* A second player's controller too. */
++        assert(pw_pad_ps5_open_user(&other,&ops,map,1,42)==PW_OK&&mode_calls==before+1&&other.vibration_mode_rc==0);
++        pw_pad_ps5_close(&other);
++    }
+     return 0;
+ }
+diff --git a/tests/test_pw_players_ps5.c b/tests/test_pw_players_ps5.c
+index adc9143..711d46f 100644
+--- a/tests/test_pw_players_ps5.c
++++ b/tests/test_pw_players_ps5.c
+@@ -34,7 +34,7 @@ static int login_users(int32_t users[]){memcpy(users,signed_in,sizeof(signed_in)
+ static void log_line(const char *line){strncpy(last_line,line,sizeof(last_line)-1);lines++;}
+ 
+ static const PwPadPs5Ops ops={user_initialize,foreground,terminate,pad_init,pad_open,pad_read,pad_close,
+-                              set_vibration,NULL,login_users};
++                              set_vibration,NULL,login_users,NULL};
+ static const PwPadKeyMap map[]={{0x400,'Z',0,0,"left-flipper"}};
+ 
+ int main(void)
+-- 
+2.43.0
+

@@ -245,7 +245,11 @@ int pc5_profile_text_at(const char *id, const Pc5Info *info, const char *argumen
         overrides = "d3d8,d3d9,d3d10core,d3d11,dxgi,d3d12,d3d12core=b";
         graphics = chosen == PC5_GRAPHICS_WINE && info->api != PC5_API_D3D12 ? "opengl" : "dxvk";
     }
-    if (chosen == PC5_GRAPHICS_WINE_VULKAN) wine_d3d = "\n[debug]\nenv = WINE_D3D_CONFIG=renderer=vulkan\n";
+    /* Without OpenGL (graphics = dxvk), Wine's own Direct3D draws with Vulkan too: a DirectDraw
+     * part of a DXVK game, or a hardware check asking Direct3D 9 or DirectDraw for the video
+     * memory, otherwise finds no graphics at all ("Failed to get a GL context"). */
+    if (chosen == PC5_GRAPHICS_WINE_VULKAN || !strcmp(graphics, "dxvk"))
+        wine_d3d = "\n[debug]\nenv = WINE_D3D_CONFIG=renderer=vulkan\n";
 
     windows_path(info->folder, info->exe, 1, exe, sizeof(exe));
     if (working_directory) pc5_copy(cwd, sizeof(cwd), working_directory);

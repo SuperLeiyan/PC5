@@ -337,3 +337,15 @@ controller's speaker.
 | 160 | △ on a Direct3D 11 game › Graphics › Graphics API | a window: Auto, WineD3D, WineD3D on Vulkan, each with its whole description, the one in use marked "In use"; ✕ takes the one chosen, ○ leaves it | `PC5 screen=graphics-api` |
 | 161 | Walk every row of every Settings page and a game's menu pages | no description cut with "…", none under the ✕ / ○ hints | |
 | 162 | Settings › System › Check now, with a newer PC5 out | its rows fit above the hints | |
+
+## Rumble, older games' Direct3D, folder listings (1.9.4)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 163 | Settings › In games › Vibration 100 %; a game with rumble in Xbox controller mode (a racing game, a shooter's recoil) | the controller's motors vibrate, not only the triggers | `PW_WINE64 rumble left=… right=… status=ok rc=0 mode_rc=0` |
+| 164 | The same in DualSense mode, and a second player's controller | their motors vibrate | `PW_WINE64 player 2 rumble … mode_rc=0` |
+| 165 | Vibration Off in PC5's Settings | no motor rumble | |
+| 166 | A DirectDraw game PC5 draws through DXVK (Fallout 2 with its high-resolution patch) | its intro and title screen look right | no `Failed to get a GL context` |
+| 167 | Splinter Cell: Conviction | its system check no longer lists "256 MB of video memory is required" or "Operating System not supported" ("No audio device detected" may stay) | `PC5 prefix Windows versions added` the first time |
+| 168 | Heroes of Might and Magic: Olden Era: Start Game › a mode; Load Game | the mode starts; Load Game lists saves | no `can't list directory` line; Player.log has no `IOException` for `Story_maps` |
+| 169 | Any DXVK game that ran on 1.9.3 | runs as before | `debug_env=WINE_D3D_CONFIG` in its profile line |

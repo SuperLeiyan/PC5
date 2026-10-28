@@ -84,8 +84,10 @@ if [[ -f $wine/dlls/ntdll/unix/signal_x86_64.c ]]; then
     cp "$wine/dlls/ntdll/unix/signal_x86_64.c" "$wine/dlls/ntdll/unix/unix_private.h" "$out/wine-fs/dlls/ntdll/unix/"
     for patch in "$PW"/wine/patches/*.patch; do
         grep -q '^+++ b/dlls/ntdll/unix/\(signal_x86_64\.c\|unix_private\.h\)' "$patch" || continue
-        git -C "$out/wine-fs" apply --include=dlls/ntdll/unix/signal_x86_64.c --include=dlls/ntdll/unix/unix_private.h \
-            "$patch"
+        # Not a repository's: inside one (a build folder in the PC5 repo), git apply would skip
+        # every file outside the folder's path in it, quietly.
+        GIT_CEILING_DIRECTORIES=$out git -C "$out/wine-fs" apply --include=dlls/ntdll/unix/signal_x86_64.c \
+            --include=dlls/ntdll/unix/unix_private.h "$patch"
     done
     awk '/^static BOOL pw_has_modrm/{p=1} /^static BOOL pw_repair_guest_fs/{p=0} p' \
         "$out/wine-fs/dlls/ntdll/unix/signal_x86_64.c" > "$out/wine-fs/fs_funcs.c"
@@ -115,6 +117,14 @@ if [[ ${1:-} == --shots ]]; then
     python3 -c "import sys, pathlib; from PIL import Image
 for p in sorted(pathlib.Path(sys.argv[1]).glob('*.ppm')): Image.open(p).save(p.with_suffix('.png')); p.unlink()" "$out/shots"
 fi
+
+# prospero-win's own host tests of the controllers PC5's patches change (patch 0050: the
+# compatible vibration mode set as each one opens).
+for t in test_pw_pad_ps5 test_pw_players_ps5; do
+    make -s -C "$PW" "build/host/$t" >/dev/null
+    "$PW/build/host/$t"
+done
+echo "controller tests passed"
 
 # The patched prospero-win still passes its own checks on the files the patch changes.
 (cd "$PW" && python3 tests/test_title_identity.py && python3 tests/test_native_contract.py &&

@@ -733,6 +733,24 @@ static void test_sources(void)
               !strcmp(folder.exes[0].path, "ICC2007.exe") && !strcmp(folder.exes[1].path, "HardwareSetup.exe"),
               "the game, then its settings tool: %d %s %s", folder.exe_count, folder.exe_count ? folder.exes[0].path : "",
               folder.exe_count > 1 ? folder.exes[1].path : "");
+        /* A settings tool named like the game and bigger than its small program (Far Cry's
+         * Bin32\FarCryConfigurator.exe beside Bin32\FarCry.exe): the game first. */
+        path(file, sizeof(file), "%s/stubs/Far Cry/Bin32/FarCry.exe", work);
+        copy_file(from, file);
+        path(file, sizeof(file), "%s/stubs/Far Cry/Bin32/FarCryConfigurator.exe", work);
+        copy_file(from, file);
+        {
+            FILE *grow = fopen(file, "ab");
+            for (int i = 0; grow && i < 3 * 1024; i++) {
+                static const char kilobyte[1024];
+                fwrite(kilobyte, 1, sizeof(kilobyte), grow);
+            }
+            if (grow) fclose(grow);
+        }
+        path(dir, sizeof(dir), "%s/stubs/Far Cry", work);
+        CHECK(!pc5_folder_inspect(dir, "Far Cry", &folder) && folder.exe_count == 2 &&
+              !strcmp(folder.exes[0].path, "Bin32/FarCry.exe") && !strcmp(folder.exes[1].path, "Bin32/FarCryConfigurator.exe"),
+              "the game before its settings tool: %s", folder.exe_count ? folder.exes[0].path : "");
     }
     /* A game that starts from a batch file: read as cmd.exe would, its program found whatever
      * the case of its name, offered first when it is the folder's one way to start. */
@@ -878,6 +896,14 @@ static int count_entries(const char *dir, const char *prefix)
     while ((e = readdir(d))) n += !strncmp(e->d_name, prefix, strlen(prefix));
     closedir(d);
     return n;
+}
+
+/* A DXVK game's profile sets Wine's own Direct3D (its DirectDraw, a hardware check) on Vulkan, as
+ * there is no OpenGL for it: [debug] env WINE_D3D_CONFIG=renderer=vulkan, and nothing else. */
+static int wine_d3d_vulkan(const PwGameProfile *profile)
+{
+    return profile->debug_env_count == 1 && !strcmp(profile->debug_env[0].name, "WINE_D3D_CONFIG") &&
+           !strcmp(profile->debug_env[0].value, "renderer=vulkan");
 }
 
 static void test_install(void)
@@ -1215,13 +1241,13 @@ static void test_install(void)
         profile = pw_wine_library_find(pw, "orbital-nine");
         CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_DXVK &&
               strstr(profile->app.dll_overrides, "d3d8,d3d9,d3d10core,d3d11,dxgi,d3d12,d3d12core=b") &&
-              !profile->debug_env_count, "Wine's VKD3D: Wine's DLLs: %s", profile ? profile->app.dll_overrides : "-");
+              wine_d3d_vulkan(profile), "Wine's VKD3D: Wine's DLLs: %s", profile ? profile->app.dll_overrides : "-");
         k.graphics = PC5_GRAPHICS_WINE_VULKAN;
         pc5_controls_save(root, "orbital-nine", &k);
         CHECK(!pc5_profile_refresh(root, "orbital-nine", why, sizeof(why)), "refreshed: %s", why);
         pw_wine_library_load(pw, root);
         profile = pw_wine_library_find(pw, "orbital-nine");
-        CHECK(profile && strstr(profile->app.dll_overrides, "d3d12,d3d12core,dxgi=n") && !profile->debug_env_count,
+        CHECK(profile && strstr(profile->app.dll_overrides, "d3d12,d3d12core,dxgi=n") && wine_d3d_vulkan(profile),
               "not a Direct3D 12 choice: Auto (VKD3D-Proton)");
         k.graphics = PC5_GRAPHICS_AUTO;
         pc5_controls_save(root, "orbital-nine", &k);
@@ -1257,7 +1283,8 @@ static void test_install(void)
         pw_wine_library_load(pw, root);
         profile = pw_wine_library_find(pw, "neondrift");
         CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_DXVK &&
-              strstr(profile->app.dll_overrides, "dxgi=n") && !profile->debug_env_count, "Auto: DXVK again");
+              strstr(profile->app.dll_overrides, "dxgi=n") && wine_d3d_vulkan(profile),
+              "Auto: DXVK again, Wine's own Direct3D (DirectDraw, a hardware check) on Vulkan");
         /* An OpenGL game has no choice: what is saved for it is left out. */
         pc5_controls_load(root, "starfall", &k);
         k.graphics = PC5_GRAPHICS_WINE_VULKAN;
@@ -3793,6 +3820,22 @@ static void test_dotnet(void)
         pc5_buf_free(&text);
     }
     CHECK(pc5_prefix_fonts(root, "missing", app) == -1, "no prefix: nothing done");
+
+    /* Windows versions: Splinter Cell: Conviction's program told it runs on Windows 7, once. */
+    CHECK(pc5_prefix_versions(root, "game") == 1, "an older game's prefix gets the Windows versions");
+    CHECK(pc5_prefix_versions(root, "game") == 0, "only once");
+    path(file, sizeof(file), "%s/prefixes/game/user.reg", root);
+    {
+        int times = 0;
+        if (!pc5_read_file(file, &text, 8192) && !pc5_buf_terminate(&text))
+            for (const char *at = (char *)text.data; (at = strstr(at, "AppDefaults\\\\Conviction_game.exe]")); at++) times++;
+        CHECK(times == 1 && strstr((char *)text.data,
+                                   "\n[Software\\\\Wine\\\\AppDefaults\\\\Conviction_game.exe]\n\"Version\"=\"win7\"\n") &&
+              strstr((char *)text.data, "\"MS Gothic\"=\"Droid Sans Fallback\"\n"), "Windows 7 for it, once, after what it had: %d",
+              times);
+        pc5_buf_free(&text);
+    }
+    CHECK(pc5_prefix_versions(root, "missing") == 0, "no Windows yet: nothing done, done at its next start");
 
     /* The runtime: copied once, for a .NET program only. */
     path(file, sizeof(file), "%s/pc5/mono.list", app);

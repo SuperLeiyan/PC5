@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 18:30:00 +0000
+Subject: [PATCH 51/51] PC5: a directory listed by its NT name when Wine's server
+ keeps no Unix name for it (Wine patch 0936)
+
+Wine enters a directory to list it by the Unix name the in-process
+server keeps for its handle (patch 0140). When the server keeps none,
+the listing failed with "invalid handle": Heroes of Might and Magic:
+Olden Era couldn't list StreamingAssets\maps\Story_maps, so its modes
+did nothing and Load Game emptied the screen. The directory is now
+entered by the Unix name of the NT name the server keeps for every
+file, and one still not entered is logged with the reason.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...-ps5-list-a-directory-by-its-nt-name.patch | 106 ++++++++++++++++++
+ 3 files changed, 108 insertions(+)
+ create mode 100644 wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index f0daa3c..939cc41 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -581,6 +581,7 @@ wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+ wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
+ wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+ wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
++wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 20554c8..a446dcb 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -139,6 +139,7 @@ before evaluating a candidate built from that cache.
+ | 0933 | `dinput`: each of the PS5 title's controllers a game finds as a DirectInput joystick (patch 0927) is also in the device manager's list, as Windows lists an Xbox 360 controller's HID device: volatile keys `HKLM\System\CurrentControlSet\Enum\HID\VID_045E&PID_028E&IG_0n\PS5&TITLE&n` (`Class` HIDClass, its `ClassGUID`, `DeviceDesc`, `Mfg`). A game that leaves XInput devices to XInput tells them apart by that list through WMI's `Win32_PnPEntity` (`IsXInputDevice`); Batman: Arkham Knight took the controller for another kind of joystick and never asked XInput for it |
+ | 0934 | `nsi`: without `\\.\Nsi` (a PS5 title starts no `winedevice.exe`, so no `nsiproxy.sys`) the NSI requests are answered in `nsi.dll` with the software loopback interface alone, as Windows always has it: the NDIS interface table and index-to-LUID map, and the IPv4 and IPv6 interface and unicast tables (127.0.0.1/8, ::1/128), filled as `nsiproxy.sys` fills a Unix `lo`; the other tables list no rows. `GetAdaptersAddresses`, `GetIfTable`, `GetIpAddrTable` and the like failed with error 2, and Java's `NetworkInterface` threw an Error on that: Shattered Pixel Dungeon closed when it started a new game. With the device nothing changes |
+ | 0935 | `ntdll`: when the kernel doesn't apply a 0928 repair (the same fault again within a millisecond, in the same state), the faulting instruction, a plain MOV of a byte or a dword between a register and a `%fs:` operand, is done by the handler on the 32-bit TEB and the thread goes on after it; the thread's later faulting `%fs:` MOVs are done so at once, with the repair still written into each frame. falloutwHR.exe was repaired once in `GetStdHandle`, then faulted 64 times in a row in `RtlEnterCriticalSection` (`mov %fs:0x18,%eax`) and crashed. The first miss is logged with the frame's selector and base |
++| 0936 | `ntdll`: a directory whose handle the server keeps no Unix name for (patch 0140 enters directories by that name) is entered by the Unix name of its NT name (`\??\C:\...`), as `NtCreateFile` resolves it; `NtQueryDirectoryFile` failed with `STATUS_INVALID_HANDLE` (`fchdir`'s `EBADF`), and .NET's `FileSystemEnumerator` threw "invalid handle" for a game's folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`), whose maps then never loaded. A directory still not entered is logged with which name failed and why |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch b/wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+new file mode 100644
+index 0000000..71d0da9
+--- /dev/null
++++ b/wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+@@ -0,0 +1,106 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Wed, 28 Oct 2026 18:30:00 +0000
++Subject: [PATCH] ntdll: List a directory by its NT name when the server keeps
++ no Unix name for it on PS5.
++
++Patch 0140 enters a directory a handle names by the Unix name the server
++keeps for it, as the descriptor came from the in-process server and
++fchdir() knows no path for it. When the server keeps none (its realpath
++failed, or a directory opened relative to another whose name it lacks),
++NtQueryDirectoryFile failed with STATUS_INVALID_HANDLE, fchdir()'s EBADF:
++.NET's FileSystemEnumerator threw "invalid handle" for a game's folder
++(Heroes of Might and Magic: Olden Era, StreamingAssets\maps\Story_maps),
++and the game's maps never loaded.
++
++The directory is now entered by the Unix name of the NT name the server
++keeps for every file it opens (\??\C:\...), as NtCreateFile resolves it.
++A directory still not entered is logged with which name failed and why.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -2904,6 +2904,45 @@
++ }
++ 
++ 
+++#ifdef __PROSPERO__
+++/* The Unix name of a handle's file from its NT name (\??\C:\...), which the server
+++ * keeps for every file it opens: for a handle it keeps no Unix name for. NULL when
+++ * there is none. */
+++static char *unix_name_from_nt_name( HANDLE handle )
+++{
+++    static const data_size_t size = 4096 * sizeof(WCHAR);
+++    UNICODE_STRING name, nt_name = { 0 };
+++    OBJECT_ATTRIBUTES attr;
+++    char *unix_name = NULL;
+++    unsigned int status;
+++    WCHAR *buffer;
+++
+++    if (!(buffer = malloc( size + sizeof(WCHAR) ))) return NULL;
+++    SERVER_START_REQ( get_object_name )
+++    {
+++        req->handle = wine_server_obj_handle( handle );
+++        wine_server_set_reply( req, buffer, size );
+++        status = wine_server_call( req );
+++        name.Length = name.MaximumLength = status ? 0 : wine_server_reply_size( reply );
+++    }
+++    SERVER_END_REQ;
+++    if (!status && name.Length)
+++    {
+++        buffer[name.Length / sizeof(WCHAR)] = 0;
+++        name.Buffer = buffer;
+++        InitializeObjectAttributes( &attr, &name, OBJ_CASE_INSENSITIVE, 0, NULL );
+++        if (get_nt_and_unix_names( &attr, &nt_name, &unix_name, FILE_OPEN, FALSE ))
+++        {
+++            free( unix_name );
+++            unix_name = NULL;
+++        }
+++        free( nt_name.Buffer );
+++    }
+++    free( buffer );
+++    return unix_name;
+++}
+++#endif
+++
++ /***********************************************************************
++  *           enter_directory
++  *
++@@ -2913,14 +2952,30 @@
++ {
++ #ifdef __PROSPERO__
++     char *unix_name;
++-    int ret;
+++    unsigned int status;
+++    int ret, fchdir_errno, chdir_errno;
++ 
++     if (fchdir( fd ) != -1) return 0;
+++    fchdir_errno = errno;
++     /* The descriptor came from the in-process server, so this module's
++      * working-directory emulation knows no path for it: enter the directory
++-     * by the name the server opened it with. */
++-    if (server_get_unix_name( handle, &unix_name )) return -1;
++-    ret = chdir( unix_name );
+++     * by the name the server opened it with, or, when the server keeps no
+++     * Unix name for it, by its NT name. */
+++    if ((status = server_get_unix_name( handle, &unix_name )) && !(unix_name = unix_name_from_nt_name( handle )))
+++    {
+++        ERR( "can't list directory handle %p: fd %d not entered (errno %d), no name for it (status %#x)\n",
+++             handle, fd, fchdir_errno, status );
+++        errno = fchdir_errno;
+++        return -1;
+++    }
+++    if ((ret = chdir( unix_name )) == -1)
+++    {
+++        chdir_errno = errno;
+++        ERR( "can't list directory %s: fd %d not entered (errno %d), nor its name (errno %d)\n",
+++             debugstr_a( unix_name ), fd, fchdir_errno, chdir_errno );
+++        errno = chdir_errno;
+++    }
+++    else if (status) WARN( "directory handle %p entered by its NT name, %s\n", handle, debugstr_a( unix_name ) );
++     free( unix_name );
++     return ret;
++ #else
++-- 
++2.43.0
++
+-- 
+2.43.0
+
