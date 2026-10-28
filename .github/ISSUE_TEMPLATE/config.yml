@@ -1,6 +1,6 @@
 blank_issues_enabled: false
 contact_links:
-  - name: An idea for PC5
+  - name: A feature request
     url: https://github.com/bornaradusin/PC5/discussions/new?category=ideas
     about: Something PC5 could do that it doesn't yet, in Discussions › Ideas, where others can vote for it.
   - name: A game that runs
