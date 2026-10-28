@@ -222,6 +222,11 @@ typedef struct FakeNet {
     /* the release's update zip, and how often each zip was downloaded */
     char update_zip[PC5_PATH];
     int zip_downloads, update_downloads;
+    /* SteamGridDB: the Authorization asked with last, how many requests it had, and a status
+     * it answers everything with (0: as asked) */
+    char authorization[128];
+    int griddb_requests, griddb_status;
+    int no_steam_heroes;     /* Steam has no library hero for any game */
 } FakeNet;
 
 static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int *status)
@@ -234,6 +239,10 @@ static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int
     out->len = 0;
     if (net->offline) return -1;
     *status = 200;
+    if (net->no_steam_heroes && (strstr(url, "library_hero") || strstr(url, "IStoreBrowseService"))) {
+        *status = 404;
+        return 0;
+    }
     if (!strcmp(url, PC5_RELEASES_API)) {
         if (!net->release) { *status = 404; return pc5_buf_puts(out, "{\"message\":\"Not Found\"}"); }
         return pc5_buf_puts(out, net->release);
@@ -243,9 +252,13 @@ static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int
         else return pc5_buf_puts(out, "{\"total\":0,\"items\":[]}");
     } else if (!strncmp(url, "https://catalog.gog.com/v1/catalog?query=like:", 46)) {
         path(file, sizeof(file), "%s/gog-catalog.json", fixtures);
-    } else if (!strncmp(url, "https://en.wikipedia.org/w/api.php?", 35)) {
-        if (!strstr(url, "pilicense=any") || !strstr(url, "prop=pageimages")) { *status = 400; return 0; }
-        path(file, sizeof(file), "%s/wikipedia.json", fixtures);
+    } else if (!strncmp(url, "https://www.steamgriddb.com/", 27)) {
+        *status = 401;   /* the API without its key */
+        return pc5_buf_puts(out, "{\"success\":false,\"errors\":[\"Authentication required\"]}");
+    } else if (!strncmp(url, "https://cdn2.steamgriddb.com/grid/", 34)) {
+        path(file, sizeof(file), "%s/cover-04.png", covers);
+    } else if (!strncmp(url, "https://cdn2.steamgriddb.com/hero/", 34)) {
+        path(file, sizeof(file), "%s/wide.png", covers);
     } else if (!strncmp(url, "https://www.pcgamingwiki.com/w/api.php?", 39)) {
         if (!strstr(url, "generator=search") || !strstr(url, "rvslots=main") || !strstr(url, "formatversion=2")) {
             *status = 400;
@@ -269,13 +282,57 @@ static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int
         path(file, sizeof(file), "%s/cover-01.png", covers);
     } else if (!strcmp(url, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/901001/library_hero.jpg?t=1700000000")) {
         path(file, sizeof(file), "%s/wide.png", covers);   /* the hero, by the name the asset list gives */
-    } else if (strstr(url, "upload.wikimedia.org")) {
-        path(file, sizeof(file), "%s/wide.png", covers);
     } else if (strstr(url, "images.gog-statics.com")) {
         path(file, sizeof(file), "%s/box.jpg", covers);
     } else {
         *status = 404;   /* e.g. the plain library picture of a newer app */
         return 0;
+    }
+    if (pc5_read_file(file, out, max)) { *status = 500; return 0; }
+    return 0;
+}
+
+#define TEST_GRIDDB_KEY "0123456789abcdef0123456789abcdef"
+
+/* SteamGridDB's API, which wants "Bearer <key>": its search, and the grids and heroes of the
+ * made-up game 5001 (Steam app 901001). */
+static int fake_get_authorized(void *context, const char *url, const char *authorization, Pc5Buf *out, size_t max,
+                               int *status)
+{
+    FakeNet *net = context;
+    char file[PC5_PATH] = "";
+    const char *api = "https://www.steamgriddb.com/api/v2/", *plain =
+        "&types=static&mimes=image%2Fpng%2Cimage%2Fjpeg&nsfw=false&humor=false&epilepsy=false";
+
+    if (strncmp(url, api, strlen(api))) return fake_get(context, url, out, max, status);   /* the key goes nowhere else */
+    net->requests++;
+    net->griddb_requests++;
+    pc5_copy(net->last, sizeof(net->last), url);
+    pc5_copy(net->authorization, sizeof(net->authorization), authorization);
+    out->len = 0;
+    if (net->offline) return -1;
+    url += strlen(api);
+    if (strcmp(authorization, "Bearer " TEST_GRIDDB_KEY)) {
+        *status = 401;
+        return pc5_buf_puts(out, "{\"success\":false,\"errors\":[\"Invalid API key\"]}");
+    }
+    if (net->griddb_status) {
+        *status = net->griddb_status;
+        return pc5_buf_puts(out, "not json");
+    }
+    *status = 200;
+    if (!strncmp(url, "search/autocomplete/", 20)) {
+        if (!strncmp(url + 20, "Neon", 4)) path(file, sizeof(file), "%s/griddb-search.json", fixtures);
+        else return pc5_buf_puts(out, "{\"success\":true,\"data\":[]}");
+    } else if ((!strncmp(url, "grids/steam/901001?", 19) || !strncmp(url, "grids/game/5001?", 16)) &&
+               strstr(url, "?dimensions=600x900%2C660x930&") && strstr(url, plain)) {
+        path(file, sizeof(file), "%s/griddb-grids.json", fixtures);
+    } else if ((!strncmp(url, "heroes/steam/901001?", 20) || !strncmp(url, "heroes/game/5001?", 17)) &&
+               strstr(url, "?dimensions=1920x620%2C3840x1240&") && strstr(url, plain)) {
+        path(file, sizeof(file), "%s/griddb-heroes.json", fixtures);
+    } else {
+        *status = 404;
+        return pc5_buf_puts(out, "{\"success\":false,\"errors\":[\"Game not found\"]}");
     }
     if (pc5_read_file(file, out, max)) { *status = 500; return 0; }
     return 0;
@@ -321,7 +378,7 @@ out:
 static void test_cover_search(void)
 {
     FakeNet net = { 0 };
-    Pc5Http http = { &net, fake_get, NULL };
+    Pc5Http http = { &net, fake_get, NULL, fake_get_authorized };
     Pc5CoverSearch search;
     Pc5CoverHint hint = { .folder = "NeonDrift", .product = "Neon Drift: Complete Edition", .program = "NeonDrift" };
     Pc5Image cover;
@@ -333,31 +390,114 @@ static void test_cover_search(void)
     CHECK(search.count >= 3, "choices: %d", search.count);
     CHECK(search.count && !strcmp(search.choices[0].source, "Steam") && search.choices[0].steam_appid == 901001,
           "Steam's exact game first: %s %u", search.choices[0].source, search.choices[0].steam_appid);
-    int has_wiki = 0, has_witcher = 0, has_soundtrack = 0;
+    int has_witcher = 0, has_soundtrack = 0;
     for (int i = 0; i < search.count; i++) {
-        has_wiki |= !strcmp(search.choices[i].source, "Wikipedia") && strstr(search.choices[i].title, "Neon Drift") != NULL;
         has_witcher |= strstr(search.choices[i].title, "Witcher") != NULL;
         has_soundtrack |= strstr(search.choices[i].title, "Soundtrack") != NULL;
-        CHECK(!strstr(search.choices[i].title, "motorsport"), "unrelated Wikipedia page kept");
+        CHECK(strcmp(search.choices[i].source, "SteamGridDB"), "SteamGridDB without a key");
+        CHECK(!strstr(search.choices[i].url, "wikipedia") && !strstr(search.choices[i].url, "wikimedia"),
+              "no picture from Wikipedia: %s", search.choices[i].url);
     }
-    CHECK(has_wiki, "Wikipedia's page");
+    CHECK(net.griddb_requests == 0 && search.griddb_status == 0, "SteamGridDB not asked without a key");
     CHECK(!has_witcher, "an unrelated GOG game was kept");
     CHECK(!has_soundtrack, "an unrelated Steam app was kept");
     /* The plain library picture is missing (newer app): the asset list gives the real one. */
-    CHECK(!pc5_cover_fetch(&search.choices[0], &http, &cover, NULL), "Steam cover through GetItems");
+    CHECK(!pc5_cover_fetch(&search.choices[0], &http, &cover), "Steam cover through GetItems");
     CHECK(cover.w == PC5_COVER_WIDTH && cover.h == PC5_COVER_HEIGHT, "cover size %dx%d", cover.w, cover.h);
     CHECK(strstr(net.last, "0a1b2c3d/library_600x900_2x.jpg"), "fetched the hashed name: %s", net.last);
     pc5_image_free(&cover);
 
     /* A wide picture sits whole on a blurred copy of itself. */
-    for (int i = 0; i < search.count; i++)
-        if (!strcmp(search.choices[i].source, "Wikipedia")) {
-            CHECK(!pc5_cover_fetch(&search.choices[i], &http, &cover, NULL), "Wikipedia picture");
-            /* top rows are the darkened blur, the middle the picture */
-            uint32_t top = cover.px[5 * cover.w + cover.w / 2];
-            CHECK(((top >> 16) & 255) < 200 && ((top >> 8) & 255) < 200, "blurred and darkened above");
-            pc5_image_free(&cover);
+    {
+        Pc5CoverChoice wide = { .source = "SteamGridDB", .url = "https://cdn2.steamgriddb.com/hero/82small.jpg" };
+        CHECK(!pc5_cover_fetch(&wide, &http, &cover), "a wide picture");
+        /* top rows are the darkened blur, the middle the picture */
+        uint32_t top = cover.px ? cover.px[5 * cover.w + cover.w / 2] : 0xffffffffu;
+        CHECK(((top >> 16) & 255) < 200 && ((top >> 8) & 255) < 200, "blurred and darkened above");
+        pc5_image_free(&cover);
+    }
+
+    /* SteamGridDB, with a key: by the Steam app Steam's search found (no search of its own),
+     * its covers after Steam's and before GOG's, each with a background, 1920x620 first. */
+    {
+        Pc5CoverHint keyed = hint;
+        int first = -1, gog = -1, steam = -1, griddb = 0;
+        pc5_copy(keyed.steamgriddb_key, sizeof(keyed.steamgriddb_key), TEST_GRIDDB_KEY);
+        net.griddb_requests = 0;
+        pc5_cover_search_start(&search, &keyed);
+        while (pc5_cover_search_step(&search, &http)) {}
+        for (int i = 0; i < search.count; i++) {
+            const Pc5CoverChoice *choice = &search.choices[i];
+            if (!strcmp(choice->source, "SteamGridDB")) {
+                griddb++;
+                if (first < 0) first = i;
+                CHECK(!strcmp(choice->title, search.choices[0].title) && choice->steam_appid == 901001 &&
+                      !strncmp(choice->url, "https://cdn2.steamgriddb.com/grid/", 34), "SteamGridDB's cover: %s %s",
+                      choice->title, choice->url);
+                CHECK(!strncmp(choice->background, "https://cdn2.steamgriddb.com/hero/", 34), "with a background: %s",
+                      choice->background);
+            }
+            if (!strcmp(choice->source, "GOG") && gog < 0) gog = i;
+            if (!strcmp(choice->source, "Steam") && steam < 0) steam = i;
         }
+        CHECK(griddb == 3 && net.griddb_requests == 2 && search.griddb_status == 200 &&
+              !strcmp(net.authorization, "Bearer " TEST_GRIDDB_KEY), "3 covers in 2 requests: %d, %d, %s", griddb,
+              net.griddb_requests, net.authorization);
+        CHECK(steam == 0 && first > steam && (gog < 0 || first < gog), "Steam, SteamGridDB, GOG: %d %d %d", steam, first, gog);
+        CHECK(first >= 0 && strstr(search.choices[first].url, "/71a2b3.png") &&
+              strstr(search.choices[first].background, "/82small.jpg"), "the best first, its 1920x620 background");
+        if (first >= 0) {
+            CHECK(!pc5_cover_fetch(&search.choices[first], &http, &cover), "SteamGridDB's picture");
+            CHECK(cover.w == PC5_COVER_WIDTH && cover.h == PC5_COVER_HEIGHT, "made a cover: %dx%d", cover.w, cover.h);
+            pc5_image_free(&cover);
+            Pc5Image background = { 0 };
+            CHECK(!pc5_background_fetch(search.choices[first].background, 0, &http, &background) &&
+                  background.w == 960 && background.h == 540, "and its background: %dx%d", background.w, background.h);
+            pc5_image_free(&background);
+        }
+
+        /* Steam turned off: SteamGridDB's own search, its best match (not the sequel). */
+        keyed.off = PC5_PICTURES_STEAM;
+        net.griddb_requests = 0;
+        pc5_cover_search_start(&search, &keyed);
+        while (pc5_cover_search_step(&search, &http)) {}
+        griddb = 0;
+        for (int i = 0; i < search.count; i++) griddb += !strcmp(search.choices[i].source, "SteamGridDB");
+        CHECK(griddb == 3 && net.griddb_requests == 3 && search.griddb_game == 5001 && !search.griddb_app &&
+              !strcmp(search.griddb_title, "Neon Drift"), "by name: %d covers, %d requests, game %u", griddb,
+              net.griddb_requests, (unsigned)search.griddb_game);
+
+        /* A key refused, too many requests, an answer that isn't JSON, no network: the other
+         * sources' covers all the same. */
+        static const int answers[] = { 401, 429, 200, 500 };
+        for (int a = 0; a < 4; a++) {
+            Pc5CoverHint other = hint;
+            pc5_copy(other.steamgriddb_key, sizeof(other.steamgriddb_key), a ? TEST_GRIDDB_KEY : "not-the-key");
+            net.griddb_status = a ? answers[a] : 0;
+            pc5_cover_search_start(&search, &other);
+            while (pc5_cover_search_step(&search, &http)) {}
+            griddb = 0;
+            for (int i = 0; i < search.count; i++) griddb += !strcmp(search.choices[i].source, "SteamGridDB");
+            CHECK(!griddb && search.count >= 3 && !strcmp(search.choices[0].source, "Steam") &&
+                  search.griddb_status == answers[a], "SteamGridDB answering %d: %d choices, status %d", answers[a],
+                  search.count, search.griddb_status);
+            net.griddb_status = 0;
+        }
+        /* Off in the settings: not asked, key or not. */
+        keyed.off = PC5_PICTURES_STEAMGRIDDB;
+        net.griddb_requests = 0;
+        pc5_cover_search_start(&search, &keyed);
+        while (pc5_cover_search_step(&search, &http)) {}
+        CHECK(!net.griddb_requests, "SteamGridDB off: not asked");
+        /* No way to send a key (a platform without it): left out. */
+        Pc5Http plain = { &net, fake_get, NULL, NULL };
+        keyed.off = 0;
+        pc5_cover_search_start(&search, &keyed);
+        while (pc5_cover_search_step(&search, &plain)) {}
+        griddb = 0;
+        for (int i = 0; i < search.count; i++) griddb += !strcmp(search.choices[i].source, "SteamGridDB");
+        CHECK(!griddb && search.count >= 3, "no authorized GET: SteamGridDB left out, the others there");
+    }
 
     /* PCGamingWiki: the page's infobox cover, its Steam app's hero the background; Wikidata:
      * its items' Steam apps, an app Steam's search found already once. */
@@ -377,11 +517,11 @@ static void test_cover_search(void)
               !strcmp(search.choices[wikidata].title, "Neon Drift: Overdrive"), "Wikidata's other app");
         CHECK(steam == 1, "one choice for one Steam picture: %d", steam);
         if (pcgw >= 0) {
-            CHECK(!pc5_cover_fetch(&search.choices[pcgw], &http, &cover, NULL), "PCGamingWiki's picture");
+            CHECK(!pc5_cover_fetch(&search.choices[pcgw], &http, &cover), "PCGamingWiki's picture");
             pc5_image_free(&cover);
         }
         if (wikidata >= 0) {
-            CHECK(!pc5_cover_fetch(&search.choices[wikidata], &http, &cover, NULL), "Wikidata's app's picture");
+            CHECK(!pc5_cover_fetch(&search.choices[wikidata], &http, &cover), "Wikidata's app's picture");
             pc5_image_free(&cover);
         }
     }
@@ -389,7 +529,7 @@ static void test_cover_search(void)
     /* Sources turned off aren't asked. */
     {
         Pc5CoverHint some = hint;
-        some.off = PC5_PICTURES_STEAM | PC5_PICTURES_PCGAMINGWIKI | PC5_PICTURES_WIKIPEDIA | PC5_PICTURES_WIKIDATA;
+        some.off = PC5_PICTURES_STEAM | PC5_PICTURES_PCGAMINGWIKI | PC5_PICTURES_WIKIDATA;   /* SteamGridDB: no key */
         net.requests = 0;
         pc5_cover_search_start(&search, &some);
         while (pc5_cover_search_step(&search, &http)) {}
@@ -403,7 +543,8 @@ static void test_cover_search(void)
         pc5_cover_search_start(&search, &some);
         while (pc5_cover_search_step(&search, &http)) {}
         CHECK(net.requests == 0 && search.count == 0 && search.answered, "all off: nothing asked, nothing found, done");
-        CHECK(!strcmp(pc5_picture_source_name(2), "PCGamingWiki") && !strcmp(pc5_picture_source_key(4), "wikidata") &&
+        CHECK(!strcmp(pc5_picture_source_name(1), "SteamGridDB") && !strcmp(pc5_picture_source_key(1), "steamgriddb") &&
+              !strcmp(pc5_picture_source_name(3), "PCGamingWiki") && !strcmp(pc5_picture_source_key(4), "wikidata") &&
               !pc5_picture_source_name(5)[0], "the sources' names");
     }
 
@@ -703,7 +844,6 @@ static Pc5InstallPhase install_folder(const char *name, int cancel_after_copy_st
     /* Step 1 counts the template's files and bytes; steps 2 and 3 the game's. */
     if (install_saves) CHECK(!pc5_install_use_saves(&install, install_saves), "saves used: %s", install.error);
     else CHECK(install.files_total == 7 && install.bytes_total > 0, "step 1's progress: %u files", (unsigned)install.files_total);
-    pc5_buf_puts(&install.original, "\xff\xd8\xff picture");
     pc5_copy(install.background, sizeof(install.background), "https://images.gog-statics.com/background.jpg");
     install.background_appid = 901001;
     if (id) pc5_copy(id, id_size, install.id);
@@ -782,7 +922,7 @@ static void test_install(void)
         path(file, sizeof(file), "%s/neondrift/pc5/background.txt", prefixes);
         CHECK(file_is(file, "https://images.gog-statics.com/background.jpg\n901001\n"), "the cover's background kept");
         path(file, sizeof(file), "%s/neondrift/pc5/cover-original.jpg", prefixes);
-        CHECK(pc5_is_file(file), "the downloaded picture kept");
+        CHECK(!pc5_exists(file), "only the cover kept, not the picture downloaded");
     }
     /* prospero-win reads the profile PC5 wrote, with the options from launch.txt. */
     pw_wine_library_load(pw, root);
@@ -1453,6 +1593,17 @@ static void test_keep_saves(void)
     write_text(file, "the game's settings");
     path(file, sizeof(file), "%s/%s/pc5/controls.txt", prefixes, id);
     write_text(file, "mode = keyboard\n");
+    /* Its pictures (the install saved its cover and background.txt), and the player's own cover elsewhere. */
+    path(file, sizeof(file), "%s/%s/pc5/background.bin", prefixes, id);
+    write_text(file, "background");
+    path(file, sizeof(file), "%s/%s/pc5/background-tries.txt", prefixes, id);
+    write_text(file, "1\n");
+    path(file, sizeof(file), "%s/covers/NeonDrift.png", root);
+    write_text(file, "the player's picture");
+    path(file, sizeof(file), "%s/%s/pc5/cover.bin", prefixes, id);
+    CHECK(pc5_is_file(file), "a cover to delete");
+    path(file, sizeof(file), "%s/%s/pc5/background.txt", prefixes, id);
+    CHECK(pc5_is_file(file), "and where its background is");
     /* A save the game keeps beside its program, and an unfinished update of it. */
     path(file, sizeof(file), "%s/%s/drive_c/Games/NeonDrift/save/slot2.sav", prefixes, id);
     write_text(file, "in its folder");
@@ -1474,6 +1625,18 @@ static void test_keep_saves(void)
     CHECK(file_is(file, "in its folder"), "the save in the game's folder kept");
     path(file, sizeof(file), "%s/saves/%s/pc5-game/NeonDrift.exe", root, id);
     CHECK(!pc5_exists(file), "the game's own files not");
+    {
+        static const char *const pictures[] = { "cover.bin", "background.bin", "background.txt", "background-tries.txt" };
+        int left = 0;
+        for (int p = 0; p < 4; p++) {
+            path(file, sizeof(file), "%s/saves/%s/pc5/%s", root, id, pictures[p]);
+            left += pc5_exists(file);
+        }
+        path(file, sizeof(file), "%s/saves/%s/pc5/controls.txt", root, id);
+        CHECK(!left && pc5_is_file(file), "its pictures deleted with the game, its options kept: %d left", left);
+        path(file, sizeof(file), "%s/covers/NeonDrift.png", root);
+        CHECK(file_is(file, "the player's picture"), "the player's own picture stays");
+    }
     CHECK(count_entries(prefixes, ".updating-") == 0 && count_entries(prefixes, ".removing-update-") == 1,
           "the unfinished update goes with the game");
     while (pc5_remove_step(&remove, 1)) {}
@@ -1580,6 +1743,17 @@ static int fake_keyboard_open_text(void *context, const char *title, const char 
 }
 
 static int fake_keyboard_state_text(void *context) { (void)context; return 2; }
+
+/* The screens' log: how often it named SteamGridDB's key as refused, and how often it showed
+ * the key itself (never). */
+#define TEST_WRONG_KEY "not-the-key-but-secret"
+static int key_refused_lines, key_shown_lines;
+static void fake_log(void *context, const char *line)
+{
+    (void)context;
+    key_refused_lines += strstr(line, "SteamGridDB refused the key") != NULL;
+    key_shown_lines += strstr(line, TEST_WRONG_KEY) != NULL || strstr(line, TEST_GRIDDB_KEY) != NULL;
+}
 
 static int fake_keyboard_close_text(void *context, char *out, size_t size)
 {
@@ -1738,6 +1912,36 @@ static void test_controls(void)
 
 /* ---- settings, updates, logs, covers ---------------------------------------------------------- */
 
+/* api_keys.txt: made when there is none, read as NAME=value lines, never a key PC5 can't send. */
+static void test_api_keys(void)
+{
+    char dir[PC5_PATH], file[PC5_PATH], key[96];
+    struct stat st;
+
+    path(dir, sizeof(dir), "%s/api-keys", work);
+    pc5_mkdirs(dir);
+    path(file, sizeof(file), "%s/api_keys.txt", dir);
+    unlink(file);
+    CHECK(pc5_api_key(dir, PC5_STEAMGRIDDB_KEY, key, sizeof(key)) && !key[0], "no file: no key");
+    Pc5Buf text = { 0 };
+    CHECK(!pc5_read_file(file, &text, 4096) && !pc5_buf_terminate(&text) &&
+          strstr((char *)text.data, "\nSTEAMGRIDDB_API_KEY=\n") && strstr((char *)text.data, "# "), "made, explained, empty");
+    pc5_buf_free(&text);
+    CHECK(!stat(file, &st) && (st.st_mode & 077) == 0, "readable by its owner only: %o", (unsigned)(st.st_mode & 0777));
+    CHECK(pc5_api_key(dir, PC5_STEAMGRIDDB_KEY, key, sizeof(key)) && !key[0], "made empty: still no key");
+    write_text(file, "# STEAMGRIDDB_API_KEY=commented\n\n  OTHER_API_KEY = other\r\n"
+                     "  STEAMGRIDDB_API_KEY =   abc123def  \r\nSTEAMGRIDDB_API_KEY_OLD=old\n");
+    CHECK(!pc5_api_key(dir, PC5_STEAMGRIDDB_KEY, key, sizeof(key)) && !strcmp(key, "abc123def"), "spaces trimmed: '%s'", key);
+    CHECK(!pc5_api_key(dir, "OTHER_API_KEY", key, sizeof(key)) && !strcmp(key, "other"), "another key: '%s'", key);
+    write_text(file, "STEAMGRIDDB_API_KEY=two words\nSTEAMGRIDDB_API_KEY\n");
+    CHECK(pc5_api_key(dir, PC5_STEAMGRIDDB_KEY, key, sizeof(key)) && !key[0], "a key with a space is no key");
+    write_text(file, "STEAMGRIDDB_API_KEY=\nSTEAMGRIDDB_API_KEY=later\n");
+    CHECK(!pc5_api_key(dir, PC5_STEAMGRIDDB_KEY, key, sizeof(key)) && !strcmp(key, "later"), "the first that is one: %s", key);
+    char small[4];
+    write_text(file, "STEAMGRIDDB_API_KEY=toolong\n");
+    CHECK(pc5_api_key(dir, PC5_STEAMGRIDDB_KEY, small, sizeof(small)) && !small[0], "too long for out: none");
+}
+
 static void test_settings(void)
 {
     char dir[PC5_PATH], file[PC5_PATH];
@@ -1775,8 +1979,9 @@ static void test_settings(void)
     CHECK(!pc5_settings_load(dir, &back) && !back.fps && back.fps_corner == PC5_CORNER_TOP_RIGHT && !back.vibration &&
           back.light_bar == PC5_LIGHT_CONSOLE && back.trigger_rumble == 100 && back.trigger_resistance == 50 &&
           back.triggers == PC5_TRIGGERS_BOTH, "what it doesn't know gives the default");
-    write_text(file, "pictures_steam = maybe\npictures_wikipedia = off\npictures_bing = off\n");
-    CHECK(!pc5_settings_load(dir, &back) && back.pictures_off == PC5_PICTURES_WIKIPEDIA, "picture sources: %#x",
+    /* Wikipedia, a source until 1.9.2, is a line PC5 doesn't know now. */
+    write_text(file, "pictures_steam = maybe\npictures_steamgriddb = off\npictures_wikipedia = off\npictures_bing = off\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.pictures_off == PC5_PICTURES_STEAMGRIDDB, "picture sources: %#x",
           (unsigned)back.pictures_off);
     write_text(file, "startup_volume = 70\n");
     CHECK(!pc5_settings_load(dir, &back) && back.startup_volume == 70, "startup volume read: %d", back.startup_volume);
@@ -1815,7 +2020,7 @@ static void test_settings(void)
 static void test_update(void)
 {
     FakeNet net = { 0 };
-    Pc5Http http = { &net, fake_get, NULL };
+    Pc5Http http = { &net, fake_get, NULL, fake_get_authorized };
     Pc5Update update;
     Pc5UpdateMemory memory, back;
     char dir[PC5_PATH];
@@ -1982,7 +2187,7 @@ static void test_upgrade(void)
     path(user, sizeof(user), "%s/user", base);
     path(zip, sizeof(zip), "%s/release/PPSA11018.zip", base);
     const char *drives[] = { data, usb0, NULL };
-    Pc5UpgradeConfig config = { { &net, fake_get, fake_download }, app, NULL, drives, user, NULL, NULL };
+    Pc5UpgradeConfig config = { { &net, fake_get, fake_download, fake_get_authorized }, app, NULL, drives, user, NULL, NULL };
 
     /* The running PC5, its installed folder, and two that aren't it. */
     path(file, sizeof(file), "%s/eboot.bin", app);
@@ -2444,7 +2649,7 @@ static void test_upgrade_delta(void)
     path(small, sizeof(small), "%s/release/PPSA11018-update.zip", base);
     path(bad, sizeof(bad), "%s/release/bad-update.zip", base);
     const char *drives[] = { data, usb0, NULL };
-    Pc5UpgradeConfig config = { { &net, fake_get, fake_download }, app, NULL, drives, NULL, delta_note, NULL };
+    Pc5UpgradeConfig config = { { &net, fake_get, fake_download, fake_get_authorized }, app, NULL, drives, NULL, delta_note, NULL };
 
     /* The running PC5 is the old release, with its list. */
     for (size_t i = 0; i < sizeof(old_release) / sizeof(old_release[0]); i++) {
@@ -2705,7 +2910,7 @@ static void test_backgrounds(void)
 {
     char base[PC5_PATH], file[PC5_PATH], own[PC5_PATH];
     FakeNet net = { 0 };
-    Pc5Http http = { &net, fake_get, NULL };
+    Pc5Http http = { &net, fake_get, NULL, fake_get_authorized };
     Pc5Image picture = { 0 }, background = { 0 };
     static Pc5Backgrounds b;
     uint32_t tint;
@@ -2840,6 +3045,36 @@ static void test_backgrounds(void)
         path(file, sizeof(file), "%s/prefixes/gone", base);
         CHECK(!pc5_exists(file) && atomic_load(&b.generation) == 0, "no folder made for a game that is gone");
     }
+    /* Steam has the game's cover but no background: SteamGridDB's, with a key; without one, none
+     * yet (looked for again, as Steam's could be fetched another time). */
+    for (int keyed = 1; keyed >= 0; keyed--) {
+        Pc5BackgroundGame *one = pc5_alloc(sizeof(*one));
+        memset(one, 0, sizeof(*one));
+        pc5_copy(one->title, sizeof(one->title), "Neon Drift");
+        pc5_copy(one->hint.folder, sizeof(one->hint.folder), "Neon Drift");
+        if (keyed) pc5_copy(one->hint.steamgriddb_key, sizeof(one->hint.steamgriddb_key), TEST_GRIDDB_KEY);
+        snprintf(one->prefix, sizeof(one->prefix), "griddb%d", keyed);
+        snprintf(one->id, sizeof(one->id), "griddb%d", keyed);
+        path(file, sizeof(file), "%s/prefixes/griddb%d/system.reg", base, keyed);
+        write_text(file, "registry");
+        memset(&b, 0, sizeof(b));
+        pc5_copy(b.root, sizeof(b.root), base);
+        net.no_steam_heroes = 1;
+        b.http = http;
+        b.games = one;
+        b.count = 1;
+        pc5_backgrounds_run(&b);
+        net.no_steam_heroes = 0;
+        pc5_free(one);
+        path(file, sizeof(file), "%s/prefixes/griddb%d/pc5/background.bin", base, keyed);
+        if (keyed) {
+            CHECK(!pc5_cover_load(file, &background, &tint) && background.w == 960 && strstr(net.last, "cdn2.steamgriddb.com/hero/"),
+                  "SteamGridDB's background for a game Steam has none for: %s", net.last);
+            pc5_image_free(&background);
+        } else {
+            CHECK(!pc5_exists(file), "none without a key");
+        }
+    }
 }
 
 /* The library with the chosen game's background behind it. */
@@ -2847,7 +3082,7 @@ static void test_background_screen(const char *fonts)
 {
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
-    Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0,
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0,
                              NULL, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
@@ -3838,7 +4073,6 @@ static void test_own_covers(void)
     Pc5CoverHint hint = { 0 };
     Pc5CoverSearch *search = pc5_alloc(sizeof(*search));
     Pc5Image cover = { 0 };
-    Pc5Buf original = { 0 };
 
     path(dir, sizeof(dir), "%s/own/Hollow Knight", work);
     path(file, sizeof(file), "%s/COVER.PNG", dir);
@@ -3856,12 +4090,11 @@ static void test_own_covers(void)
     hint.picture_only = 1;
     pc5_cover_search_start(search, &hint);
     CHECK(!pc5_cover_search_step(search, NULL) && search->count == 1, "nothing asked online when it's all there is");
-    CHECK(!pc5_cover_fetch(&search->choices[0], NULL, &cover, &original) && cover.w == PC5_COVER_WIDTH &&
-          original.len > 8 && original.data[1] == 'P', "read from its file and made a cover");
+    CHECK(!pc5_cover_fetch(&search->choices[0], NULL, &cover) && cover.w == PC5_COVER_WIDTH,
+          "read from its file and made a cover");
     if (cover.px) CHECK(cover.px[cover.w * cover.h / 2 + cover.w / 2] == 0xff33aa55u, "its colour: %08x",
                         cover.px[cover.w * cover.h / 2 + cover.w / 2]);
     pc5_image_free(&cover);
-    pc5_buf_free(&original);
     /* A folder of covers, by name, without regard to case or picture kind. */
     path(dir, sizeof(dir), "%s/own/covers", work);
     path(file, sizeof(file), "%s/hollow knight.JPEG", dir);
@@ -4299,7 +4532,7 @@ static void test_tile_start(const char *fonts)
 {
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
-    Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
                              NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
@@ -4335,6 +4568,13 @@ static void test_tile_start(const char *fonts)
         uint32_t tint = 0;
         char saved[PC5_PATH];
         struct timeval later[2];
+        /* What an earlier PC5 kept (the picture as downloaded) and a save cut short: gone as PC5 opens. */
+        char leftover[3][PC5_PATH];
+        static const char *const leftovers[] = { "cover-original.jpg", "cover.bin.part", "background.bin.part" };
+        for (int i = 0; i < 3; i++) {
+            path(leftover[i], sizeof(leftover[i]), "%s/prefixes/%s/pc5/%s", root, library.games[0].prefix, leftovers[i]);
+            write_text(leftover[i], "left over");
+        }
         path(file, sizeof(file), "%s/covers/%s.png", root, library.games[0].title);
         write_png(file, 400, 600, 0xff8844ccu);
         /* newer than the cover it replaces */
@@ -4345,12 +4585,14 @@ static void test_tile_start(const char *fonts)
         Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         until_screen(ui, "library", &canvas);
+        CHECK(!pc5_exists(leftover[0]) && !pc5_exists(leftover[1]) && !pc5_exists(leftover[2]),
+              "what nothing uses deleted as PC5 opens");
         path(saved, sizeof(saved), "%s/prefixes/%s/pc5/cover.bin", root, library.games[0].prefix);
         CHECK(!pc5_cover_load(saved, &cover, &tint) && cover.px &&
               cover.px[cover.w * cover.h / 2 + cover.w / 2] == 0xff8844ccu, "the player's picture is its cover");
         pc5_image_free(&cover);
         path(saved, sizeof(saved), "%s/prefixes/%s/pc5/cover-original.png", root, library.games[0].prefix);
-        CHECK(pc5_is_file(saved), "kept as it was");
+        CHECK(!pc5_exists(saved), "not kept as it was: only the cover is");
         pc5_ui_destroy(ui);
         /* once: the next start leaves it */
         ui = pc5_ui_create(&config, &platform);
@@ -4375,7 +4617,7 @@ static int same_bytes(const char *a, const char *b)
  * name typed on the keyboard, the card, and none. The game menu is on Appearance's last row. */
 static void test_picture_screens(Pc5Ui *ui, Pc5Canvas *canvas, FakeConsole *console)
 {
-    char cover[PC5_PATH], background[PC5_PATH], note[PC5_PATH], jpg[PC5_PATH], png[PC5_PATH], expected[PC5_PATH];
+    char cover[PC5_PATH], background[PC5_PATH], note[PC5_PATH], jpg[PC5_PATH], png[PC5_PATH];
     char kept[PC5_PATH];
     Pc5Image image = { 0 };
 
@@ -4386,6 +4628,14 @@ static void test_picture_screens(Pc5Ui *ui, Pc5Canvas *canvas, FakeConsole *cons
     path(png, sizeof(png), "%s/prefixes/orbital-nine/pc5/cover-original.png", root);
     path(kept, sizeof(kept), "%s/cover-before.bin", work);
     copy_file(cover, kept);
+
+    /* api_keys.txt, made as PC5 opened; a key in it that SteamGridDB refuses: the other
+     * sources' pictures as before, the refusal logged once, the key never. */
+    char keys[PC5_PATH];
+    path(keys, sizeof(keys), "%s/api_keys.txt", root);
+    CHECK(pc5_is_file(keys), "api_keys.txt made as PC5 opened");
+    write_text(keys, "STEAMGRIDDB_API_KEY = " TEST_WRONG_KEY "\n");
+    key_refused_lines = key_shown_lines = 0;
 
     /* Cover: the one it has first; Back leaves it. */
     press(ui, PC5_KEY_UP, canvas);
@@ -4417,10 +4667,10 @@ static void test_picture_screens(Pc5Ui *ui, Pc5Canvas *canvas, FakeConsole *cons
     frames(ui, 0, 0, 20, canvas);
     save_shot(canvas, "cover-choose-search");
     press(ui, PC5_KEY_ACCEPT, canvas);
-    path(expected, sizeof(expected), "%s/cover-00.png", covers);
-    CHECK(!strcmp(pc5_ui_screen(ui), "game-menu") && !same_bytes(cover, kept) && same_bytes(png, expected) &&
-              !pc5_exists(jpg),
-          "used: a new cover, Steam's picture beside it: %s", pc5_ui_screen(ui));
+    CHECK(!strcmp(pc5_ui_screen(ui), "game-menu") && !same_bytes(cover, kept) && !pc5_exists(png) && !pc5_exists(jpg),
+          "used: a new cover, in place of the one it had, with no picture beside it: %s", pc5_ui_screen(ui));
+    CHECK(key_refused_lines == 1 && !key_shown_lines, "the refused key logged once (%d), never shown (%d)",
+          key_refused_lines, key_shown_lines);
     /* The card, the last one (one back from the first): no downloaded picture then. */
     press(ui, PC5_KEY_ACCEPT, canvas);
     until_screen(ui, "picture", canvas);
@@ -4464,7 +4714,7 @@ static void test_screens(const char *fonts)
 {
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
-    Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL,
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
                              fake_sound, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
     {
         /* The sounds to choose from: the app's, and one of the player's. */
@@ -4721,6 +4971,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Picture sources */
+    press(ui, PC5_KEY_DOWN, &canvas);        /* SteamGridDB: "No key" (no api_keys.txt key in the tests) */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* GOG: off */
     {
@@ -5075,7 +5326,7 @@ static void test_report(const char *fonts)
     /* The crash message after a game crashed: Triangle shows the code, Back goes back. */
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
-    Pc5Platform platform = { &console, { &net, fake_get, NULL }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
                              NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
@@ -5138,7 +5389,7 @@ static void test_upgrade_screens(const char *fonts)
 {
     FakeConsole console = { 0 };
     static FakeNet net;
-    Pc5Platform platform = { &console, { &net, fake_get, fake_download }, fake_clock, fake_play, NULL, fake_notify,
+    Pc5Platform platform = { &console, { &net, fake_get, fake_download, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify,
                              fake_time, 0, fake_restart, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     char app[PC5_PATH], drive[PC5_PATH], folder[PC5_PATH], file[PC5_PATH], zip[PC5_PATH], digest[65];
@@ -5256,6 +5507,7 @@ int main(int argc, char **argv)
     test_keep_saves();
     test_controls();
     test_settings();
+    test_api_keys();
     test_update();
     test_sound();
     test_upgrade();

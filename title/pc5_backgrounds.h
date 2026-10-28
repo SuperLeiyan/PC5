@@ -9,11 +9,12 @@
  *      newer than the background kept;
  *   2. the background of the cover chosen when the game was installed (the
  *      source's, kept as pc5/background.txt);
- *   3. a search as for covers: Steam's library hero or GOG's background of the
- *      best match.
+ *   3. a search as for covers: Steam's library hero, SteamGridDB's hero (with a key) or
+ *      GOG's background of the best match, the next of the same game when one can't be had
+ *      (a cover from Steam and a background from SteamGridDB, say).
  *
- * A game no source has a background for gets pc5/background-none.txt, once Steam or GOG
- * has answered with no background for it, or after three starts whose backgrounds couldn't
+ * A game no source has a background for gets pc5/background-none.txt, once Steam,
+ * SteamGridDB or GOG has answered with no background for it, or after three starts whose backgrounds couldn't
  * be fetched (pc5/background-tries.txt), and keeps the backdrop the library makes from its
  * cover. Only the choices
  * that are the same game as the best one are used. A game whose Windows is gone (being

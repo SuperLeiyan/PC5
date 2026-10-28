@@ -128,7 +128,6 @@ typedef struct Pc5Install {
     Pc5Info info;
     Pc5Image cover;          /* owned once begun */
     uint32_t tint;
-    Pc5Buf original;         /* the downloaded picture, kept with the game: set after begin */
     /* Where the chosen cover's background is (its source's, pc5_cover.h), kept with the game
      * for pc5_backgrounds.h: set after begin, "" and 0 for none. */
     char background[PC5_PATH];

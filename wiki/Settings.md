@@ -119,9 +119,9 @@ All lines are **Off** by default. A line the console can't read is left out. Wit
 | Source | What PC5 takes from it |
 | --- | --- |
 | Steam | Its store's cover and library background for the game |
+| SteamGridDB | Covers and backgrounds its members made. Only with your own key: see [Covers › SteamGridDB](Covers#steamgriddb). Without one the row says **No key** |
 | GOG | Its catalogue's cover and background |
 | PCGamingWiki | The cover on the game's page, and the background of the Steam game the page names |
-| Wikipedia | The box art of the game's article (no background) |
 | Wikidata | Steam's cover and background for a game Steam's own search doesn't find by that name |
 
 A source turned off isn't asked when PC5 installs a game, looks for its background, or when you choose a cover or background by hand. Pictures already kept stay. See [Covers](Covers).

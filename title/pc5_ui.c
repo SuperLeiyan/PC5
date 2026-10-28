@@ -69,7 +69,6 @@ typedef struct QueueGame {
     Pc5Picture thumb;
     uint32_t tint;
     char cover_source[64];
-    Pc5Buf original;               /* the downloaded picture */
     QueueState state;
     char id[PC5_ID], error[PC5_ERROR];
 } QueueGame;
@@ -331,11 +330,12 @@ struct Pc5Ui {
     int game_page;                 /* its menu's page: GP_MAIN or a group's */
     int pad_row, pad_top;          /* Button mapping: the row chosen, the first one shown */
     int key_control, key_choice;   /* the key picker: for which control, the key chosen */
+    char griddb_key[96];           /* SteamGridDB's key (api_keys.txt), or "": never logged or shown */
+    int griddb_refused;            /* SteamGridDB refused that key at its last answer */
     int api_choice;                /* the Graphics API window: the choice picked (an index of pc5_graphics_choices) */
     Pc5UpdateMemory update;
     Pc5LogIssue issue;             /* what went wrong last time, told once the library shows */
     int issue_pending;
-    Pc5Buf review_original;        /* the review cover's downloaded picture */
     Pc5InstallPhase speed_phase;
     int program_for;               /* S_PROGRAMS for: 0 the review, 1 the game in launch_id */
     Screen uninstall_back;         /* where Cancel in S_UNINSTALL_CONFIRM goes */
@@ -374,7 +374,6 @@ struct Pc5Ui {
     Pc5Image pick_image;           /* as it would be kept: a cover, or a background (960x540) */
     Pc5Picture pick_picture;       /* a cover's, as drawn */
     uint32_t pick_tint;
-    Pc5Buf pick_original;          /* a cover's downloaded picture */
     char pick_query[PC5_NAME];     /* the name typed to search for, or "": the game's own names */
 
     uint8_t *falloff;              /* the glow's shape, 0-255 per pixel */
@@ -631,7 +630,6 @@ static void queue_free(Pc5Ui *ui)
     for (int i = 0; ui->queue && i < ui->queue_count; i++) {
         pc5_image_free(&ui->queue[i].cover);
         pc5_picture_free(&ui->queue[i].thumb);
-        pc5_buf_free(&ui->queue[i].original);
     }
     pc5_free(ui->queue);
     ui->queue = NULL;
@@ -658,12 +656,6 @@ static int image_copy(Pc5Image *to, const Pc5Image *from)
     if (!from->px || pc5_image_new(to, from->w, from->h)) return -1;
     memcpy(to->px, from->px, (size_t)from->w * (size_t)from->h * 4);
     return 0;
-}
-
-static int buf_copy(Pc5Buf *to, const Pc5Buf *from)
-{
-    *to = (Pc5Buf){ 0 };
-    return from->len ? pc5_buf_put(to, from->data, from->len) : 0;
 }
 
 Pc5Ui *pc5_ui_create(const Pc5UiConfig *config, const Pc5Platform *platform)
@@ -713,10 +705,8 @@ void pc5_ui_destroy(Pc5Ui *ui)
     queue_free(ui);
     pc5_picture_free(&ui->review);
     pc5_image_free(&ui->review_image);
-    pc5_buf_free(&ui->review_original);
     pc5_picture_free(&ui->pick_picture);
     pc5_image_free(&ui->pick_image);
-    pc5_buf_free(&ui->pick_original);
     pc5_free(ui->pick);
     if (ui->installing) pc5_install_end(&ui->install);
     pc5_remove_end(&ui->remove);
@@ -775,15 +765,14 @@ static int folder_program(const Pc5Folder *folder, int exe, char *out, size_t si
 }
 
 static void make_cover(Pc5Ui *ui, const Pc5Folder *folder, int exe, Pc5CoverSearch *search, int *choice_io,
-                       Pc5Image *cover, uint32_t *tint, char *source, size_t source_size, Pc5Buf *original)
+                       Pc5Image *cover, uint32_t *tint, char *source, size_t source_size)
 {
     int choice = *choice_io;
 
     *cover = (Pc5Image){ 0 };
     *tint = C_DEFAULT_TINT;
-    pc5_buf_free(original);
     while (choice >= 0 && choice < search->count) {
-        if (!pc5_cover_fetch(&search->choices[choice], &ui->platform.http, cover, original)) {
+        if (!pc5_cover_fetch(&search->choices[choice], &ui->platform.http, cover)) {
             *tint = pc5_image_tint(cover);
             snprintf(source, source_size, "%s:%s", search->choices[choice].source, search->choices[choice].title);
             break;
@@ -802,7 +791,6 @@ static void make_cover(Pc5Ui *ui, const Pc5Folder *folder, int exe, Pc5CoverSear
         pc5_make_card(&ui->fonts, folder->name, icon.px ? &icon : NULL, cover, tint);
         pc5_image_free(&icon);
         pc5_copy(source, source_size, "icon");
-        pc5_buf_free(original);
         choice = -1;
     }
     *choice_io = choice;
@@ -822,10 +810,34 @@ static void fetch_review_cover(Pc5Ui *ui)
     ui->fetching = 0;
     pc5_image_free(&ui->review_image);
     make_cover(ui, &ui->folder, ui->exe, &ui->search, &ui->choice, &ui->review_image, &ui->review_tint,
-               ui->review_source, sizeof(ui->review_source), &ui->review_original);
+               ui->review_source, sizeof(ui->review_source));
     review_picture(ui);
     ui->choice_loaded = 1;
     ui->dirty = 1;
+}
+
+/* The sources to ask, and SteamGridDB's key (pc5_api_key) when there is one. */
+static void hint_sources(const Pc5Ui *ui, Pc5CoverHint *hint)
+{
+    hint->off = ui->settings.pictures_off;
+    pc5_copy(hint->steamgriddb_key, sizeof(hint->steamgriddb_key), ui->griddb_key);
+}
+
+/* One request of a search (pc5_cover_search_step); at its end, SteamGridDB's answer noted
+ * when it refused the key or was asked too often (never the key itself). */
+static int search_step(Pc5Ui *ui, Pc5CoverSearch *search)
+{
+    if (pc5_cover_search_step(search, &ui->platform.http)) return 1;
+    int status = search->griddb_status;
+    if (status == 401 || status == 403) {
+        if (!ui->griddb_refused) say(ui, "PC5 SteamGridDB refused the key in " PC5_API_KEYS " (HTTP %d)", status);
+        ui->griddb_refused = 1;
+    } else if (status == 200) {
+        ui->griddb_refused = 0;
+    } else if (status == 429) {
+        say(ui, "PC5 SteamGridDB: too many requests for now, skipped");
+    }
+    return 0;
 }
 
 static void hint_for_folder(const Pc5Ui *ui, const Pc5Folder *folder, int exe, Pc5CoverHint *hint)
@@ -841,7 +853,7 @@ static void hint_for_folder(const Pc5Ui *ui, const Pc5Folder *folder, int exe, P
     snprintf(hint->program, sizeof(hint->program), "%.*s", (int)(strlen(name) > 4 ? strlen(name) - 4 : 0), name);
     hint->steam_appid = folder->steam_appid;
     pc5_copy(hint->picture, sizeof(hint->picture), folder->picture);
-    hint->off = ui->settings.pictures_off;
+    hint_sources(ui, hint);
 }
 
 /* The player's own cover for an installed game: a picture in the covers
@@ -870,7 +882,7 @@ static void hint_for_game(Pc5Ui *ui, const Pc5Game *game, Pc5CoverHint *hint)
     snprintf(hint->program, sizeof(hint->program), "%.*s", (int)(strlen(name) > 4 ? strlen(name) - 4 : 0), name);
     /* The player's own picture takes the place of anything found online. */
     hint->picture_only = !own_cover(ui, game, hint->picture, sizeof(hint->picture));
-    hint->off = ui->settings.pictures_off;
+    hint_sources(ui, hint);
 }
 
 /* 1 when the player's own picture for game is newer than its cover. */
@@ -909,28 +921,24 @@ static int missing_cover_step(Pc5Ui *ui)
         ui->cover_searching = 1;
         return 1;
     }
-    if (pc5_cover_search_step(&ui->search, &ui->platform.http)) return 1;
+    if (search_step(ui, &ui->search)) return 1;
     /* Searched: the best picture that can be had, else the card, saved only
      * when a source answered (offline, it is tried again next time). */
     Pc5Image cover = { 0 };
-    Pc5Buf original = { 0 };
     uint32_t tint = C_DEFAULT_TINT;
     for (int i = 0; i < ui->search.count && !cover.px; i++)
-        if (!pc5_cover_fetch(&ui->search.choices[i], &ui->platform.http, &cover, &original)) tint = pc5_image_tint(&cover);
+        if (!pc5_cover_fetch(&ui->search.choices[i], &ui->platform.http, &cover)) tint = pc5_image_tint(&cover);
     if (!cover.px && ui->search.answered) card_for(ui, game, &cover, &tint);
     if (cover.px) {
         char path[PC5_PATH], dir[PC5_PATH];
         if (!cover_path(ui, game, path, sizeof(path)) &&
             !pc5_format(dir, sizeof(dir), "%s/prefixes/%s/pc5", ui->root, game->prefix) && !pc5_mkdirs(dir)) {
             pc5_cover_save(path, &cover, tint);
-            if (original.len && !pc5_format(path, sizeof(path), "%s/%s", dir, pc5_picture_name(&original)))
-                pc5_write_file(path, original.data, original.len);
         }
     }
     say(ui, "PC5 cover game=%s choices=%d answered=%d saved=%d", game->id, ui->search.count, ui->search.answered,
         cover.px != NULL);
     pc5_image_free(&cover);
-    pc5_buf_free(&original);
     ui->cover_searching = 0;
     ui->cover_at++;
     return ui->cover_at < ui->cover_count;
@@ -1196,7 +1204,6 @@ static void pick_clear(Pc5Ui *ui)
 {
     pc5_image_free(&ui->pick_image);
     pc5_picture_free(&ui->pick_picture);
-    pc5_buf_free(&ui->pick_original);
     ui->pick_tint = C_DEFAULT_TINT;
 }
 
@@ -1228,10 +1235,12 @@ static int pick_path(Pc5Ui *ui, const Pc5Game *game, char *out, size_t size)
 static void pick_search(Pc5Ui *ui, const Pc5Game *game)
 {
     Pc5CoverHint hint;
+    /* A key added since PC5 opened counts from this search on. */
+    pc5_api_key(ui->root, PC5_STEAMGRIDDB_KEY, ui->griddb_key, sizeof(ui->griddb_key));
     if (ui->pick_query[0]) {
         memset(&hint, 0, sizeof(hint));
         pc5_copy(hint.folder, sizeof(hint.folder), ui->pick_query);
-        hint.off = ui->settings.pictures_off;
+        hint_sources(ui, &hint);
     } else {
         hint_for_game(ui, game, &hint);
         hint.picture_only = 0;
@@ -1316,7 +1325,7 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
         } else if (entry < pick->count) {
             const Pc5CoverChoice *choice = &pick->choices[entry];
             failed = ui->pick_kind == PICK_COVER
-                         ? pc5_cover_fetch(choice, &ui->platform.http, &ui->pick_image, &ui->pick_original)
+                         ? pc5_cover_fetch(choice, &ui->platform.http, &ui->pick_image)
                          : pc5_background_fetch(choice->background, choice->steam_appid, &ui->platform.http, &ui->pick_image);
             if (!failed) {
                 if (ui->pick_kind == PICK_COVER) ui->pick_tint = pc5_image_tint(&ui->pick_image);
@@ -1343,9 +1352,9 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
     ui->dirty = 1;
 }
 
-/* The picture shown becomes the game's: a cover (its downloaded picture kept beside it, as an
- * install keeps it), a background, or none (a backdrop made from its cover, not looked for
- * again). */
+/* The picture shown becomes the game's, in place of the one it had: a cover, a background, or
+ * none (a backdrop made from its cover, not looked for again). Only the picture as PC5 keeps
+ * it is saved, not the one downloaded. */
 static void pick_use(Pc5Ui *ui, const Pc5Game *game)
 {
     char path[PC5_PATH], dir[PC5_PATH], note[PC5_PATH];
@@ -1360,11 +1369,6 @@ static void pick_use(Pc5Ui *ui, const Pc5Game *game)
     if (!failed && ui->pick_kind == PICK_COVER) {
         failed = !ui->pick_image.px || pc5_cover_save(path, &ui->pick_image, ui->pick_tint);
         if (!failed) {
-            static const char *const originals[] = { "cover-original.jpg", "cover-original.png" };
-            for (int i = 0; i < 2; i++)
-                if (!pc5_format(note, sizeof(note), "%s/%s", dir, originals[i])) unlink(note);
-            if (ui->pick_original.len && !pc5_format(note, sizeof(note), "%s/%s", dir, pc5_picture_name(&ui->pick_original)))
-                pc5_write_file(note, ui->pick_original.data, ui->pick_original.len);
             int index = pc5_library_find(&ui->library, game->id);
             if (index >= 0) {   /* drawn again from its file */
                 pc5_picture_free(&ui->covers[index].picture);
@@ -1436,8 +1440,6 @@ static void begin_install(Pc5Ui *ui)
         }
         return;
     }
-    ui->install.original = ui->review_original;
-    ui->review_original = (Pc5Buf){ 0 };
     if (ui->use_saves[0]) {
         if (pc5_install_use_saves(&ui->install, ui->use_saves))
             say(ui, "PC5 problem saves %s: %s", ui->use_saves, ui->install.error);
@@ -1509,8 +1511,6 @@ static void queue_next(Pc5Ui *ui)
             pc5_install_end(&ui->install);
             continue;
         }
-        ui->install.original = q->original;
-        q->original = (Pc5Buf){ 0 };
         {
             /* Without asking only when one set of kept saves is the game's. */
             char kept[PC5_PATH];
@@ -1679,13 +1679,13 @@ static int queue_read_step(Pc5Ui *ui)
         ui->queue_phase = 1;
         return 1;
     case 1:
-        if (pc5_cover_search_step(&q->search, &ui->platform.http)) return 1;
+        if (search_step(ui, &q->search)) return 1;
         ui->queue_phase = 2;
         return 1;
     default:
         q->choice = q->search.count ? 0 : -1;
         make_cover(ui, &q->folder, q->exe, &q->search, &q->choice, &q->cover, &q->tint, q->cover_source,
-                   sizeof(q->cover_source), &q->original);
+                   sizeof(q->cover_source));
         queue_thumb(q);
         say(ui, "PC5 cover choices=%d answered=%d queue=%d/%d", q->search.count, q->search.answered, ui->queue_at + 1,
             ui->queue_count);
@@ -1708,8 +1708,6 @@ static void queue_review_open(Pc5Ui *ui, int index)
     review_picture(ui);
     ui->review_tint = q->tint;
     pc5_copy(ui->review_source, sizeof(ui->review_source), q->cover_source);
-    pc5_buf_free(&ui->review_original);
-    buf_copy(&ui->review_original, &q->original);
     ui->choice_loaded = 1;
     ui->fetching = 0;
     ui->queue_review = index;
@@ -1728,9 +1726,6 @@ static void queue_review_close(Pc5Ui *ui)
         ui->review_image = (Pc5Image){ 0 };
         q->tint = ui->review_tint;
         pc5_copy(q->cover_source, sizeof(q->cover_source), ui->review_source);
-        pc5_buf_free(&q->original);
-        q->original = ui->review_original;
-        ui->review_original = (Pc5Buf){ 0 };
         queue_thumb(q);
     }
     ui->menu = ui->queue_review;
@@ -1942,14 +1937,21 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
     default:
         if (row >= SR_SOURCE && row < SR_SOURCE + PC5_PICTURE_SOURCES) {
             static const char *const abouts[PC5_PICTURE_SOURCES] = {
-                "Its store's covers and backgrounds", "Its catalogue's covers and backgrounds",
-                "The cover on the game's page, and its Steam background", "The box art of the game's article",
+                "Its store's covers and backgrounds", "Covers and backgrounds its members made, with your key",
+                "Its catalogue's covers and backgrounds", "The cover on the game's page, and its Steam background",
                 "Steam's pictures for a game Steam's search misses"
             };
-            int i = (int)(row - SR_SOURCE);
+            int i = (int)(row - SR_SOURCE), off = (set->pictures_off & (1u << i)) != 0;
             *label = pc5_picture_source_name(i);
             pc5_copy(about, about_size, abouts[i]);
-            pc5_copy(value, value_size, set->pictures_off & (1u << i) ? "Off" : "On");
+            pc5_copy(value, value_size, off ? "Off" : "On");
+            /* SteamGridDB asks for the player's key: where it goes, or that it was refused. */
+            if (i == 1 && !ui->griddb_key[0]) {
+                pc5_copy(about, about_size, "Needs your key, in /data/prospero-win/" PC5_API_KEYS);
+                if (!off) pc5_copy(value, value_size, "No key");
+            } else if (i == 1 && ui->griddb_refused) {
+                pc5_copy(about, about_size, "It refused the key in /data/prospero-win/" PC5_API_KEYS ": check it there");
+            }
         }
         break;
     }
@@ -2258,6 +2260,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         }
         if (pc5_recover_step(ui->root, &ui->remove, 14)) { ui->dirty = 1; break; }
         pc5_remove_end(&ui->remove);
+        /* The API keys, its file made for the player when there is none. */
+        pc5_api_key(ui->root, PC5_STEAMGRIDDB_KEY, ui->griddb_key, sizeof(ui->griddb_key));
         {
             char id[PC5_ID];
             int offset = 0;
@@ -2527,7 +2531,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_SEARCH:
         if (k & back) { go(ui, S_SOURCES); break; }
         if (!ui->drawn) break;
-        if (!pc5_cover_search_step(&ui->search, &ui->platform.http)) {
+        if (!search_step(ui, &ui->search)) {
             say(ui, "PC5 cover choices=%d answered=%d", ui->search.count, ui->search.answered);
             ui->choice = ui->search.count ? 0 : -1;
             fetch_review_cover(ui);
@@ -2762,7 +2766,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         if (index < 0 || !ui->pick) { picture_close(ui); go(ui, S_LIBRARY); break; }
         if ((k & back) && ui->now - ui->entered > 300) { picture_leave(ui); break; }
         if (!ui->drawn) break;
-        if (!pc5_cover_search_step(ui->pick, &ui->platform.http)) pick_searched(ui);
+        if (!search_step(ui, ui->pick)) pick_searched(ui);
         ui->dirty = 1;
         break;
     }
@@ -3718,14 +3722,14 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         *value = more;
         break;
     case GR_HOME:
-        if (ui->tile[0]) snprintf(about, about_size, "Its tile, %s, starts the game", ui->tile);
+        if (ui->tile[0]) snprintf(about, about_size, "Its tile, %.40s, starts the game", ui->tile);
         *label = "Home screen tile";
         *text = ui->tile[0] ? about : "A tile on the PS5's home screen that starts it";
         *value = ui->tile[0] ? "On" : "Off";
         break;
     case GR_PROGRAM: {
         const char *exe = strrchr(game->executable, '\\');
-        snprintf(about, about_size, "Now: %s", exe ? exe + 1 : game->executable);
+        snprintf(about, about_size, "Now: %.150s", exe ? exe + 1 : game->executable);
         *label = "Change program";
         *text = about;
         *value = "";
@@ -3917,7 +3921,7 @@ static void about_screen(Pc5Ui *ui, Pc5Canvas *c)
     static const char *const paragraphs[] = {
         ("PC5 runs your PC games with prospero-win: Wine, DXVK for Direct3D 8 to 11, VKD3D-Proton for "
          "Direct3D 12, and Mesa (RADV for Vulkan, Zink for OpenGL)."),
-        "Covers come from Steam, GOG and Wikipedia, with no account. No game is part of PC5.",
+        "Covers come from Steam, GOG, PCGamingWiki and Wikidata, and SteamGridDB with your key. No game is part of PC5.",
         "Free software under the GNU LGPL 2.1 or later.",
     };
 
@@ -4660,10 +4664,10 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         break;
     }
     case S_SEARCH:
-        busy_dialog(ui, c, "Looking for the cover", "On Steam, GOG and Wikipedia", 1);
+        busy_dialog(ui, c, "Looking for the cover", "On Steam, GOG and others", 1);
         break;
     case S_PICTURE_SEARCH: {
-        const char *where = ui->pick_kind == PICK_COVER ? "on Steam, GOG and Wikipedia" : "on Steam and GOG";
+        const char *where = "on Steam, GOG and others";
         if (ui->pick_query[0]) snprintf(line, sizeof(line), "\xe2\x80\x9c%s\xe2\x80\x9d, %s", ui->pick_query, where);
         else snprintf(line, sizeof(line), "%c%s", where[0] - 32, where + 1);
         busy_dialog(ui, c, ui->pick_kind == PICK_COVER ? "Looking for covers" : "Looking for backgrounds", line, 1);

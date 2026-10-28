@@ -66,6 +66,14 @@ const char *pc5_triggers_name(Pc5Triggers triggers);
 /* The next step of a strength in percent: up (step 1) or down (-1), from
  * lowest (0 for Vibration's Off, else 25) to 100, round. */
 int pc5_strength_next(int percent, int lowest, int step);
+/* The API keys, in <root>/api_keys.txt as "NAME=value" lines (# starts a comment): the one
+ * named, into out, or "" when it is missing, empty or not a key (only the signs ! to ~).
+ * The file is made, explaining itself with its keys empty, when there is none; it is
+ * the player's, never deleted. Read each time, so a key added counts at the next search.
+ * 0, or -1 when there is no key. A key is never logged or shown. */
+#define PC5_API_KEYS "api_keys.txt"
+#define PC5_STEAMGRIDDB_KEY "STEAMGRIDDB_API_KEY"
+int pc5_api_key(const char *root, const char *name, char *out, size_t size);
 /* The startup sound's next volume: up (step 1) or down (-1) by 10, from 10 to 100 %, round. */
 int pc5_volume_next(int percent, int step);
 

@@ -126,8 +126,6 @@ static int sample_net(void *context, const char *url, Pc5Buf *out, size_t max, i
         return pc5_buf_puts(out, "{\"total\":1,\"items\":[{\"type\":\"app\",\"name\":\"Neon Drift\",\"id\":901001}]}");
     if (strstr(url, "catalog.gog.com"))
         return pc5_buf_puts(out, "{\"products\":[{\"title\":\"Neon Drift\",\"coverVertical\":\"https://images.gog-statics.com/x.jpg\"}]}");
-    if (strstr(url, "wikipedia.org"))
-        return pc5_buf_puts(out, "{\"query\":{\"pages\":[]}}");
     if (strstr(url, "api.github.com"))
         return pc5_buf_puts(out, "{\"tag_name\":\"v1.1.0\",\"name\":\"PC5 1.1.0\","
                                  "\"html_url\":\"https://github.com/bornaradusin/PC5/releases/tag/v1.1.0\"}");
@@ -179,7 +177,7 @@ static Pc5Ui *open_ui(const char *root, int network)
     fmt(tile_template, sizeof(tile_template), "%s/app0/pc5/forwarder", work);
     fmt(file, sizeof(file), "%s/eboot.bin", tile_template);
     pc5_write_file(file, "eboot", 5);
-    platform = (Pc5Platform){ NULL, { NULL, network ? sample_net : offline, NULL }, fake_clock, fake_play, NULL, NULL, NULL, 0, NULL,
+    platform = (Pc5Platform){ NULL, { NULL, network ? sample_net : offline, NULL, NULL }, fake_clock, fake_play, NULL, NULL, NULL, 0, NULL,
                               NULL, keyboard_open, keyboard_state, keyboard_close };
     config = (Pc5UiConfig){ root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
@@ -203,7 +201,7 @@ static void crash_shots(const char *root)
     static char usb[PC5_PATH], template_prefix[PC5_PATH];
     char file[PC5_PATH], text[2048];
     Pc5Library library;
-    Pc5Platform platform = { NULL, { NULL, offline, NULL }, fake_clock, fake_play, NULL, NULL, shot_time, 0, NULL, NULL,
+    Pc5Platform platform = { NULL, { NULL, offline, NULL, NULL }, fake_clock, fake_play, NULL, NULL, shot_time, 0, NULL, NULL,
                              NULL, NULL, NULL };
 
     make_library(root, 3, 1);

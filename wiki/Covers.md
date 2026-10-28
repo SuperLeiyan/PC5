@@ -1,4 +1,4 @@
-Every game in PC5 has a cover. PC5 looks for it online on public sources, with no account and no key, or uses a picture you give it. A game no source has gets a cover made from its own icon and name. A game can have a background too, shown behind the library while it is chosen. This page explains where covers and backgrounds come from, how to choose them, and how to use your own.
+Every game in PC5 has a cover. PC5 looks for it online on public sources, with no account and no key (and on SteamGridDB too if you give PC5 your key), or uses a picture you give it. A game no source has gets a cover made from its own icon and name. A game can have a background too, shown behind the library while it is chosen. This page explains where covers and backgrounds come from, how to choose them, and how to use your own.
 
 ## Where covers come from
 
@@ -6,15 +6,41 @@ PC5 looks in this order:
 
 1. **Your own picture**, if you gave one (see [Using your own cover](#using-your-own-cover)).
 2. **Steam's store.** If the game's folder has a `steam_appid.txt` at its top, PC5 uses that number to find the game's Steam cover directly.
-3. **GOG's catalogue.**
-4. **PCGamingWiki**: the cover on the game's page.
-5. **Wikipedia**: the lead picture of the game's article.
+3. **SteamGridDB**, only if you added your key (see [SteamGridDB](#steamgriddb)): covers its members made, also offered when Steam has a cover, to choose by hand.
+4. **GOG's catalogue.**
+5. **PCGamingWiki**: the cover on the game's page.
 6. **Wikidata**: the Steam game Wikidata names for the game, for a game Steam's own search doesn't find by that name.
 7. If none of them has the game: a **card made from the game's icon and name**.
+
+Until PC5 1.9.2, PC5 also took the lead picture of the game's Wikipedia article. It doesn't any more: those were often not the game's cover.
 
 To search, PC5 uses the program's product name, the folder's name (without release tags and version numbers) and the program's name. It only offers results whose name is close to the game's. Each source can be turned off in **Settings › System › Picture sources** (see [Picture sources](Settings#picture-sources)); PC5 doesn't say which source a picture came from.
 
 A source that doesn't answer is skipped. A game installed without internet gets your own picture or its card, and keeps it: to give it another cover later, use [Appearance › Cover](#changing-a-cover-or-background) or [your own picture](#for-a-game-already-installed).
+
+## SteamGridDB
+
+[SteamGridDB](https://www.steamgriddb.com) has covers and backgrounds made by its members, for many games. It needs a key of your own (free). PC5 works the same without one.
+
+1. Make an account on steamgriddb.com and sign in.
+2. Open its **Preferences**, then **API**, and make a key. It is a line of letters and numbers.
+3. On the console, open `/data/prospero-win/api_keys.txt` with the tool you use to copy files to and from the console. PC5 makes this file the first time it opens. It looks like this:
+
+   ```ini
+   # PC5 API keys
+   # Enter your API keys below, after the = sign, and save the file.
+   ...
+   STEAMGRIDDB_API_KEY=
+   ```
+
+4. Put your key after `STEAMGRIDDB_API_KEY=` and save the file. For example: `STEAMGRIDDB_API_KEY=0123456789abcdef0123456789abcdef`.
+5. Open PC5 again. A key added while PC5 is open also counts the next time you choose a cover or background by hand.
+
+Lines starting with `#` are ignored, as are spaces around the key. PC5 never shows your key or writes it to its logs, and it sends it only to SteamGridDB. Uninstalling a game doesn't touch this file.
+
+**Settings › System › Picture sources** says **No key** for SteamGridDB while there is no key. If SteamGridDB refuses the key (a typo, or a key you deleted there), its row says so: check the key in the file. Either way PC5 carries on with the other sources.
+
+PC5 takes SteamGridDB's still pictures only (no animated ones): covers of 600 × 900 or 660 × 930, and backgrounds of 1920 × 620 (or 3840 × 1240). It asks for the game by its Steam number when Steam (or a `steam_appid.txt`) gave one, and by name otherwise.
 
 ## Choosing a cover when installing
 
@@ -80,7 +106,9 @@ Until a cover is found, the library shows the game's card. Offline, PC5 looks ag
 - As the picture of the game's [home screen tile](Home-screen-tiles). The tile's picture is made when the tile is made: after changing a cover, turn the tile off and on again.
 - For the light bar, when **Settings › In games › Light bar** is **Game's colour**: the light bar shows the cover's main colour.
 
-The cover, and the picture as it was downloaded, are kept with the game in `/data/prospero-win/prefixes/<game>/pc5/`. Uninstalling the game deletes them.
+The cover is kept with the game in `/data/prospero-win/prefixes/<game>/pc5/cover.bin`, as PC5 shows it (480 × 720). The picture as downloaded isn't kept: PC5 1.9.3 deletes the copies (`cover-original.jpg` or `.png`) earlier versions kept. Choosing another cover replaces it.
+
+Uninstalling the game deletes its cover and background, also when you keep its saves: kept saves don't keep pictures, and installing the game again gets them anew. Your own pictures in `covers` or `backgrounds` (below) stay.
 
 ## Backgrounds
 
@@ -93,7 +121,7 @@ PC5 finds backgrounds by itself, in the background while the library shows, for 
 
 1. **Your own picture**, if you gave one (see below).
 2. The background of the **cover chosen when the game was installed**: Steam's library background for a Steam cover (also for a PCGamingWiki or Wikidata cover of a Steam game), GOG's background for a GOG cover.
-3. A **search**, as for covers, with the sources turned on: Steam's library background or GOG's background of the best match. Wikipedia has none.
+3. A **search**, as for covers, with the sources turned on: Steam's library background, SteamGridDB's (with your key) or GOG's background of the best match. A game can have a cover from one source and a background from another: when Steam has the game's cover but no background, SteamGridDB's background is used.
 
 A game no source has a background for keeps the backdrop made from its cover, and PC5 doesn't look online for it again; your own picture still works for it. To choose another background, or none, see [Changing a cover or background](#changing-a-cover-or-background).
 
@@ -104,4 +132,4 @@ Your picture can be a `.jpg`, `.jpeg` or `.png` file. PC5 cuts it to the screen'
 - **When installing:** put `background.jpg`, `background.jpeg` or `background.png` at the top of the game's folder on the USB drive.
 - **For a game already installed:** make a folder `/data/prospero-win/backgrounds/` and put the picture in it, named as for [your own cover](#for-a-game-already-installed): the game's folder name, its name in PC5 or its id. For example: `/data/prospero-win/backgrounds/Neon Drift.jpg`.
 
-PC5 picks the picture up the next time it opens, when it is newer than the game's background. The background is kept in `/data/prospero-win/prefixes/<game>/pc5/background.bin`; uninstalling the game deletes it.
+PC5 picks the picture up the next time it opens, when it is newer than the game's background. The background is kept in `/data/prospero-win/prefixes/<game>/pc5/background.bin`; uninstalling the game deletes it, also when you keep its saves.

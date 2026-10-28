@@ -169,12 +169,12 @@ static void one(Pc5Backgrounds *b, const Pc5BackgroundGame *game)
         }
     }
     /* None to have: kept as it is, and asked again only once there is a picture of the player's.
-     * Steam or GOG answered without one (with both turned off, the other sources did); or there
+     * Steam, SteamGridDB or GOG answered without one (with all three off, the other sources did); or there
      * were some and they couldn't be fetched three starts running (the network, or a store
      * without the picture). */
     if (!saved && !atomic_load(&b->stop)) {
-        uint32_t stores = PC5_PICTURES_STEAM | PC5_PICTURES_GOG;
-        int none = !offered && (search->answered_stores || ((hint.off & stores) == stores && search->answered));
+        uint32_t stores = PC5_PICTURES_STEAM | PC5_PICTURES_STEAMGRIDDB | PC5_PICTURES_GOG;
+        int none = !offered && (search->answered_stores || ((search->hint.off & stores) == stores && search->answered));
         if (offered && !note_path(b->root, game->prefix, "background-tries.txt", path, sizeof(path))) {
             char text[16];
             Pc5Buf tries = { 0 };

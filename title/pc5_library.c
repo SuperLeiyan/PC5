@@ -1295,6 +1295,11 @@ static int keep_finish(const char *root, const char *id, const char *profile_fil
     }
     index_update(root, profile_file, 0);
     delete_logs(root, id);
+    /* Its pictures go with the game: the saves don't need them, and an install puts back new ones. */
+    {
+        char pictures[PC5_PATH];
+        if (!pc5_format(pictures, sizeof(pictures), "%s/pc5", keeping)) pc5_cover_delete_all(pictures);
+    }
     {
         /* When they were kept: the newest of a game's kept saves is the one put back. */
         char when[PC5_PATH], text[32];
@@ -1613,6 +1618,10 @@ int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms)
             Pc5Info info;
             if (entry->d_name[0] == '.' || pc5_format(profile, sizeof(profile), "%s/profiles/%s.profile", root, entry->d_name))
                 continue;
+            /* Its pictures that nothing uses, before anything saves one (the library isn't shown yet). */
+            char pictures[PC5_PATH];
+            if (strcmp(entry->d_name, "default") && !pc5_format(pictures, sizeof(pictures), "%s/%s/pc5", path, entry->d_name))
+                pc5_cover_tidy(pictures);
             if (!pc5_exists(profile) && !pc5_info_read(root, entry->d_name, &info))
                 pc5_profile_refresh(root, entry->d_name, error, sizeof(error));
         }
@@ -1904,10 +1913,6 @@ static int finish(Pc5Install *install)
         !pc5_format(path, sizeof(path), "%s/pc5/background.txt", install->staging) &&
         !pc5_format(text, sizeof(text), "%s\n%u\n", install->background, (unsigned)install->background_appid))
         pc5_write_file(path, text, strlen(text));
-    /* The picture as it was downloaded, for a cover made again later without the network. */
-    if (install->original.len && !pc5_format(path, sizeof(path), "%s/pc5/%s", install->staging,
-                                              pc5_picture_name(&install->original)))
-        pc5_write_file(path, install->original.data, install->original.len);
     if (pc5_format(target, sizeof(target), "%s/prefixes/%s", install->root, install->id) || rename(install->staging, target))
         return fail(install, "PC5 can't put the game in place: %s.", strerror(errno));
     pc5_copy(install->staging, sizeof(install->staging), target);
@@ -2273,7 +2278,6 @@ void pc5_install_end(Pc5Install *install)
         pc5_free(install->cleanup);
     }
     pc5_image_free(&install->cover);
-    pc5_buf_free(&install->original);
     install->hashes = NULL;
     install->chunk = NULL;
     install->cleanup = NULL;

@@ -178,12 +178,13 @@ static void tls_close(Tls *t)
     t->sock = -1;
 }
 
-/* Connects, shakes hands and sends "GET path": 0, or -1 (closed again). */
-static int tls_get(Tls *t, const char *host, uint16_t port, const char *path)
+/* Connects, shakes hands and sends "GET path", with an Authorization header when authorization
+ * isn't NULL: 0, or -1 (closed again). */
+static int tls_get(Tls *t, const char *host, uint16_t port, const char *path, const char *authorization)
 {
     uint32_t address = 0;
     int r;
-    char request[PATH_MAX_URL + 512];
+    char request[PATH_MAX_URL + 1024];
 
     mbedtls_ssl_init(&t->ssl);
     mbedtls_ssl_config_init(&t->conf);
@@ -214,8 +215,9 @@ static int tls_get(Tls *t, const char *host, uint16_t port, const char *path)
         }
     }
     if (pc5_format(request, sizeof(request),
-                   "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: */*\r\n"
-                   "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host))
+                   "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: " USER_AGENT "\r\nAccept: */*\r\n%s%s%s"
+                   "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host,
+                   authorization ? "Authorization: " : "", authorization ? authorization : "", authorization ? "\r\n" : ""))
         goto fail;
     for (size_t done = 0, length = strlen(request); done < length;) {
         r = mbedtls_ssl_write(&t->ssl, (const unsigned char *)request + done, length - done);
@@ -223,8 +225,10 @@ static int tls_get(Tls *t, const char *host, uint16_t port, const char *path)
         if (r <= 0) goto fail;
         done += (size_t)r;
     }
+    memset(request, 0, sizeof(request));   /* the key isn't left on the stack */
     return 0;
 fail:
+    memset(request, 0, sizeof(request));
     tls_close(t);
     return -1;
 }
@@ -249,12 +253,13 @@ static int tls_read(Tls *t, uint8_t *data, size_t size, int lenient)
 }
 
 /* One request: the raw answer (headers and body) into answer. */
-static int exchange(const char *host, uint16_t port, const char *path, Pc5Buf *answer, size_t max)
+static int exchange(const char *host, uint16_t port, const char *path, const char *authorization, Pc5Buf *answer,
+                    size_t max)
 {
     Tls t;
     int r;
 
-    if (tls_get(&t, host, port, path)) return -1;
+    if (tls_get(&t, host, port, path, authorization)) return -1;
     answer->len = 0;
     for (;;) {
         if (pc5_buf_reserve(answer, 32 * 1024)) { tls_close(&t); return -1; }
@@ -343,7 +348,7 @@ static int follow(const char *host, uint16_t port, char *path, const char *locat
     return pc5_format(next, size, "https://%s:%u%s%s", host, (unsigned)port, path, location);
 }
 
-static int get_locked(const char *url, Pc5Buf *out, size_t max, int *status)
+static int get_locked(const char *url, const char *authorization, Pc5Buf *out, size_t max, int *status)
 {
     char host[256], path[PATH_MAX_URL], next[PATH_MAX_URL + 300], location[PATH_MAX_URL];
     uint16_t port;
@@ -357,7 +362,8 @@ static int get_locked(const char *url, Pc5Buf *out, size_t max, int *status)
             note("PC5 net not an https address: %.200s", next);
             return -1;
         }
-        if (exchange(host, port, path, out, max)) return -1;
+        /* The key goes to the host asked only, not to one it redirects to. */
+        if (exchange(host, port, path, hop ? NULL : authorization, out, max)) return -1;
         if (pc5_buf_terminate(out)) return -1;
         char *end = strstr((char *)out->data, "\r\n\r\n");
         if (!end || strncmp((char *)out->data, "HTTP/1.", 7) || out->len < 12) {
@@ -389,7 +395,19 @@ int pc5_net_get(void *context, const char *url, Pc5Buf *out, size_t max, int *st
 {
     (void)context;
     pthread_mutex_lock(&net_lock);
-    int result = get_locked(url, out, max, status);
+    int result = get_locked(url, NULL, out, max, status);
+    pthread_mutex_unlock(&net_lock);
+    return result;
+}
+
+int pc5_net_get_authorized(void *context, const char *url, const char *authorization, Pc5Buf *out, size_t max,
+                           int *status)
+{
+    (void)context;
+    for (const char *p = authorization; *p; p++)
+        if (*p < ' ' || *p > '~') return -1;   /* nothing that would end the header's line */
+    pthread_mutex_lock(&net_lock);
+    int result = get_locked(url, authorization, out, max, status);
     pthread_mutex_unlock(&net_lock);
     return result;
 }
@@ -478,7 +496,7 @@ static int stream_exchange(const char *host, uint16_t port, const char *path, co
 
     location[0] = 0;
     if (!(s.buf = pc5_alloc(STREAM_BUFFER + 1))) return -1;
-    if (tls_get(&t, host, port, path)) { pc5_free(s.buf); return -1; }
+    if (tls_get(&t, host, port, path, NULL)) { pc5_free(s.buf); return -1; }
     /* The headers: up to the empty line. */
     char *headers = NULL;
     for (;;) {

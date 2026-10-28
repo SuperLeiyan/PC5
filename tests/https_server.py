@@ -35,6 +35,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_body(b'{"hello":"world"}')
         elif self.path == "/agent":
             self.send_body(agent.encode())
+        elif self.path == "/authorization":
+            self.send_body(("[" + self.headers.get("Authorization", "") + "]").encode())
+        elif self.path == "/redirect-authorization":
+            self.send_response(302)
+            self.send_header("Location", "/authorization")
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
         elif self.path == "/big":
             self.send_body(BIG, "application/octet-stream")
         elif self.path == "/chunked":

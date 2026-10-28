@@ -29,6 +29,10 @@ void pc5_net_init(const Pc5NetOps *ops);
  * HTTP status. 0 when an answer came, -1 when none did (no network, no name,
  * a certificate that doesn't check out). */
 int pc5_net_get(void *context, const char *url, Pc5Buf *out, size_t max, int *status);
+/* The same with "Authorization: <authorization>" (an API key's), sent to url's host only and
+ * never logged; -1 for one with a line break. */
+int pc5_net_get_authorized(void *context, const char *url, const char *authorization, Pc5Buf *out, size_t max,
+                           int *status);
 /* GET url (https:// only), following redirects, its body handed to sink as it arrives
  * when the final status is 200 (Content-Length or chunked). 0 with *status the final
  * HTTP status (nothing reaches sink for another status), -1 when no full answer came

@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static const char *const corner_keys[] = { "top-left", "top-right", "bottom-left", "bottom-right" };
 static const char *const corner_names[] = { "Top left", "Top right", "Bottom left", "Bottom right" };
@@ -178,3 +179,59 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
 const char *pc5_corner_name(Pc5Corner corner) { return corner_names[corner % PC5_CORNERS]; }
 const char *pc5_light_name(Pc5Light light) { return light_names[light % PC5_LIGHTS]; }
 const char *pc5_triggers_name(Pc5Triggers triggers) { return trigger_names[triggers % PC5_TRIGGERS_COUNT]; }
+
+static const char api_keys_text[] =
+    "# PC5 API keys\n"
+    "# Enter your API keys below, after the = sign, and save the file.\n"
+    "# Leave unused keys empty: PC5 works without them.\n"
+    "# PC5 reads this file when it opens and each time it looks for pictures.\n"
+    "#\n"
+    "# SteamGridDB: more covers and backgrounds. Make a free account at steamgriddb.com,\n"
+    "# then make a key in its Preferences, under API.\n"
+    "\n"
+    PC5_STEAMGRIDDB_KEY "=\n";
+
+int pc5_api_key(const char *root, const char *name, char *out, size_t size)
+{
+    char path[PC5_PATH];
+    Pc5Buf text = { 0 };
+    size_t name_length = strlen(name);
+    int found = -1;
+
+    out[0] = 0;
+    if (pc5_format(path, sizeof(path), "%s/" PC5_API_KEYS, root)) return -1;
+    if (!pc5_exists(path)) {
+        /* Made for the player to fill in, readable by its owner only where that holds. */
+        if (!pc5_write_file(path, api_keys_text, sizeof(api_keys_text) - 1)) (void)chmod(path, 0600);
+        return -1;
+    }
+    if (pc5_read_file(path, &text, 64 * 1024) || pc5_buf_terminate(&text)) {
+        pc5_buf_free(&text);
+        return -1;
+    }
+    for (char *line = (char *)text.data, *next; line && found; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        while (*line == ' ' || *line == '\t') line++;
+        if (!*line || *line == '#' || strncmp(line, name, name_length)) continue;
+        char *value = line + name_length;
+        while (*value == ' ' || *value == '\t') value++;
+        if (*value != '=') continue;
+        for (value++; *value == ' ' || *value == '\t'; value++) {
+        }
+        size_t length = strlen(value);
+        while (length && (value[length - 1] == ' ' || value[length - 1] == '\t' || value[length - 1] == '\r')) length--;
+        value[length] = 0;
+        /* Only what can go in a request's header as it is: no spaces or line breaks. */
+        int plain = length > 0 && length < size;
+        for (size_t i = 0; i < length && plain; i++) plain = value[i] >= '!' && value[i] <= '~';
+        if (plain) {
+            memcpy(out, value, length + 1);
+            found = 0;
+        }
+    }
+    /* Not left in memory freed later. */
+    if (text.data) memset(text.data, 0, text.len);
+    pc5_buf_free(&text);
+    return found;
+}

@@ -5,7 +5,7 @@
     tests/make-sample-covers.py OUT_DIR
 
 Each is an invented game with an invented title, drawn from simple shapes: none is, or looks
-like, a real game's cover. Also writes pictures in other shapes (as GOG and Wikipedia have).
+like, a real game's cover. Also writes pictures in other shapes (as GOG has, and the wide backgrounds of Steam and SteamGridDB).
 """
 import math
 import random
@@ -137,7 +137,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     for i, (title, theme) in enumerate(GAMES):
         cover(title, theme, i).save(out / f"cover-{i:02d}.png")
-    # Other shapes: a box (GOG-like) and a wide picture (Wikipedia can give one).
+    # Other shapes: a box (GOG-like) and a wide picture (a background).
     cover("Neon Drift", "city", 0, (342, 482)).convert("RGB").save(out / "box.jpg", quality=90)
     cover("Neon Drift", "city", 0, (900, 600)).save(out / "wide.png")
     (out / "titles.txt").write_text("".join(f"{t}\n" for t, _ in GAMES))

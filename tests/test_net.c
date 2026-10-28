@@ -178,6 +178,18 @@ int main(int argc, char **argv)
     snprintf(url, sizeof(url), "https://localhost:%s/agent", argv[3]);
     CHECK(!pc5_net_get(NULL, url, &body, 1 << 20, &status) && strstr((char *)body.data, "PC5/"), "user agent: %s",
           (char *)body.data);
+    /* An API key's header: sent to the host asked, not on to where it redirects; never one
+     * that would end the header's line. */
+    snprintf(url, sizeof(url), "https://localhost:%s/authorization", argv[3]);
+    CHECK(!pc5_net_get_authorized(NULL, url, "Bearer abc123", &body, 1 << 20, &status) && status == 200 &&
+          !strcmp((char *)body.data, "[Bearer abc123]"), "authorization: %s", (char *)body.data);
+    CHECK(!pc5_net_get(NULL, url, &body, 1 << 20, &status) && !strcmp((char *)body.data, "[]"), "none without: %s",
+          (char *)body.data);
+    snprintf(url, sizeof(url), "https://localhost:%s/redirect-authorization", argv[3]);
+    CHECK(!pc5_net_get_authorized(NULL, url, "Bearer abc123", &body, 1 << 20, &status) && status == 200 &&
+          !strcmp((char *)body.data, "[]"), "not sent on through a redirect: %s", (char *)body.data);
+    CHECK(pc5_net_get_authorized(NULL, url, "Bearer abc\r\nX-Other: 1", &body, 1 << 20, &status),
+          "a key with a line break refused");
     snprintf(url, sizeof(url), "https://localhost:%s/big", argv[3]);
     CHECK(!pc5_net_get(NULL, url, &body, 2 << 20, &status) && status == 200 && body.len == 1 << 20, "big: %zu", body.len);
     int same = body.len == 1 << 20;

@@ -173,7 +173,7 @@ A game PC5 didn't install has **Uninstall** in place of the two. Either way, the
 
 ### Keeping a game's saves
 
-**Keep saves** keeps the game's own Windows: the saves and settings it wrote to "Documents", "AppData" or "Saved Games", its registry and its options in the game menu. It also keeps the files the game made in its own folder, beside its program (saves and settings some games keep there, `launch.txt`): PC5 lists the files it copied when it installs or updates a game, and keeps the others. All of it goes to `/data/prospero-win/saves/<game>/` (see [Files and folders](Files-and-folders)). A game installed with a PC5 older than 1.8.0 and not updated since has no such list, so the files in its own folder go with it: to keep those, use [Update](#updating-a-game) instead of uninstalling, or update it once first.
+**Keep saves** keeps the game's own Windows: the saves and settings it wrote to "Documents", "AppData" or "Saved Games", its registry and its options in the game menu. It also keeps the files the game made in its own folder, beside its program (saves and settings some games keep there, `launch.txt`): PC5 lists the files it copied when it installs or updates a game, and keeps the others. All of it goes to `/data/prospero-win/saves/<game>/` (see [Files and folders](Files-and-folders)). Its cover and background don't: they are deleted with the game, and installing it again gets them anew. A game installed with a PC5 older than 1.8.0 and not updated since has no such list, so the files in its own folder go with it: to keep those, use [Update](#updating-a-game) instead of uninstalling, or update it once first.
 
 When you install a game with the same folder name and program again, PC5 asks **Put back the saves of** *game*?:
 

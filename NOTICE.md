@@ -30,7 +30,7 @@ were looked at for ideas only. None of their code is in PC5. PS5_MihawkOS's own 
 3.0) is not in PC5 either: only the Wine patches above, which are under Wine's licence.
 
 Game covers are not part of PC5. On the console it downloads them, for the games the player
-installs, from Steam's store, GOG's catalogue, PCGamingWiki, Wikipedia and (for the Steam
-game it names) Wikidata, and keeps them with each game.
+installs, from Steam's store, SteamGridDB (with the player's own key), GOG's catalogue,
+PCGamingWiki and (for the Steam game it names) Wikidata, and keeps them with each game.
 The sample covers in the tests and screenshots are drawn by `tests/make-sample-covers.py`
 for made-up games.

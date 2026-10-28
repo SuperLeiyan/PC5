@@ -151,7 +151,7 @@ From 1.9.2, **△ › Graphics › Graphics API** chooses who turns a game's Dir
 | **WineD3D on Vulkan** | Wine's own Direct3D, drawing with Vulkan itself | — | Wine's own, drawing with Vulkan itself |
 | **Wine's VKD3D** | — | Wine's own Direct3D 12 | — |
 
-It applies the next time the game starts, and stays with the game. Wine's own Direct3D is usually slower than DXVK and VKD3D-Proton, and WineD3D on Vulkan is the newest of them; if a game only runs with one of them, say so in its [issue](Reporting-a-problem) or [compatibility report](Game-compatibility).
+From 1.9.3 it opens a window with the game's choices and what each does, the one in use marked **In use**: choose one with ✕, or leave with ○. It applies the next time the game starts, and stays with the game. Wine's own Direct3D is usually slower than DXVK and VKD3D-Proton, and WineD3D on Vulkan is the newest of them; if a game only runs with one of them, say so in its [issue](Reporting-a-problem) or [compatibility report](Game-compatibility).
 
 ## Aspect ratio
 

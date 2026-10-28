@@ -14,6 +14,7 @@ PC5 keeps everything where prospero-win keeps it, in `/data/prospero-win` on the
   sounds/<name>.wav                         your own startup sounds (you make this folder)
   saves/<game>/                             a game's saves, kept when it was uninstalled
   pc5/settings.txt                          PC5's settings
+  api_keys.txt                              your API keys, such as SteamGridDB's (you fill it in)
   pc5/last.txt                              the game played last
   pc5/update.txt                            the last update check
   logs/                                     session logs (see Reporting a problem)
@@ -33,12 +34,13 @@ PPSA11018/                                  the app (where you installed it)
 | --- | --- | --- |
 | `prefixes/<game>/` | The game's own Windows. Saves and settings a game writes to "Documents" or "AppData" are in here. | Copy it to back up saves. Don't delete it by hand: [uninstall](Installing-games#uninstalling-a-game) the game instead. |
 | `prefixes/<game>/drive_c/Games/<folder>/` | The game's files, as copied from the USB drive. Saves a game writes into its own folder are here too. | You can add a [`launch.txt`](Launch-options) beside the game's `.exe`. |
-| `prefixes/<game>/pc5/` | PC5's notes on the game (`info.txt`), its controller and frame generation (`controls.txt`), its cover (`cover.bin`) and the picture as downloaded, and its background (`background.bin`). | Change these in PC5 (the game's menu), not by hand. You can add a `winedebug.txt` here when an issue asks for a more detailed log: see [Logs and debugging](Logs-and-debugging#a-more-detailed-log-for-one-game). |
+| `prefixes/<game>/pc5/` | PC5's notes on the game (`info.txt`), its controller and frame generation (`controls.txt`), its cover (`cover.bin`) and its background (`background.bin`). | Change these in PC5 (the game's menu), not by hand. You can add a `winedebug.txt` here when an issue asks for a more detailed log: see [Logs and debugging](Logs-and-debugging#a-more-detailed-log-for-one-game). |
 | `profiles/<game>.profile` | The game's prospero-win profile. | No: PC5 writes it again each time the game starts. Use `launch.txt` for launch options. |
 | `covers/` | Your own covers for installed games. | Yes. See [Covers](Covers#for-a-game-already-installed). |
 | `backgrounds/` | Your own backgrounds for installed games. | Yes. See [Backgrounds](Covers#backgrounds). |
 | `sounds/` | Your own startup sounds. | Yes. See [Settings](Settings#startup-sound). |
-| `saves/<game>/` | A game's Windows (its saves, settings, registry and options) without the game, kept by **Keep saves** when it was uninstalled. Installing the game again can put it back. | Delete it in **Options › Game maintenance › Uninstall game**. See [Keeping a game's saves](Installing-games#keeping-a-games-saves). |
+| `saves/<game>/` | A game's Windows (its saves, settings, registry and options) without the game or its pictures, kept by **Keep saves** when it was uninstalled. Installing the game again can put it back. | Delete it in **Options › Game maintenance › Uninstall game**. See [Keeping a game's saves](Installing-games#keeping-a-games-saves). |
+| `api_keys.txt` | Your API keys, as `NAME=value` lines: `STEAMGRIDDB_API_KEY` for [SteamGridDB](Covers#steamgriddb). PC5 makes it, with the keys empty, the first time it opens, and never deletes it. | Yes: put your key in it. PC5 never shows a key or logs it. |
 | `pc5/settings.txt` | PC5's [Settings](Settings). | Change them in PC5. A missing file, or a line PC5 doesn't know, gives the default. |
 | `PPSA11018/pc5/manifest.txt` | In the app's own folder (from 1.9.0): every file of the release, with its size and SHA-256. PC5's updater compares it with the new release's list to download only the files that changed. | No. If it is missing or a file differs from it, PC5 downloads the whole app when it updates. |
 | `logs/` | Session logs: `session-N.log` while running, then one `issue-….zip` or `log-….zip` per session (with the game's own logs and crash files), kept for seven days. | Copy the zip off to [report a problem](Reporting-a-problem). |

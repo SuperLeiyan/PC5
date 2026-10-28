@@ -322,3 +322,18 @@ controller's speaker.
 | 150 | A DirectDraw game (Baldur's Gate II): Graphics API › WineD3D on Vulkan, start it | it draws; compare its pauses with Auto | `PW_WINE64 debug_env=WINE_D3D_CONFIG` |
 | 151 | An OpenGL or Vulkan game › Graphics | no Graphics API row | |
 | 152 | Settings › Overlay: every line on, Size › Large; start a game | two lines at a time in big digits, the next two every 3 seconds, the memory as "…G"; Normal again shows every line at once | `PC5 settings … size=large` |
+
+## SteamGridDB, readable menus (1.9.3)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 153 | Open PC5 with no `/data/prospero-win/api_keys.txt` | it opens as before; the file is there afterwards, explained, `STEAMGRIDDB_API_KEY=` empty | |
+| 154 | Settings › System › Picture sources | Steam, SteamGridDB (**No key**, its line naming api_keys.txt), GOG, PCGamingWiki, Wikidata; no Wikipedia | |
+| 155 | Put a SteamGridDB key in api_keys.txt; △ on a game › Appearance › Cover | SteamGridDB's covers among those found, after Steam's | `PC5 picture choices=…`, no key anywhere in the log |
+| 156 | The same with a wrong key | the other sources' covers as before; Picture sources' SteamGridDB row says it refused the key | `PC5 SteamGridDB refused the key in api_keys.txt (HTTP 401)`, once, with no key |
+| 157 | Install a game Steam has (key in place) | its cover from Steam; its background from Steam, or SteamGridDB's where Steam has none | `PC5 background game=… from=Steam` or `from=SteamGridDB` |
+| 158 | Uninstall a game with Keep saves | `/data/prospero-win/saves/<game>/pc5/` has no cover.bin, background.bin or background.txt; controls.txt is there | |
+| 159 | A game installed with 1.9.2: open PC5 1.9.3 | its `pc5/cover-original.jpg` (or .png) is gone, its cover as before | |
+| 160 | △ on a Direct3D 11 game › Graphics › Graphics API | a window: Auto, WineD3D, WineD3D on Vulkan, each with its whole description, the one in use marked "In use"; ✕ takes the one chosen, ○ leaves it | `PC5 screen=graphics-api` |
+| 161 | Walk every row of every Settings page and a game's menu pages | no description cut with "…", none under the ✕ / ○ hints | |
+| 162 | Settings › System › Check now, with a newer PC5 out | its rows fit above the hints | |

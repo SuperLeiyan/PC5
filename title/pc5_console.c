@@ -469,7 +469,7 @@ void pc5_console_run(const Pc5Console *config)
     }
 
     watch_for_crashes(config->root);
-    platform = (Pc5Platform){ NULL, { NULL, pc5_net_get, pc5_net_download }, clock_text, play, log_line, notify_text,
+    platform = (Pc5Platform){ NULL, { NULL, pc5_net_get, pc5_net_download, pc5_net_get_authorized }, clock_text, play, log_line, notify_text,
                               unix_time, enter == 0, restart, sound_try, keyboard_open, keyboard_state, keyboard_close };
     {
         Pc5UiConfig ui_config = { config->root, template_prefix, fonts, usb_roots, PC5_HOME_ROOT, tile_template,

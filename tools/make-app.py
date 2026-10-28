@@ -284,10 +284,11 @@ Built from <https://github.com/bornaradusin/PC5> at commit {repo_commit}:
 - `pc5/sounds`: the startup sounds to choose from (`art/sounds` in that repository), played
   on the controller's speaker when PC5 is opened.
 
-Covers are looked up on Steam's store, GOG's catalogue and Wikipedia, which need no
-account; they are saved with each game on the console.
+Covers are looked up on Steam's store, GOG's catalogue, PCGamingWiki and Wikidata, which
+need no account, and on SteamGridDB with the player's own key (api_keys.txt); they are saved
+with each game on the console.
 
-PC5 is not made by or connected to Sony, Valve, GOG, GitHub or the Wikimedia Foundation.
+PC5 is not made by or connected to Sony, Valve, GOG, SteamGridDB, GitHub or the Wikimedia Foundation.
 """)
 
     stamp = calendar.timegm(STAMP)
