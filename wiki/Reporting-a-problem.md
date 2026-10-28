@@ -6,6 +6,8 @@ Report problems as **GitHub issues**: <https://github.com/bornaradusin/PC5/issue
 
 Please don't report problems in ProsperoStore comments. Comments can't hold a log file, and they can't be followed up the way an issue can.
 
+An idea for something PC5 could do isn't a problem: post it in [Discussions › Ideas](https://github.com/bornaradusin/PC5/discussions/new?category=ideas), where others can vote for it.
+
 ## Before you report
 
 1. **Update to the newest PC5** and try again. A log from an older version often shows a problem that is already fixed. See [Updating PC5](Installing-and-updating#updating-pc5).

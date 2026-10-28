@@ -72,7 +72,8 @@ ProsperoStore's comments, with the log attached. PC5 keeps a log of each game's 
 in `/data/prospero-win/logs/`, as a zip with the game's own logs and crash files from that
 session. When a game crashes, PC5 says so the next time it opens; **△** there shows a QR code
 that opens GitHub's form for a new issue, already filled in. See
-[Reporting a problem](https://github.com/bornaradusin/PC5/wiki/Reporting-a-problem).
+[Reporting a problem](https://github.com/bornaradusin/PC5/wiki/Reporting-a-problem). Ideas for
+something PC5 could do go in [Discussions › Ideas](https://github.com/bornaradusin/PC5/discussions/new?category=ideas).
 
 ## Building
 

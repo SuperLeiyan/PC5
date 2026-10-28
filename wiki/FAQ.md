@@ -108,3 +108,6 @@ Update to the newest PC5 and try again. If it still crashes, [report it on GitHu
 
 **Where do I report a problem?**
 As an issue on GitHub, <https://github.com/bornaradusin/PC5/issues>, with the game's log attached. Not in ProsperoStore comments. See [Reporting a problem](Reporting-a-problem).
+
+**Can I suggest something PC5 could do?**
+Yes: post it in [Discussions › Ideas](https://github.com/bornaradusin/PC5/discussions/categories/ideas) with [the idea form](https://github.com/bornaradusin/PC5/discussions/new?category=ideas). If someone has posted it already, give theirs a 👍, so the ideas most wanted are easy to see.
