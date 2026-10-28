@@ -6,7 +6,7 @@ body:
       value: |
         One report per game and PC5 version: a game that runs in PC5, and how well. Within a minute or two of posting, your report is in the [game compatibility list](https://github.com/bornaradusin/PC5/wiki/Game-compatibility).
 
-        **A game that doesn't start or isn't playable: open an [issue](https://github.com/bornaradusin/PC5/issues/new/choose) instead**, with the game's log from `/data/prospero-win/logs/` (PC5's **Report on GitHub** writes one for you). The list shows the game as being looked at while its issue is open, then as resolved (it runs) or unresolved (it doesn't run), as the issue is closed.
+        **A game that doesn't start or isn't playable: open an [issue](https://github.com/bornaradusin/PC5/issues/new/choose) instead**, with the game's log from `/data/prospero-win/logs/` (PC5's **Report on GitHub** writes one for you). The list shows the game as being looked at while its issue is open, then as working perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed as not planned.
   - type: input
     id: game
     attributes:

@@ -8,8 +8,9 @@ places.
   headings, each followed by its answer). It lists as posted: works perfectly, or playable with
   issues. Each one gets one comment once the page with it is published.
 - A game that doesn't run: an issue in this repository, with the game's log. It lists by its
-  state: being looked at while it is open; resolved (it runs) once it is closed as completed;
-  unresolved (it doesn't run) once it is closed as not planned. An issue closed as a duplicate
+  state: being looked at while it is open; working perfectly once it is closed as completed
+  (unless a player's report lists the game already); unresolved (it doesn't run) once it is
+  closed as not planned. An issue closed as a duplicate
   isn't listed. The game is the issue's "Game" field (.github/ISSUE_TEMPLATE/1-game.yml, which
   PC5's Report on GitHub opens filled in), or the "**Game:**" line older PC5s wrote. For an
   issue written by hand, before the form, games-by-issue.txt beside this script names it, or
@@ -41,9 +42,9 @@ RESULTS = {  # the form's answers, best first, with the mark the table shows
 }
 NOT_RUNNING = ("Starts but not playable", "Doesn't start")   # older reports: their issue lists the game
 LOOKED_AT = "🔍 Being looked at"     # an issue still open
-RESOLVED = "✅ Resolved: runs"       # an issue closed as completed
+FIXED = "Works perfectly"           # an issue closed as completed
 UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
-SHOWN = ["Works perfectly", "Playable with issues", RESOLVED, LOOKED_AT, UNRESOLVED]
+SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, UNRESOLVED]
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
@@ -158,7 +159,9 @@ def main() -> int:
         if not discussions["pageInfo"]["hasNextPage"]:
             break
         after = discussions["pageInfo"]["endCursor"]
-    reports += issue_reports(owner, name, named)
+    # A game with an issue, by how it stands; one fixed, only when no report lists it already.
+    reported = {r["game"].casefold() for r in reports}
+    reports += [r for r in issue_reports(owner, name, named) if r["shown"] != FIXED or r["game"].casefold() not in reported]
 
     reports.sort(key=lambda r: (r["game"].casefold(), SHOWN.index(r["shown"]), r["date"]))
     counts = {shown: sum(1 for r in reports if r["shown"] == shown) for shown in SHOWN}
@@ -181,8 +184,9 @@ def main() -> int:
         lines.append("| *No reports yet* | | | | | | | |")
     lines += ["", "A game that crashes, doesn't start or isn't playable: open an "
               f"[issue](https://github.com/{owner}/{name}/issues/new/choose) with its log (PC5's **Report on GitHub** "
-              "writes one for you). The game shows as being looked at while the issue is open, then as resolved "
-              "(it runs) or unresolved (it doesn't run), as the issue is closed."]
+              "writes one for you). The game shows as being looked at while the issue is open, then as working "
+              "perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed "
+              "as not planned."]
 
     page = "\n".join([
         "Which games run in PC5: the games players report running, from the [Game compatibility]"
@@ -275,7 +279,7 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             elif node["stateReason"] == "NOT_PLANNED" or "wontfix" in issue["labels"]:
                 shown = UNRESOLVED
             else:
-                shown = RESOLVED
+                shown = FIXED
             pc5 = re.match(r"\s*v?([0-9][0-9.]*)", fields.get("PC5 version", "")) or PC5_LINE.search(body)
             saw = first_line(fields.get("What PC5 saw", "")) or first_line(fields.get("What goes wrong", ""))
             if not saw and SAW_LINE.search(body):
@@ -284,7 +288,7 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                 rows[game.casefold()] = {   # issues come oldest first: a newer one takes the game's row
                     "told": True, "locked": True, "game": game, "shown": shown,
                     "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "", "settings": "",
-                    "notes": saw if shown != RESOLVED else "",
+                    "notes": saw if shown != FIXED else "",
                     "url": node["url"], "number": node["number"],
                     "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
                 }
@@ -348,7 +352,7 @@ def needs_issue(discussion: dict, owner: str, name: str, asked: bool) -> None:
             "",
             f"Open an [issue](https://github.com/{owner}/{name}/issues/new/choose) and attach the game's zip "
             "from `/data/prospero-win/logs/` (PC5's **Report on GitHub** writes it for you). The game is then "
-            "listed as being looked at, and as resolved or unresolved once the issue is closed.",
+            "listed as being looked at, then as working perfectly or unresolved, as the issue is closed.",
         ])
         if graphql("""mutation($id: ID!, $body: String!) { addDiscussionComment(input: {discussionId: $id, body: $body}) {
                 comment { id } } }""", fatal=False, id=discussion["id"], body=body) is not None:
