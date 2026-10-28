@@ -75,6 +75,27 @@ trap 'kill $good $other 2>/dev/null' EXIT
 for _ in $(seq 100); do [[ -f $out/tls/ready1 && -f $out/tls/ready2 ]] && break; sleep 0.1; done
 "$out/test_net" "$out/tls/spare.pem" "$out/tls/ca.pem" 18443 18444 2>/dev/null
 
+# Wine patch 0935: the MOVs through %fs: that Wine's handler does when the kernel didn't apply
+# an FS base repair, taken from Wine's signal_x86_64.c with prospero-win's patches applied
+# (tools/build.sh sources fetches Wine; without it the check is left out, and says so).
+wine=$PW/.deps/wine/source
+if [[ -f $wine/dlls/ntdll/unix/signal_x86_64.c ]]; then
+    mkdir -p "$out/wine-fs/dlls/ntdll/unix"
+    cp "$wine/dlls/ntdll/unix/signal_x86_64.c" "$wine/dlls/ntdll/unix/unix_private.h" "$out/wine-fs/dlls/ntdll/unix/"
+    for patch in "$PW"/wine/patches/*.patch; do
+        grep -q '^+++ b/dlls/ntdll/unix/\(signal_x86_64\.c\|unix_private\.h\)' "$patch" || continue
+        git -C "$out/wine-fs" apply --include=dlls/ntdll/unix/signal_x86_64.c --include=dlls/ntdll/unix/unix_private.h \
+            "$patch"
+    done
+    awk '/^static BOOL pw_has_modrm/{p=1} /^static BOOL pw_repair_guest_fs/{p=0} p' \
+        "$out/wine-fs/dlls/ntdll/unix/signal_x86_64.c" > "$out/wine-fs/fs_funcs.c"
+    grep -q pw_emulate_fs_mov "$out/wine-fs/fs_funcs.c" || { echo "test_wine_fs: Wine patch 0935 isn't applied" >&2; exit 1; }
+    cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -I"$out/wine-fs" tests/test_wine_fs.c -o "$out/test_wine_fs"
+    "$out/test_wine_fs"
+else
+    echo "test_wine_fs: left out, no Wine source at $wine (tools/build.sh sources fetches it)"
+fi
+
 # Clang 18, as the console build uses it, finds nothing to warn about either.
 for file in title/pc5*.c; do
     case $file in *_ps5.c|*console.c) continue ;; esac   # the console's own: built by tools/build.sh

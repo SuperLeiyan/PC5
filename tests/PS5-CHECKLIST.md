@@ -302,3 +302,11 @@ controller's speaker.
 | 140 | Update now, then ○ while the update zip downloads | it stops; PC5 is as it was; it doesn't go on to the whole app | `PC5 update stopped: Cancelled.` |
 | 141 | Put 1.9.0 back, change one of its files that the next version doesn't change (add a line to `LICENSE` over FTP), then Update now | the update zip is downloaded first, then the whole app; the update is installed and `LICENSE` is the release's again | `PC5 update can't use the update zip (1 files aren't in the update zip or on the console as it needs them); downloading the whole app`, then `PC5 update using PPSA11018.zip size=…` |
 | 142 | Put 1.9.0 back and delete its `pc5/manifest.txt`, then Update now | only the whole app is downloaded; the dialog gave the whole app's size | `PC5 update: PC5's folder has no list of its files (pc5/manifest.txt), so the whole app is downloaded` |
+
+## The thread data of 32-bit code the console didn't repair (1.9.1)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 143 | Fallout 1's falloutwHR.exe (the high-resolution patch's program): start it | it gets past its start to its intro or menu, with no crash in `ntdll.dll` reading FF81C098 | `wine-ps5: 32-bit FS base repaired (1)`, then if the console didn't take a repair, `the 32-bit FS base repair didn't take at …` once and `32-bit %fs: access done by Wine (1): …`; no `the 32-bit FS base was not repaired` |
+| 144 | Fallout 1's falloutw.exe and Fallout 2's Fallout2.exe and HR.exe | they start as on 1.9.0 | as on 1.9.0 |
+| 145 | Update from 1.9.0 to 1.9.1 with PC5's updater | the download is about the update zip's size, far less than the whole app | `PC5 update using PPSA11018-update.zip size=…` |

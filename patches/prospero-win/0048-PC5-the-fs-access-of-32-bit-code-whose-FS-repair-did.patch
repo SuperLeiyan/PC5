@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 12:00:00 +0000
+Subject: [PATCH 48/48] PC5: the %fs: access of 32-bit code whose FS repair didn't
+ take is done by Wine (Wine patch 0935)
+
+Patch 0928's repair of the FS base isn't always applied by the kernel:
+falloutwHR.exe was repaired once in GetStdHandle, then faulted again and
+again in RtlEnterCriticalSection (mov %fs:0x18,%eax) and crashed. When
+the same fault comes again at once, the faulting MOV between a register
+and a %fs: operand is now done on the 32-bit TEB by Wine's handler, and
+the thread goes on.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...e-fs-access-a-repair-didn-t-take-for.patch | 201 ++++++++++++++++++
+ 3 files changed, 203 insertions(+)
+ create mode 100644 wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 5539e23..f0daa3c 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -580,6 +580,7 @@ wine/patches/0931-ntdll-ps5-a-settings-tool-is-not-handed-off.patch
+ wine/patches/0932-win32u-ps5-centre-the-part-a-display-mode-covers.patch
+ wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patch
+ wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
++wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 48eb487..20554c8 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -138,6 +138,7 @@ before evaluating a candidate built from that cache.
+ | 0932 | `win32u`: the part of the desktop a display mode smaller than it covers is centred, as win32u's `map_monitor_rect` maps the mode (scaled by the ratio of the sides that fit, about the desktop's centre); the driver took it to start at the top left. Frames show that part and the pointer stops at its edges: a 1024x768 game on a 1920x1080 desktop covers 240,0 to 1680,1080, and a game that follows the system's pointer (Sacred Underworld) reached only about five sixths of its width |
+ | 0933 | `dinput`: each of the PS5 title's controllers a game finds as a DirectInput joystick (patch 0927) is also in the device manager's list, as Windows lists an Xbox 360 controller's HID device: volatile keys `HKLM\System\CurrentControlSet\Enum\HID\VID_045E&PID_028E&IG_0n\PS5&TITLE&n` (`Class` HIDClass, its `ClassGUID`, `DeviceDesc`, `Mfg`). A game that leaves XInput devices to XInput tells them apart by that list through WMI's `Win32_PnPEntity` (`IsXInputDevice`); Batman: Arkham Knight took the controller for another kind of joystick and never asked XInput for it |
+ | 0934 | `nsi`: without `\\.\Nsi` (a PS5 title starts no `winedevice.exe`, so no `nsiproxy.sys`) the NSI requests are answered in `nsi.dll` with the software loopback interface alone, as Windows always has it: the NDIS interface table and index-to-LUID map, and the IPv4 and IPv6 interface and unicast tables (127.0.0.1/8, ::1/128), filled as `nsiproxy.sys` fills a Unix `lo`; the other tables list no rows. `GetAdaptersAddresses`, `GetIfTable`, `GetIpAddrTable` and the like failed with error 2, and Java's `NetworkInterface` threw an Error on that: Shattered Pixel Dungeon closed when it started a new game. With the device nothing changes |
++| 0935 | `ntdll`: when the kernel doesn't apply a 0928 repair (the same fault again within a millisecond, in the same state), the faulting instruction, a plain MOV of a byte or a dword between a register and a `%fs:` operand, is done by the handler on the 32-bit TEB and the thread goes on after it; the thread's later faulting `%fs:` MOVs are done so at once, with the repair still written into each frame. falloutwHR.exe was repaired once in `GetStdHandle`, then faulted 64 times in a row in `RtlEnterCriticalSection` (`mov %fs:0x18,%eax`) and crashed. The first miss is logged with the frame's selector and base |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch b/wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+new file mode 100644
+index 0000000..e55cb68
+--- /dev/null
++++ b/wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+@@ -0,0 +1,201 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Wed, 28 Oct 2026 12:00:00 +0000
++Subject: [PATCH] ntdll: Do the %fs: MOV of 32-bit code whose FS base repair
++ didn't take on PS5.
++
++Patch 0928 repairs the FS base of 32-bit code that loaded FS again: the
++TEB's base goes into the signal frame and the kernel sets it on sigreturn.
++The kernel doesn't always apply it: falloutwHR.exe's first fault, in
++GetStdHandle, was repaired, but 27 ms later the same thread faulted in
++RtlEnterCriticalSection (mov %fs:0x18,%eax) in the same state 64 times in
++a row, and the game crashed reading FF81C098.
++
++A fault again at once in the same state (within a millisecond) means the
++repair didn't take. That faulting instruction, when it is a plain MOV of
++a byte or a dword between a register and a %fs: operand (64 then 88 to
++8b, a0 to a3), is now done by the handler on the TEB, and the thread goes
++on after it; from then on the thread's faulting %fs: MOVs are done so at
++once. The repair is still written into each frame, so FS is right again
++as soon as the kernel applies it. Any other instruction goes to the
++program after 64 tries, as before. The first miss is logged with the
++frame's selector and base, the handler's selector and the TEB, and the
++accesses done by the first and every hundredfold after.
++---
++diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
++index 80b2e8e..06e4d40 100644
++--- a/dlls/ntdll/unix/signal_x86_64.c
+++++ b/dlls/ntdll/unix/signal_x86_64.c
++@@ -643,6 +643,7 @@ struct amd64_thread_data
++     DWORD                 fs_repair_state; /* 0344 the guest state of the last FS base repair */
++     DWORD                 fs_repair_count; /* 0348 repairs in a row in that same state */
++     ULONGLONG             fs_repair_time;  /* 0350 when the last one was, in microseconds */
+++    DWORD                 fs_repair_misses; /* 0358 repairs the kernel didn't apply: their accesses are done here */
++ #endif
++ };
++ 
++@@ -2724,12 +2725,103 @@ static BOOL pw_fs_offset( const BYTE *code, unsigned int len, const ucontext_t *
++     return TRUE;
++ }
++ 
+++static void pw_set_reg32( ucontext_t *sigcontext, unsigned int reg, DWORD value )
+++{
+++    switch (reg)
+++    {
+++    case 0: RAX_sig(sigcontext) = value; break;
+++    case 1: RCX_sig(sigcontext) = value; break;
+++    case 2: RDX_sig(sigcontext) = value; break;
+++    case 3: RBX_sig(sigcontext) = value; break;
+++    case 4: RSP_sig(sigcontext) = value; break;
+++    case 5: RBP_sig(sigcontext) = value; break;
+++    case 6: RSI_sig(sigcontext) = value; break;
+++    default: RDI_sig(sigcontext) = value; break;
+++    }
+++}
+++
+++/* A byte register: AL, CL, DL, BL, then AH, CH, DH, BH. */
+++static BYTE pw_reg8( const ucontext_t *sigcontext, unsigned int reg )
+++{
+++    DWORD value = pw_reg32( sigcontext, reg & 3 );
+++    return reg & 4 ? (BYTE)(value >> 8) : (BYTE)value;
+++}
+++
+++static void pw_set_reg8( ucontext_t *sigcontext, unsigned int reg, BYTE value )
+++{
+++    DWORD old = pw_reg32( sigcontext, reg & 3 );
+++    pw_set_reg32( sigcontext, reg & 3, reg & 4 ? (old & ~0xff00u) | ((DWORD)value << 8) : (old & ~0xffu) | value );
+++}
+++
+++/* A repair the kernel didn't apply leaves FS on the wrong base until the thread's FS is
+++ * loaded right again, so the instruction that faulted is done here, on the TEB, and the
+++ * thread goes on after it: a plain MOV of a byte or a dword between a register and a %fs:
+++ * operand (64 then 88, 89, 8a, 8b or a0 to a3, as NtCurrentTeb and GetCurrentThreadId read
+++ * %fs:0x18 and %fs:0x24). FALSE for any other instruction, or when the operand can't be
+++ * reached: the fault is then the program's, as before. */
+++static BOOL pw_emulate_fs_mov( ucontext_t *sigcontext, const BYTE *code, unsigned int len, DWORD teb32 )
+++{
+++    unsigned int i = 0, size, reg = 0;
+++    BYTE op, modrm, mod, rm, sib = 0;
+++    DWORD offset, value = 0;
+++    BOOL load;
+++
+++    if (len < 2 || code[i++] != 0x64) return FALSE;
+++    op = code[i++];
+++    if (op >= 0xa0 && op <= 0xa3)
+++    {
+++        if (i + 4 > len) return FALSE;
+++        memcpy( &offset, code + i, 4 );
+++        i += 4;
+++        size = op & 1 ? 4 : 1;
+++        load = op <= 0xa1;
+++    }
+++    else if (op >= 0x88 && op <= 0x8b)
+++    {
+++        if (i >= len) return FALSE;
+++        modrm = code[i++];
+++        mod = modrm >> 6;
+++        reg = (modrm >> 3) & 7;
+++        rm = modrm & 7;
+++        if (mod == 3) return FALSE;
+++        if (rm == 4)
+++        {
+++            if (i >= len) return FALSE;
+++            sib = code[i++];
+++            if ((sib & 7) == 5 && !mod) i += 4;
+++        }
+++        else if (rm == 5 && !mod) i += 4;
+++        if (mod == 1) i += 1;
+++        else if (mod == 2) i += 4;
+++        if (i > len || !pw_fs_offset( code, i, sigcontext, &offset )) return FALSE;
+++        size = op & 1 ? 4 : 1;
+++        load = op >= 0x8a;
+++    }
+++    else return FALSE;
+++
+++    if (load)
+++    {
+++        if (virtual_uninterrupted_read_memory( ULongToPtr( teb32 + offset ), &value, size ) != size) return FALSE;
+++        if (op >= 0xa0) { if (size == 4) RAX_sig(sigcontext) = value; else pw_set_reg8( sigcontext, 0, (BYTE)value ); }
+++        else if (size == 4) pw_set_reg32( sigcontext, reg, value );
+++        else pw_set_reg8( sigcontext, reg, (BYTE)value );
+++    }
+++    else
+++    {
+++        value = op >= 0xa0 ? (size == 4 ? (DWORD)RAX_sig(sigcontext) : pw_reg8( sigcontext, 0 ))
+++                           : (size == 4 ? pw_reg32( sigcontext, reg ) : pw_reg8( sigcontext, reg ));
+++        if (virtual_uninterrupted_write_memory( ULongToPtr( teb32 + offset ), &value, size )) return FALSE;
+++    }
+++    RIP_sig(sigcontext) += i;
+++    return TRUE;
+++}
+++
++ static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext, siginfo_t *siginfo,
++                                 const EXCEPTION_RECORD *rec )
++ {
++-    static LONG repairs;
+++    static LONG repairs, emulated;
++     struct amd64_thread_data *amd64_data = amd64_thread_data( data );
++-    DWORD teb32, offset, fault, expected, state;
+++    DWORD teb32, offset, fault, expected, state, state_rip;
++     BYTE code[16];
++     unsigned int len;
++     struct timespec now;
++@@ -2756,10 +2848,11 @@ static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext
++     __asm__( "movw %%fs,%0" : "=r" (sel) );
++     if (!sel) return FALSE;
++ 
++-    /* A repair the kernel did not apply would fault again at once in the same state: after
++-     * 64 of those, each within a millisecond of the last, the fault goes to the program as
++-     * before. A program that loads FS again later faults again later, and is repaired. */
++-    state = (DWORD)RIP_sig(sigcontext);
+++    /* A repair the kernel did not apply faults again at once in the same state (within a
+++     * millisecond): the faulting MOV is then done here (below); any other instruction, after
+++     * 64 of those, goes to the program as before. A program that loads FS again later faults
+++     * again later, and is repaired. */
+++    state = state_rip = (DWORD)RIP_sig(sigcontext);
++     state = state * 31 + (DWORD)RAX_sig(sigcontext);
++     state = state * 31 + (DWORD)RCX_sig(sigcontext);
++     state = state * 31 + (DWORD)RDX_sig(sigcontext);
++@@ -2776,12 +2869,35 @@ static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext
++         amd64_data->fs_repair_count = 0;
++     amd64_data->fs_repair_state = state;
++     amd64_data->fs_repair_time = now_us;
++-    if (++amd64_data->fs_repair_count > 64)
+++    /* The same fault again at once: the kernel didn't apply the repair (falloutwHR.exe in
+++     * RtlEnterCriticalSection, after one in GetStdHandle that it did apply). From then on
+++     * this thread's faulting %fs: MOVs are done here, with the repair still written into
+++     * the frame, so FS is right again as soon as the kernel takes it. */
+++    if (++amd64_data->fs_repair_count > 1 || amd64_data->fs_repair_misses)
++     {
++-        if (amd64_data->fs_repair_count == 65)
++-            MESSAGE( "wine-ps5: the 32-bit FS base was not repaired at %08x (fault at %08x)\n",
++-                     (DWORD)RIP_sig(sigcontext), fault );
++-        return FALSE;
+++        if (amd64_data->fs_repair_count == 2 && !amd64_data->fs_repair_misses++)
+++            MESSAGE( "wine-ps5: the 32-bit FS base repair didn't take at %08x (fault at %08x): fs %04x base %llx in "
+++                     "the frame, selector %04x, teb %08x; its %%fs: accesses are done by Wine from here\n",
+++                     (DWORD)RIP_sig(sigcontext), fault, (unsigned int)FS_sig(sigcontext),
+++                     (unsigned long long)FSBASE_sig(sigcontext), sel, teb32 );
+++        if (pw_emulate_fs_mov( sigcontext, code, len, teb32 ))
+++        {
+++            count = InterlockedIncrement( &emulated );
+++            if (count == 1 || count == 100 || count == 10000 || count == 1000000)
+++                MESSAGE( "wine-ps5: 32-bit %%fs: access done by Wine (%d): %08x for %%fs:%x\n", count, state_rip,
+++                         offset );
+++            amd64_data->fs_repair_count = 0;
+++            FSBASE_sig(sigcontext) = teb32;
+++            FS_sig(sigcontext) = sel;
+++            return TRUE;
+++        }
+++        if (amd64_data->fs_repair_count > 64)
+++        {
+++            if (amd64_data->fs_repair_count == 65)
+++                MESSAGE( "wine-ps5: the 32-bit FS base was not repaired at %08x (fault at %08x)\n",
+++                         (DWORD)RIP_sig(sigcontext), fault );
+++            return FALSE;
+++        }
++     }
++ 
++     count = InterlockedIncrement( &repairs );
++-- 
++2.43.0
+-- 
+2.43.0
+
