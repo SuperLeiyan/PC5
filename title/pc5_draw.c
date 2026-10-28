@@ -663,6 +663,8 @@ static void draw_run(Pc5Canvas *c, const Pc5Fonts *fonts, Pc5Face face, int x, i
     }
 }
 
+int pc5_text_cuts;
+
 int pc5_text(Pc5Canvas *c, const Pc5Fonts *fonts, Pc5Face face, int x, int y, uint32_t color, const char *text,
              int max_width, int align)
 {
@@ -680,6 +682,7 @@ int pc5_text(Pc5Canvas *c, const Pc5Fonts *fonts, Pc5Face face, int x, int y, ui
         while (bytes > 0 && text[bytes - 1] == ' ') bytes--;
         width = (width_64(fonts, face, text, bytes) + width_64(fonts, face, ellipsis, 3) + 63) / 64;
         cut = 1;
+        pc5_text_cuts++;
     }
     if (align == 1) x -= width / 2;
     else if (align == 2) x -= width;
@@ -714,6 +717,33 @@ int pc5_text_wrap(Pc5Canvas *c, const Pc5Fonts *fonts, Pc5Face face, int x, int 
         line[n] = 0;
         int lx = align == 1 ? x + max_width / 2 : x;
         pc5_text(c, fonts, face, lx, y + lines * line_height, color, line, max_width, align);
+        text += fit;
+        lines++;
+    }
+    return lines;
+}
+
+int pc5_text_lines(const Pc5Fonts *fonts, Pc5Face face, int max_width, const char *text)
+{
+    int lines = 0;
+
+    if (!fonts->atlas) return *text ? 1 : 0;
+    while (*text) {
+        size_t take = 0, fit = 0, length;
+        while (*text == ' ') text++;
+        if (!*text) break;
+        length = strlen(text);
+        /* As many words as fit, as pc5_text_wrap takes them. */
+        while (take < length) {
+            size_t next = take;
+            while (next < length && text[next] == ' ') next++;
+            while (next < length && text[next] != ' ') next++;
+            if (width_64(fonts, face, text, next) > max_width * 64 && fit) break;
+            fit = next;
+            take = next;
+            if (width_64(fonts, face, text, next) > max_width * 64) break;
+        }
+        if (!fit) fit = length;
         text += fit;
         lines++;
     }

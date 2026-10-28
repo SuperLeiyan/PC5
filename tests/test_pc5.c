@@ -1646,6 +1646,28 @@ static void until_screen(Pc5Ui *ui, const char *name, Pc5Canvas *canvas)
     for (int i = 0; i < 20000 && strcmp(pc5_ui_screen(ui), name); i++) frames(ui, 0, 0, 1, canvas);
 }
 
+/* How many texts were cut short (with "…") pressing key (0: none) and drawing again. */
+static int cuts_after(Pc5Ui *ui, uint32_t key, Pc5Canvas *canvas)
+{
+    pc5_text_cuts = 0;
+    if (key) press(ui, key, canvas);
+    pc5_ui_draw(ui, canvas);
+    return pc5_text_cuts;
+}
+
+/* Every row of a drawer page, from the top, chosen in turn (each with its description) and,
+ * sideways, with its value changed both ways: no text cut short. It ends on the last row. */
+static void rows_uncut(Pc5Ui *ui, Pc5Canvas *canvas, const char *where, int sideways)
+{
+    for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, canvas);
+    for (int i = 0; i < 12; i++) {
+        int cut = cuts_after(ui, 0, canvas);
+        if (sideways) cut += cuts_after(ui, PC5_KEY_RIGHT, canvas) + cuts_after(ui, PC5_KEY_LEFT, canvas);
+        CHECK(!cut, "%s, row %d: no text cut short (%d)", where, i, cut);
+        press(ui, PC5_KEY_DOWN, canvas);
+    }
+}
+
 /* ---- a game's controller ----------------------------------------------------------------------------- */
 
 static void test_controls(void)
@@ -4787,12 +4809,60 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);
     until_screen(ui, "settings", &canvas);
     CHECK(console.notifications == 1, "once per release");
+    /* With that newer PC5 known: every page of Settings, each row and value, has its text whole. */
+    rows_uncut(ui, &canvas, "System", 1);
+    for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, &canvas);
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Picture sources */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    rows_uncut(ui, &canvas, "Picture sources", 1);
+    press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_BACK, &canvas);
+    rows_uncut(ui, &canvas, "Settings", 0);
+    for (int row = 0; row < 4; row++) {     /* Game maintenance, In games, Overlay, and System last */
+        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "System" };
+        for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, &canvas);
+        for (int i = 0; i < row; i++) press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        rows_uncut(ui, &canvas, pages[row], row > 0);
+        if (row < 3) press(ui, PC5_KEY_BACK, &canvas);
+    }
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "library"), "settings closed: %s", pc5_ui_screen(ui));
 
-    /* A game's menu: Change program, for the engine game's other program. */
+    /* Each game's menu, its first page and each group's, every row and value: no text cut short. */
     pc5_library_load(root, &library);
+    for (int g = 0; g < library.count; g++) {
+        char where[160];
+        for (int i = 0; i < 10; i++) press(ui, PC5_KEY_LEFT, &canvas);
+        for (int i = 0; i < g; i++) press(ui, PC5_KEY_RIGHT, &canvas);
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        if (strcmp(pc5_ui_screen(ui), "game-menu")) continue;
+        snprintf(where, sizeof(where), "%s's menu", library.games[g].id);
+        rows_uncut(ui, &canvas, where, 1);                  /* ends on Manage, the last row */
+        for (int page = 0; page < 3; page++) {               /* Manage, Appearance, Graphics */
+            press(ui, PC5_KEY_ACCEPT, &canvas);
+            snprintf(where, sizeof(where), "%s's menu, group %d", library.games[g].id, page);
+            rows_uncut(ui, &canvas, where, page == 2);
+            press(ui, PC5_KEY_BACK, &canvas);
+            press(ui, PC5_KEY_UP, &canvas);
+        }
+        /* The Graphics API window, where the game has one. */
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        press(ui, PC5_KEY_UP, &canvas);
+        for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, &canvas);
+        if (!cuts_after(ui, PC5_KEY_ACCEPT, &canvas) && !strcmp(pc5_ui_screen(ui), "graphics-api")) {
+            int cut = 0;
+            for (int i = 0; i < 3; i++) cut += cuts_after(ui, PC5_KEY_DOWN, &canvas);
+            CHECK(!cut, "%s: the Graphics API window's text whole", library.games[g].id);
+            press(ui, PC5_KEY_BACK, &canvas);
+        }
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "library"), "back to the library: %s", pc5_ui_screen(ui));
+    }
+
+    /* A game's menu: Change program, for the engine game's other program. */
     int orbital = pc5_library_find(&library, "orbital-nine");
     CHECK(orbital >= 0, "the engine game is there");
     for (int i = 0; i < 10; i++) press(ui, PC5_KEY_LEFT, &canvas);
@@ -4803,16 +4873,27 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_DOWN, &canvas);       /* Graphics */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     save_shot(&canvas, "game-menu-graphics");
-    /* Graphics API, the first row of a Direct3D 12 game: Wine's VKD3D, then Auto again; left goes back. */
+    /* Graphics API, the first row of a Direct3D 12 game: a window with each choice, Auto in use and chosen.
+       Down and accept: Wine's VKD3D; left and right don't change it; back leaves it as it is. */
+    press(ui, PC5_KEY_RIGHT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "game-menu") && !controls_has("orbital-nine", "graphics_api = wine\n"),
+          "right on Graphics API changes nothing");
     press(ui, PC5_KEY_ACCEPT, &canvas);
-    CHECK(controls_has("orbital-nine", "graphics_api = wine\n"), "Graphics API: Wine's VKD3D");
+    CHECK(!strcmp(pc5_ui_screen(ui), "graphics-api"), "Graphics API opens its window: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_DOWN, &canvas);
     pc5_ui_draw(ui, &canvas);
     save_shot(&canvas, "game-menu-graphics-api");
-    press(ui, PC5_KEY_RIGHT, &canvas);
-    CHECK(controls_has("orbital-nine", "graphics_api = auto\n"), "then Auto again");
-    press(ui, PC5_KEY_LEFT, &canvas);
-    CHECK(controls_has("orbital-nine", "graphics_api = wine\n"), "left: back to Wine's VKD3D");
-    press(ui, PC5_KEY_LEFT, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "game-menu") && controls_has("orbital-nine", "graphics_api = wine\n"),
+          "Graphics API: Wine's VKD3D: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_ACCEPT, &canvas);     /* open again on Wine's VKD3D: up to Auto, but back keeps it */
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_BACK, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "game-menu") && controls_has("orbital-nine", "graphics_api = wine\n"),
+          "back keeps Wine's VKD3D");
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
     CHECK(controls_has("orbital-nine", "graphics_api = auto\n"), "and Auto");
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);     /* Frame generation, the next row: on, then off again with right */

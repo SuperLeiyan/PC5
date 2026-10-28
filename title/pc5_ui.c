@@ -45,7 +45,7 @@ typedef enum Screen {
     S_PROGRAMS, S_INSTALL, S_STOP, S_UNINSTALL_LIST, S_UNINSTALL_CONFIRM, S_REMOVING, S_MESSAGE, S_LAUNCH,
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
-    S_PICTURE_TYPING, S_COMPATIBILITY
+    S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -54,7 +54,7 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "update", "checking", "game-menu", "game-reading", "queue-read", "queue",
                                             "buttons", "keys", "report", "upgrade-ask", "upgrading", "game-update-ask",
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
-                                            "compatibility" };
+                                            "compatibility", "graphics-api" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;
@@ -331,6 +331,7 @@ struct Pc5Ui {
     int game_page;                 /* its menu's page: GP_MAIN or a group's */
     int pad_row, pad_top;          /* Button mapping: the row chosen, the first one shown */
     int key_control, key_choice;   /* the key picker: for which control, the key chosen */
+    int api_choice;                /* the Graphics API window: the choice picked (an index of pc5_graphics_choices) */
     Pc5UpdateMemory update;
     Pc5LogIssue issue;             /* what went wrong last time, told once the library shows */
     int issue_pending;
@@ -1778,6 +1779,8 @@ static void queue_summary(Pc5Ui *ui)
 
 /* ---- Settings ----------------------------------------------------------------------------- */
 
+static int offer_update(const Pc5Ui *ui);
+
 static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *about, size_t about_size, char *value,
                          size_t value_size)
 {
@@ -1915,7 +1918,11 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_CHECK_NOW:
         *label = "Check now";
-        pc5_update_text(&ui->update.last, about, about_size);
+        if (ui->update.last.state == PC5_UPDATE_AVAILABLE && !offer_update(ui))
+            snprintf(about, about_size, "PC5 %s is out: copy it over this one from github.com/bornaradusin/PC5",
+                     ui->update.last.version);
+        else
+            pc5_update_text(&ui->update.last, about, about_size);
         break;
     case SR_STARTUP_SOUND:
         *label = "Startup sound";
@@ -1929,7 +1936,8 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_UPDATE_NOW:
         *label = "Update now";
-        snprintf(about, about_size, "Downloads PC5 %s from GitHub and installs it", ui->update.last.version);
+        snprintf(about, about_size, "Downloads PC5 %s from GitHub, installs it and restarts PC5; your games, saves "
+                 "and settings stay", ui->update.last.version);
         break;
     default:
         if (row >= SR_SOURCE && row < SR_SOURCE + PC5_PICTURE_SOURCES) {
@@ -2692,18 +2700,14 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->controls.mode = (Pc5PadMode)((ui->controls.mode + PC5_PAD_MODES + step) % PC5_PAD_MODES);
             controls_changed(ui);
             ui->dirty = 1;
-        } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_GRAPHICS_API) {
-            /* The next of the choices the game's graphics have (pc5_graphics_choices). */
+        } else if ((k & accept) && row == GR_GRAPHICS_API) {
+            /* A window with each choice and all it does: a row has room for only one. */
             Pc5Graphics choices[PC5_GRAPHICS_COUNT];
-            int count = pc5_graphics_choices(ui_game_api(ui), choices), at = 0;
+            int count = pc5_graphics_choices(ui_game_api(ui), choices);
+            ui->api_choice = 0;
             for (int i = 0; i < count; i++)
-                if (choices[i] == ui->controls.graphics) at = i;
-            if (count) {
-                at = (at + count + ((k & PC5_KEY_LEFT) ? -1 : 1)) % count;
-                ui->controls.graphics = choices[at];
-                controls_changed(ui);
-                ui->dirty = 1;
-            }
+                if (choices[i] == ui->controls.graphics) ui->api_choice = i;
+            go(ui, S_GRAPHICS_API);
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_FRAMEGEN) {
             ui->controls.frame_generation = !ui->controls.frame_generation;
             controls_changed(ui);
@@ -2868,6 +2872,18 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->controls.key[ui->key_control] = (uint8_t)ui->key_choice;
             controls_changed(ui);
             go(ui, S_BUTTONS);
+        }
+        break;
+    }
+    case S_GRAPHICS_API: {
+        Pc5Graphics choices[PC5_GRAPHICS_COUNT];
+        int count = pc5_graphics_choices(ui_game_api(ui), choices);
+        if (list_move(&ui->api_choice, count, k)) ui->dirty = 1;
+        if (k & back) go(ui, S_GAME_MENU);
+        else if ((k & accept) && ui->api_choice < count) {
+            ui->controls.graphics = choices[ui->api_choice];
+            controls_changed(ui);
+            go(ui, S_GAME_MENU);
         }
         break;
     }
@@ -3553,46 +3569,60 @@ static float drawer(Pc5Ui *ui, Pc5Canvas *c, const char *title)
     return x;
 }
 
-/* A row of Settings or a game's menu, pitch h apart: its label and value, and what it does
- * (about) only on the chosen row, under its label. */
+/* A row of Settings or a game's menu, h high: its label and value, and what it does
+ * (about) only on the chosen row, under its label, on two lines at most (the row is ROW_LINE
+ * higher for its second: rows_pitch). */
+enum { ROW_PITCH = 100, ROW_LINE = 30, ABOUT_WIDTH = 760 - 144 };
 static void drawer_row(Pc5Ui *ui, Pc5Canvas *c, float x, float y, float h, int chosen, const char *label,
                        const char *about, const char *value)
 {
     int value_w = value && value[0] ? pc5_text_width(&ui->fonts, PC5_FACE_LABEL, value) : 0;
     int two = chosen && about && about[0];
-    float high = h - 10, label_y = two ? 0.42f * high + 8 : 0.5f * high + 12, about_y = 0.82f * high + 4;
+    int lines = two && pc5_text_lines(&ui->fonts, PC5_FACE_SMALL, ABOUT_WIDTH, about) > 1 ? 2 : 1;
+    float base = h - (lines - 1) * ROW_LINE - 10, high = h - 10;
+    float label_y = two ? 0.42f * base + 8 : 0.5f * base + 12, about_y = 0.82f * base + 4;
     float bar = high - 24 < 56 ? high - 24 : 56;
     if (chosen) {
         pc5_round_rect(c, x + 36, y, 760 - 72, high, 16, C_ROW);
         pc5_round_rect(c, x + 36, y + high / 2 - bar / 2, 5, bar, 2.5f, C_TEXT);
     }
     pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x + 72, (int)(y + label_y), C_TEXT, label, 600 - value_w, 0);
-    if (two) pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)x + 72, (int)(y + about_y), C_DIM, about, 760 - 144, 0);
+    if (two)
+        pc5_text_wrap(c, &ui->fonts, PC5_FACE_SMALL, (int)x + 72, (int)(y + about_y), ABOUT_WIDTH, lines, ROW_LINE, C_DIM,
+                      about, 0);
     if (value_w)
         pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x + 760 - 72, (int)(y + label_y), chosen ? C_TEXT : C_ACCENT, value, 0, 2);
 }
 
-enum { ROW_PITCH = 100 };   /* Settings' and the game menu's rows */
+/* Where a drawer's rows go, from top down to ROWS_BOTTOM, clear of the hints: ROW_PITCH apart,
+ * closer when count rows and the chosen one's second line (extra) don't fit; *extra is the
+ * room the chosen row takes beyond the pitch. */
+enum { ROWS_BOTTOM = 972 };
+static float rows_pitch(Pc5Ui *ui, float top, int count, const char *chosen_about, float *extra)
+{
+    float pitch = ROW_PITCH;
+    *extra = chosen_about && chosen_about[0] && pc5_text_lines(&ui->fonts, PC5_FACE_SMALL, ABOUT_WIDTH, chosen_about) > 1
+                 ? ROW_LINE : 0;
+    if (count > 0 && top + pitch * count + *extra > ROWS_BOTTOM) pitch = (ROWS_BOTTOM - top - *extra) / (float)count;
+    return pitch;
+}
 
 static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
 {
-    float x = drawer(ui, c, page_titles[ui->page]);
+    float x = drawer(ui, c, page_titles[ui->page]), extra;
     SettingRow rows[PAGE_ROWS];
     int count = page_rows(&ui->settings, ui->page, offer_update(ui), rows);
-    float pitch = ROW_PITCH;
+    const char *label = "";
+    char about[200], value[64];
 
+    if (ui->menu < count) setting_text(ui, rows[ui->menu], &label, about, sizeof(about), value, sizeof(value));
+    else about[0] = 0;
+    float pitch = rows_pitch(ui, 196, count, about, &extra);
     for (int i = 0; i < count; i++) {
-        const char *label = "";
-        char about[160], value[64];
         setting_text(ui, rows[i], &label, about, sizeof(about), value, sizeof(value));
-        drawer_row(ui, c, x, 196 + pitch * i, pitch, i == ui->menu, label, about, value);
+        drawer_row(ui, c, x, 196 + pitch * i + (i > ui->menu ? extra : 0), pitch + (i == ui->menu ? extra : 0),
+                   i == ui->menu, label, about, value);
     }
-    if (ui->page == PAGE_SYSTEM && ui->update.last.state == PC5_UPDATE_AVAILABLE)
-        pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)x + 72, 196 + (int)pitch * count + 60, 760 - 144, 4, 42, C_DIM,
-                      offer_update(ui) ? "Update now downloads it from GitHub, puts it in place of this PC5 and restarts "
-                                         "PC5. Your games, saves and settings stay."
-                                       : "Get it from github.com/bornaradusin/PC5 (Releases) and copy it to the console "
-                                         "the way you added PC5. Your games, saves and settings stay.", 0);
     SettingRow row = rows[ui->menu < count ? ui->menu : 0];
     int changes = row == SR_KEEP_LOGS || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
                   row == SR_STARTUP_SOUND || row == SR_STARTUP_VOLUME || row >= SR_SOURCE;
@@ -3600,121 +3630,140 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
     hints(ui, c, (int)x + 64, 1012, list, 2);
 }
 
+/* A row of a game's menu: its label, what it does (text, which may be about) and its value. */
+static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row, char *about, size_t about_size,
+                          const char **label, const char **text, const char **value)
+{
+    static const char *const more = "\xe2\x80\xba";
+    *label = *text = *value = "";
+    switch (row) {
+    case GR_PLAY:
+        *label = "Play";
+        *text = "To leave it, hold the touchpad and OPTIONS for 2 s";
+        *value = "";
+        break;
+    case GR_CONTROLLER:
+        *label = "Controller";
+        *text = ui->controls.mode == PC5_PAD_DUALSENSE ? "The game sees a DualSense, as one plugged into a PC" : ui->controls.mode == PC5_PAD_KEYBOARD ? "The buttons press keys, the sticks move the mouse" : "Games with controller support see an Xbox controller";
+        *value = pc5_pad_mode_name(ui->controls.mode);
+        break;
+    case GR_BUTTONS:
+        *label = "Button mapping";
+        *text = "The key or mouse button each one sends";
+        *value = more;
+        break;
+    case GR_GRAPHICS:
+        *label = "Graphics";
+        *text = kind & GAME_VULKAN ? (kind & GAME_32BIT ? "Frames, resolution, aspect ratio, memory and CPU" : "Frame generation, resolution, aspect ratio and CPU") : (kind & GAME_32BIT ? "Frame generation, aspect ratio, memory and CPU" : "Frame generation, aspect ratio and CPU");
+        *value = more;
+        break;
+    case GR_APPEARANCE:
+        *label = "Appearance";
+        *text = "Its cover, its background and a home screen tile";
+        *value = more;
+        break;
+    case GR_MANAGE:
+        *label = "Manage";
+        *text = kind & GAME_PC5 ? "Its program, updating it and uninstalling it" : "Its program and uninstalling it";
+        *value = more;
+        break;
+    case GR_GRAPHICS_API: {
+        int api = ui_game_api(ui);
+        const char *about_api =
+            ui->controls.graphics == PC5_GRAPHICS_AUTO
+                ? (api == PC5_API_D3D12  ? "VKD3D-Proton turns its Direct3D 12 into Vulkan"
+                   : api == PC5_API_DDRAW ? "Wine's own Direct3D draws it, with OpenGL"
+                                          : "DXVK turns its Direct3D into Vulkan")
+            : api == PC5_API_D3D12 ? "Wine's own Direct3D 12; try it if the game won't run"
+            : ui->controls.graphics == PC5_GRAPHICS_WINE_VULKAN ? "Wine's own Direct3D, drawing with Vulkan"
+                                                                 : "Wine's own Direct3D, with OpenGL; try it if the game won't run";
+        *label = "Graphics API";
+        *text = about_api;
+        *value = pc5_graphics_name(ui->controls.graphics, api);
+        break;
+    }
+    case GR_FRAMEGEN:
+        *label = "Frame generation";
+        *text = ui->controls.frame_generation ? "Held at 30 fps and shown at 60" : "The game's frames as it makes them";
+        *value = ui->controls.frame_generation ? "30 \xe2\x86\x92 60 fps" : "Off";
+        break;
+    case GR_RESOLUTION:
+        *label = "Resolution";
+        *text = ui->controls.resolution == 2 ? "Drawn at 4K, as the console shows it; four times the work of 1080p" : ui->controls.resolution == 1 ? "Drawn at 1440p and shown at 4K; sharper than 1080p, slower" : "Drawn at 1080p and shown at 4K by the console";
+        *value = ui->controls.resolution == 2 ? "4K" : ui->controls.resolution == 1 ? "1440p" : "1080p";
+        break;
+    case GR_ASPECT:
+        *label = "Aspect ratio";
+        *text = ui->controls.stretch ? "Stretched to fill the screen: a 4:3 picture gets wider" : "The picture's own shape, with bars beside a 4:3 one";
+        *value = ui->controls.stretch ? "Stretch" : "Keep";
+        break;
+    case GR_MEMORY:
+        *label = "Memory";
+        *text = ui->controls.memory_2gb ? "What Windows gives a 32-bit game that doesn't ask for more" : "Room for big textures and mods; 2 GB if the game misbehaves";
+        *value = ui->controls.memory_2gb ? "2 GB" : "4 GB";
+        break;
+    case GR_CPU_SHARING:
+        *label = "CPU sharing";
+        *text = ui->controls.cpu_sharing ? "Its threads take turns on the CPUs, as on a PC" : "Each thread keeps its CPU; On if the game stalls";
+        *value = ui->controls.cpu_sharing ? "On" : "Off";
+        break;
+    case GR_COVER:
+        *label = "Cover";
+        *text = "Another of those found, or search by another name";
+        *value = more;
+        break;
+    case GR_BACKGROUND:
+        *label = "Background";
+        *text = "Another of those found, search by another name, or none";
+        *value = more;
+        break;
+    case GR_HOME:
+        if (ui->tile[0]) snprintf(about, about_size, "Its tile, %s, starts the game", ui->tile);
+        *label = "Home screen tile";
+        *text = ui->tile[0] ? about : "A tile on the PS5's home screen that starts it";
+        *value = ui->tile[0] ? "On" : "Off";
+        break;
+    case GR_PROGRAM: {
+        const char *exe = strrchr(game->executable, '\\');
+        snprintf(about, about_size, "Now: %s", exe ? exe + 1 : game->executable);
+        *label = "Change program";
+        *text = about;
+        *value = "";
+        break;
+    }
+    case GR_UPDATE:
+        *label = "Update";
+        *text = "A newer copy from USB; its saves and settings stay";
+        *value = more;
+        break;
+    case GR_UNINSTALL:
+        *label = "Uninstall";
+        *text = "Deletes the game, or keeps its saves for later";
+        *value = "";
+        break;
+    }
+}
+
 static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
 {
     int index = pc5_library_find(&ui->library, ui->launch_id), kind = ui_game_kind(ui), page = ui->game_page;
     if (index < 0) return;
     const Pc5Game *game = &ui->library.games[index];
-    float x = drawer(ui, c, page == GP_MAIN ? game->title : game_page_titles[page]);
+    float x = drawer(ui, c, page == GP_MAIN ? game->title : game_page_titles[page]), extra;
     char about[200];
-    static const char *const more = "\xe2\x80\xba";
+    const char *label, *text, *value;
 
     GameRow rows[GAME_ROWS];
     int count = game_rows(&ui->controls, kind, page, rows);
     pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)x + 64, 182, C_DIM,
              page != GP_MAIN ? game->title : game->playable ? game->detail : game->problem, 760 - 128, 0);
+    text = "";
+    if (chosen >= 0 && chosen < count) game_row_text(ui, game, kind, rows[chosen], about, sizeof(about), &label, &text, &value);
+    float pitch = rows_pitch(ui, 226, count, text, &extra);
     for (int i = 0; i < count; i++) {
-        float y = 226 + (float)ROW_PITCH * i;
-        int on = chosen == i;
-        switch (rows[i]) {
-        case GR_PLAY:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Play", "To leave it, hold the touchpad and OPTIONS for 2 s", "");
-            break;
-        case GR_CONTROLLER:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Controller",
-                       ui->controls.mode == PC5_PAD_DUALSENSE ? "The game sees a DualSense, as one plugged into a PC"
-                       : ui->controls.mode == PC5_PAD_KEYBOARD ? "The buttons press keys, the sticks move the mouse"
-                                                               : "Games with controller support see an Xbox controller",
-                       pc5_pad_mode_name(ui->controls.mode));
-            break;
-        case GR_BUTTONS:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Button mapping", "The key or mouse button each one sends", more);
-            break;
-        case GR_GRAPHICS:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Graphics",
-                       kind & GAME_VULKAN ? (kind & GAME_32BIT ? "Frames, resolution, aspect ratio, memory and CPU"
-                                                               : "Frame generation, resolution, aspect ratio and CPU")
-                                          : (kind & GAME_32BIT ? "Frame generation, aspect ratio, memory and CPU"
-                                                               : "Frame generation, aspect ratio and CPU"),
-                       more);
-            break;
-        case GR_APPEARANCE:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Appearance", "Its cover, its background and a home screen tile", more);
-            break;
-        case GR_MANAGE:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Manage",
-                       kind & GAME_PC5 ? "Its program, updating it and uninstalling it" : "Its program and uninstalling it",
-                       more);
-            break;
-        case GR_GRAPHICS_API: {
-            int api = ui_game_api(ui);
-            const char *about_api =
-                ui->controls.graphics == PC5_GRAPHICS_AUTO
-                    ? (api == PC5_API_D3D12  ? "VKD3D-Proton turns its Direct3D 12 into Vulkan"
-                       : api == PC5_API_DDRAW ? "Wine's own Direct3D draws it, with OpenGL"
-                                              : "DXVK turns its Direct3D into Vulkan")
-                : api == PC5_API_D3D12 ? "Wine's own Direct3D 12; try it if the game won't run"
-                : ui->controls.graphics == PC5_GRAPHICS_WINE_VULKAN ? "Wine's own Direct3D, drawing with Vulkan"
-                                                                     : "Wine's own Direct3D, with OpenGL; try it if the game won't run";
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Graphics API", about_api, pc5_graphics_name(ui->controls.graphics, api));
-            break;
-        }
-        case GR_FRAMEGEN:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Frame generation",
-                       ui->controls.frame_generation ? "Held at 30 fps and shown at 60"
-                                                     : "The game's frames as it makes them",
-                       ui->controls.frame_generation ? "30 \xe2\x86\x92 60 fps" : "Off");
-            break;
-        case GR_RESOLUTION:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Resolution",
-                       ui->controls.resolution == 2   ? "Drawn at 4K, as the console shows it; four times the work of 1080p"
-                       : ui->controls.resolution == 1 ? "Drawn at 1440p and shown at 4K; sharper than 1080p, slower"
-                                                      : "Drawn at 1080p and shown at 4K by the console",
-                       ui->controls.resolution == 2 ? "4K" : ui->controls.resolution == 1 ? "1440p" : "1080p");
-            break;
-        case GR_ASPECT:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Aspect ratio",
-                       ui->controls.stretch ? "Stretched to fill the screen: a 4:3 picture gets wider"
-                                            : "The picture's own shape, with bars beside a 4:3 one",
-                       ui->controls.stretch ? "Stretch" : "Keep");
-            break;
-        case GR_MEMORY:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Memory",
-                       ui->controls.memory_2gb ? "What Windows gives a 32-bit game that doesn't ask for more"
-                                               : "Room for big textures and mods; 2 GB if the game misbehaves",
-                       ui->controls.memory_2gb ? "2 GB" : "4 GB");
-            break;
-        case GR_CPU_SHARING:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "CPU sharing",
-                       ui->controls.cpu_sharing ? "Its threads take turns on the CPUs, as on a PC"
-                                                : "Each thread keeps its CPU; On if the game stalls",
-                       ui->controls.cpu_sharing ? "On" : "Off");
-            break;
-        case GR_COVER:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Cover", "Another of those found, or search by another name", more);
-            break;
-        case GR_BACKGROUND:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Background", "Another of those found, search by another name, or none",
-                       more);
-            break;
-        case GR_HOME:
-            if (ui->tile[0]) snprintf(about, sizeof(about), "Its tile, %s, starts the game", ui->tile);
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Home screen tile",
-                       ui->tile[0] ? about : "A tile on the PS5's home screen that starts it", ui->tile[0] ? "On" : "Off");
-            break;
-        case GR_PROGRAM: {
-            const char *exe = strrchr(game->executable, '\\');
-            snprintf(about, sizeof(about), "Now: %s", exe ? exe + 1 : game->executable);
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Change program", about, "");
-            break;
-        }
-        case GR_UPDATE:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Update", "A newer copy from USB; its saves and settings stay", more);
-            break;
-        case GR_UNINSTALL:
-            drawer_row(ui, c, x, y, ROW_PITCH, on, "Uninstall", "Deletes the game, or keeps its saves for later", "");
-            break;
-        }
+        game_row_text(ui, game, kind, rows[i], about, sizeof(about), &label, &text, &value);
+        drawer_row(ui, c, x, 226 + pitch * i + (i > chosen ? extra : 0), pitch + (i == chosen ? extra : 0), chosen == i,
+                   label, text, value);
     }
     GameRow row = chosen >= 0 && chosen < count ? rows[chosen] : GR_PLAY;
     int changes = row == GR_CONTROLLER || row == GR_FRAMEGEN || row == GR_RESOLUTION || row == GR_ASPECT ||
@@ -3797,6 +3846,59 @@ static void keys_dialog(Pc5Ui *ui, Pc5Canvas *c)
         if (now && !chosen) pc5_round_frame(c, cx, cy, cell_w, cell_h, 12, 2.5f, C_ACCENT);
         pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)(cx + cell_w / 2), (int)cy + 36, chosen ? C_PANEL : C_TEXT,
                  pc5_key_label(i), (int)cell_w - 16, 1);
+    }
+    Hint list[] = { { accept_glyph(ui), "Choose" }, { back_glyph(ui), "Back" } };
+    hints(ui, c, (int)x + 60, (int)(y + h - 40), list, 2);
+}
+
+/* What a Graphics API choice does, in full, for a game whose graphics are api (the Graphics API window). */
+static const char *graphics_about(Pc5Graphics graphics, int api)
+{
+    if (graphics == PC5_GRAPHICS_AUTO)
+        return api == PC5_API_D3D12   ? "PC5's choice: VKD3D-Proton turns the game's Direct3D 12 into Vulkan. The fastest, and what most games want."
+               : api == PC5_API_DDRAW ? "PC5's choice: Wine's own Direct3D draws the game's DirectDraw with OpenGL."
+                                      : "PC5's choice: DXVK turns the game's Direct3D into Vulkan. The fastest, and what most games want.";
+    if (api == PC5_API_D3D12)
+        return "Wine's own Direct3D 12 (VKD3D). Slower than Auto; try it if the game won't start or draws wrong.";
+    if (graphics == PC5_GRAPHICS_WINE_VULKAN)
+        return "Wine's own Direct3D, drawing with Vulkan. Try it if the game draws wrong with Auto; often faster than WineD3D.";
+    return "Wine's own Direct3D, drawing with OpenGL. The slowest; try it if the game won't start with the others.";
+}
+
+/* The Graphics API window: each choice for the game, with all it does; the one in use is marked. */
+static void graphics_dialog(Pc5Ui *ui, Pc5Canvas *c)
+{
+    enum { LINE = 36, TEXT_W = 1100 - 120 - 48 };
+    Pc5Graphics choices[PC5_GRAPHICS_COUNT];
+    int api = ui_game_api(ui), count = pc5_graphics_choices(api, choices), lines[PC5_GRAPHICS_COUNT];
+    float w = 1100, h = 170 + 100, x, y, cy;
+    char title[96];
+
+    for (int i = 0; i < count; i++) {
+        lines[i] = pc5_text_lines(&ui->fonts, PC5_FACE_SMALL, TEXT_W, graphics_about(choices[i], api));
+        h += 74 + lines[i] * LINE + 16;
+    }
+    x = (W - w) / 2;
+    y = (H - h) / 2;
+    dim(c, 150);
+    panel(c, x, y, w, h);
+    pc5_text(c, &ui->fonts, PC5_FACE_HEAD, (int)x + 60, (int)y + 92, C_TEXT, "Graphics API", (int)w - 120, 0);
+    snprintf(title, sizeof(title), "The game uses %s", pc5_api_name((Pc5Api)api));
+    pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)x + 60, (int)y + 136, C_DIM, title, (int)w - 120, 0);
+    cy = y + 170;
+    for (int i = 0; i < count; i++) {
+        float bh = 74 + lines[i] * LINE;
+        int chosen = i == ui->api_choice, now = choices[i] == ui->controls.graphics;
+        pc5_round_rect(c, x + 60, cy, w - 120, bh, 16, chosen ? C_TEXT : C_ROW);
+        if (now && !chosen) pc5_round_frame(c, x + 60, cy, w - 120, bh, 16, 2.5f, C_ACCENT);
+        pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x + 84, (int)cy + 50, chosen ? C_PANEL : C_TEXT,
+                 pc5_graphics_name(choices[i], api), TEXT_W - 200, 0);
+        if (now)
+            pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)(x + w) - 84, (int)cy + 48, chosen ? C_PANEL : C_ACCENT,
+                     "In use", 200, 2);
+        pc5_text_wrap(c, &ui->fonts, PC5_FACE_SMALL, (int)x + 84, (int)cy + 50 + LINE + 6, TEXT_W, lines[i], LINE,
+                      chosen ? C_PANEL : C_DIM, graphics_about(choices[i], api), 0);
+        cy += bh + 16;
     }
     Hint list[] = { { accept_glyph(ui), "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 60, (int)(y + h - 40), list, 2);
@@ -4123,18 +4225,36 @@ static void two_buttons(Pc5Ui *ui, Pc5Canvas *c, float x, float y, const char *o
     button_row(ui, c, x, y, labels, 2, chosen, second_is_danger ? 1 : -1);
 }
 
+/* A dialog's height (*h) for its title (2 lines at most) and body (at most max_body lines), width
+ * wide, with a row of buttons under them, and where its body starts (*body_y); no lower than
+ * least (for a picture beside the text). */
+static void dialog_size(Pc5Ui *ui, int width, const char *title, const char *body, int max_body, float least,
+                        int *title_lines, int *body_lines, float *body_y, float *h)
+{
+    *title_lines = pc5_text_lines(&ui->fonts, PC5_FACE_HEAD, width, title);
+    *body_lines = body ? pc5_text_lines(&ui->fonts, PC5_FACE_BODY, width, body) : 0;
+    if (*title_lines < 1) *title_lines = 1;
+    if (*title_lines > 2) *title_lines = 2;
+    if (*body_lines > max_body) *body_lines = max_body;
+    *body_y = 200 + (*title_lines - 1) * 50;
+    *h = *body_y + (*body_lines > 0 ? *body_lines - 1 : 0) * 42 + 66 + 120;
+    if (*h < least) *h = least;
+}
+
 static void confirm_dialog(Pc5Ui *ui, Pc5Canvas *c, const char *title, const char *body, const char *one,
                            const char *two, int danger, const Pc5Picture *thumb)
 {
-    float w = 1100, h = 470, x = (W - w) / 2, y = (H - h) / 2, tx = x + 64;
+    float w = 1100, h, x = (W - w) / 2, y, tx = x + 64 + (thumb && thumb->levels ? 160 + 56 : 0), body_y;
+    int title_lines, body_lines;
+    dialog_size(ui, (int)(x + w - 64 - tx), title, body, 6, thumb && thumb->levels ? 470 : 0, &title_lines, &body_lines,
+                &body_y, &h);
+    y = (H - h) / 2;
     dim(c, 170);
     panel(c, x, y, w, h);
-    if (thumb && thumb->levels) {
-        pc5_draw_cover(c, thumb, x + 64, y + 64 + 120, 160, 240, 240, 10, 256, 256, 0);
-        tx = x + 64 + 160 + 56;
-    }
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_HEAD, (int)tx, (int)y + 110, (int)(x + w - 64 - tx), 2, 50, C_TEXT, title, 0);
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)y + 200, (int)(x + w - 64 - tx), 3, 42, C_DIM, body, 0);
+    if (thumb && thumb->levels) pc5_draw_cover(c, thumb, x + 64, y + 64 + 120, 160, 240, 240, 10, 256, 256, 0);
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_HEAD, (int)tx, (int)y + 110, (int)(x + w - 64 - tx), title_lines, 50, C_TEXT, title, 0);
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)(y + body_y), (int)(x + w - 64 - tx), body_lines, 42, C_DIM,
+                  body, 0);
     two_buttons(ui, c, tx, y + h - 120, one, two, ui->button, danger);
 }
 
@@ -4142,22 +4262,30 @@ static void confirm_dialog(Pc5Ui *ui, Pc5Canvas *c, const char *title, const cha
 static void confirm3_dialog(Pc5Ui *ui, Pc5Canvas *c, const char *title, const char *body, const char *one,
                             const char *two, const char *three, const Pc5Picture *thumb)
 {
-    float w = 1100, h = 500, x = (W - w) / 2, y = (H - h) / 2, tx = x + 64;
+    float w = 1100, h, x = (W - w) / 2, y, tx = x + 64 + (thumb && thumb->levels ? 160 + 56 : 0), body_y;
     const char *labels[3] = { one, two, three };
+    int title_lines, body_lines;
+    dialog_size(ui, (int)(x + w - 64 - tx), title, body, 6, thumb && thumb->levels ? 500 : 0, &title_lines, &body_lines,
+                &body_y, &h);
+    y = (H - h) / 2;
     dim(c, 170);
     panel(c, x, y, w, h);
-    if (thumb && thumb->levels) {
-        pc5_draw_cover(c, thumb, x + 64, y + 64 + 120, 160, 240, 240, 10, 256, 256, 0);
-        tx = x + 64 + 160 + 56;
-    }
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_HEAD, (int)tx, (int)y + 110, (int)(x + w - 64 - tx), 2, 50, C_TEXT, title, 0);
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)y + 200, (int)(x + w - 64 - tx), 4, 42, C_DIM, body, 0);
+    if (thumb && thumb->levels) pc5_draw_cover(c, thumb, x + 64, y + 64 + 120, 160, 240, 240, 10, 256, 256, 0);
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_HEAD, (int)tx, (int)y + 110, (int)(x + w - 64 - tx), title_lines, 50, C_TEXT, title, 0);
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)(y + body_y), (int)(x + w - 64 - tx), body_lines, 42, C_DIM,
+                  body, 0);
     button_row(ui, c, tx, y + h - 120, labels, 3, ui->button, 2);
 }
 
 static void message_dialog(Pc5Ui *ui, Pc5Canvas *c)
 {
-    float w = 1100, h = strlen(ui->message_body) > 180 ? 520 : 400, x = (W - w) / 2, y = (H - h) / 2;
+    float w = 1100, h, x = (W - w) / 2, y, body_y;
+    int title_lines, body_lines;
+    dialog_size(ui, (int)w - 204, ui->message_title, ui->message_body, 8, 0, &title_lines, &body_lines, &body_y, &h);
+    body_y -= 10;   /* the title sits on the icon's line, a little lower */
+    h -= 60 + 10;   /* and one line of hints under the text, not a row of buttons */
+    if (h < 320) h = 320;
+    y = (H - h) / 2;
     dim(c, 160);
     panel(c, x, y, w, h);
     pc5_circle(c, x + 92, y + 98, 22, ui->message_good ? 0xff3fb27fu : C_WARN);
@@ -4168,8 +4296,10 @@ static void message_dialog(Pc5Ui *ui, Pc5Canvas *c)
         pc5_line(c, x + 92, y + 86, x + 92, y + 101, 4, 0xff0b0d10u);
         pc5_circle(c, x + 92, y + 110, 2.6f, 0xff0b0d10u);
     }
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_HEAD, (int)x + 140, (int)y + 112, (int)w - 204, 2, 50, C_TEXT, ui->message_title, 0);
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)x + 140, (int)y + 190, (int)w - 204, 6, 42, C_DIM, ui->message_body, 0);
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_HEAD, (int)x + 140, (int)y + 112, (int)w - 204, title_lines, 50, C_TEXT,
+                  ui->message_title, 0);
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)x + 140, (int)(y + body_y), (int)w - 204, body_lines, 42, C_DIM,
+                  ui->message_body, 0);
     Hint list[] = { { accept_glyph(ui), "OK" }, { G_TRIANGLE, "Report on GitHub" } };
     hints(ui, c, (int)x + 140, (int)(y + h - 48), list, ui->message_report ? 2 : 1);
 }
@@ -4447,6 +4577,7 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_GAME_MENU: game_menu_screen(ui, c, ui->menu); break;
     case S_BUTTONS: buttons_screen(ui, c); break;
     case S_KEYS: buttons_screen(ui, c); keys_dialog(ui, c); break;
+    case S_GRAPHICS_API: game_menu_screen(ui, c, ui->menu); graphics_dialog(ui, c); break;
     case S_GAME_READING: {
         int index = pc5_library_find(&ui->library, ui->launch_id);
         snprintf(line, sizeof(line), "Reading %s", index >= 0 ? ui->library.games[index].title : "the game");

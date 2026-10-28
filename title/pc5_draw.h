@@ -38,6 +38,8 @@ int pc5_fonts_load(Pc5Fonts *fonts, const char *path);
 void pc5_fonts_free(Pc5Fonts *fonts);
 /* Width of text in pixels. */
 int pc5_text_width(const Pc5Fonts *fonts, Pc5Face face, const char *text);
+/* How many times pc5_text has cut a text short (with "…"): the tests check menus have none. */
+extern int pc5_text_cuts;
 /* Draws text with its baseline at y, cut with "…" to max_width (0: no
  * limit). align: 0 left of x, 1 centred on x, 2 right of x. Returns the
  * width drawn. */
@@ -47,6 +49,8 @@ int pc5_text(Pc5Canvas *c, const Pc5Fonts *fonts, Pc5Face face, int x, int y, ui
  * "…"), each centred (align 1) or left (0). Returns the lines drawn. */
 int pc5_text_wrap(Pc5Canvas *c, const Pc5Fonts *fonts, Pc5Face face, int x, int y, int max_width, int max_lines,
                   int line_height, uint32_t color, const char *text, int align);
+/* How many lines pc5_text_wrap needs for all of text at max_width (0 for none). */
+int pc5_text_lines(const Pc5Fonts *fonts, Pc5Face face, int max_width, const char *text);
 
 /* ---- shapes --------------------------------------------------------------------- */
 uint32_t pc5_rgba(int r, int g, int b, int a);
