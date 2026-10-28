@@ -4,7 +4,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        One issue per game. PC5's **Report on GitHub** (△ on PC5's message after a game went wrong) opens this form filled in. The [game compatibility list](https://github.com/bornaradusin/PC5/wiki/Game-compatibility) shows the game as being looked at while the issue is open, then as working perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed as not planned.
+        One issue per game. PC5's **Report on GitHub** (△ on PC5's message after a game went wrong) opens this form filled in. The [game compatibility list](https://github.com/bornaradusin/PC5/wiki/Game-compatibility) shows the game as being looked at while the issue is open, then as working perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed as not planned. When a question here goes unanswered for two days, the issue is closed and the game shows as needing testing; a reply opens it again.
 
         Before reporting, update to the newest PC5 and check the program PC5 starts for the game (**Manage › Change program**). See [Reporting a problem](https://github.com/bornaradusin/PC5/wiki/Reporting-a-problem).
   - type: input

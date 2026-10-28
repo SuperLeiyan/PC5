@@ -9,8 +9,10 @@ places.
   issues. Each one gets one comment once the page with it is published.
 - A game that doesn't run: an issue in this repository, with the game's log. It lists by its
   state: being looked at while it is open; working perfectly once it is closed as completed
-  (unless a player's report lists the game already); unresolved (it doesn't run) once it is
-  closed as not planned. An issue closed as a duplicate
+  (unless a player's report lists the game already); needs testing once it is closed for no
+  reply (labelled "needs testing" by no_reply.py: it didn't run for its reporter, but another
+  copy or version may); unresolved (it doesn't run) once it is closed as not planned
+  otherwise. An issue closed as a duplicate
   isn't listed. The game is the issue's "Game" field (.github/ISSUE_TEMPLATE/1-game.yml, which
   PC5's Report on GitHub opens filled in), or the "**Game:**" line older PC5s wrote. For an
   issue written by hand, before the form, games-by-issue.txt beside this script names it, or
@@ -44,7 +46,9 @@ NOT_RUNNING = ("Starts but not playable", "Doesn't start")   # older reports: th
 LOOKED_AT = "🔍 Being looked at"     # an issue still open
 FIXED = "Works perfectly"           # an issue closed as completed
 UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
-SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, UNRESOLVED]
+NEEDS_TESTING = "🧪 Needs testing"    # an issue closed for no reply (no_reply.py's label)
+NO_REPLY = "needs testing"
+SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, NEEDS_TESTING, UNRESOLVED]
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
@@ -186,7 +190,9 @@ def main() -> int:
               f"[issue](https://github.com/{owner}/{name}/issues/new/choose) with its log (PC5's **Report on GitHub** "
               "writes one for you). The game shows as being looked at while the issue is open, then as working "
               "perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed "
-              "as not planned."]
+              "as not planned. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
+              "needing testing: it didn't run for them, but another copy or version of it may. Tested it? Reply on "
+              "the issue, or open a new one with your log."]
 
     page = "\n".join([
         "Which games run in PC5: the games players report running, from the [Game compatibility]"
@@ -276,6 +282,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                 continue
             if node["state"] == "OPEN":
                 shown = LOOKED_AT
+            elif NO_REPLY in issue["labels"]:
+                shown = NEEDS_TESTING
             elif node["stateReason"] == "NOT_PLANNED" or "wontfix" in issue["labels"]:
                 shown = UNRESOLVED
             else:
@@ -288,7 +296,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                 rows[game.casefold()] = {   # issues come oldest first: a newer one takes the game's row
                     "told": True, "locked": True, "game": game, "shown": shown,
                     "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "", "settings": "",
-                    "notes": saw if shown != FIXED else "",
+                    "notes": ("No reply: another copy or version may run. " + saw).strip() if shown == NEEDS_TESTING
+                             else saw if shown != FIXED else "",
                     "url": node["url"], "number": node["number"],
                     "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
                 }

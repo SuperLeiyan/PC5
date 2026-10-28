@@ -97,6 +97,6 @@ Sometimes the log doesn't show why a game stops, and the issue's answer asks for
 3. Fill in the form, with the details from [What to include](#what-to-include). It can't be submitted until the fields it asks for are filled in, the zip in **Log** among them: drag it there and wait for it to upload.
 4. Submit.
 
-A game's issue puts it in the [game compatibility list](Game-compatibility), by the name in its **Game** field: as being looked at while the issue is open, then as working perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed as not planned.
+A game's issue puts it in the [game compatibility list](Game-compatibility), by the name in its **Game** field: as being looked at while the issue is open, then as working perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed as not planned. When a question on the issue goes unanswered for two days, it is closed and the game shows as needing testing (it didn't run for you, but another copy or version may); reply on it and it opens again.
 
 Thank you: every report with a log helps more games run.
