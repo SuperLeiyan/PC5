@@ -570,6 +570,20 @@ static void test_sources(void)
         path(dir, sizeof(dir), "%s/stubs/Installer only", work);
         CHECK(!pc5_folder_inspect(dir, "Installer only", &folder) && strstr(folder.problem, "only has installers"),
               "an installer alone isn't a game: %s", folder.problem);
+        /* A game's settings tool named like an installer (Brian Lara International Cricket 2007's
+         * HardwareSetup.exe): Change program offers it, after the game; the redistributables'
+         * installers it doesn't. */
+        path(file, sizeof(file), "%s/stubs/Cricket/ICC2007.exe", work);
+        copy_file(from, file);
+        path(file, sizeof(file), "%s/stubs/Cricket/HardwareSetup.exe", work);
+        copy_file(from, file);
+        path(file, sizeof(file), "%s/stubs/Cricket/_CommonRedist/DirectX/DXSETUP.exe", work);
+        copy_file(from, file);
+        path(dir, sizeof(dir), "%s/stubs/Cricket", work);
+        CHECK(!pc5_folder_inspect(dir, "Cricket", &folder) && !folder.problem[0] && folder.exe_count == 2 &&
+              !strcmp(folder.exes[0].path, "ICC2007.exe") && !strcmp(folder.exes[1].path, "HardwareSetup.exe"),
+              "the game, then its settings tool: %d %s %s", folder.exe_count, folder.exe_count ? folder.exes[0].path : "",
+              folder.exe_count > 1 ? folder.exes[1].path : "");
     }
     /* A game that starts from a batch file: read as cmd.exe would, its program found whatever
      * the case of its name, offered first when it is the folder's one way to start. */
@@ -606,8 +620,10 @@ static void test_sources(void)
               folder.exe_count ? folder.exes[0].path : "");
         CHECK(folder.exe_count && folder.exes[0].pe.bits == 64 && pc5_folder_api(&folder, 0) == PC5_API_D3D11,
               "with its program's bits and drawing");
-        CHECK(game > 0 && windowed > game && setup < 0 && readme < 0, "the others after it: %d %d %d %d", game, windowed,
-              setup, readme);
+        /* Setup.bat, named as an installer is, last (Change program offers it); Readme.bat starts
+         * none of the game's programs. */
+        CHECK(game > 0 && windowed > game && setup > windowed && setup == folder.exe_count - 1 && readme < 0,
+              "the others after it: %d %d %d %d", game, windowed, setup, readme);
         CHECK(!pc5_batch_read(dir, "Launch.bat", &batch) && !strcmp(batch.exe, "Binaries/Win64/WitchTale.exe") &&
               !strcmp(batch.cwd, "Binaries/Win64") &&
               !strcmp(batch.arguments, "-dx12 -log=\"C:\\users\\prospero\\AppData\\Local\\WitchTale\\log.txt\""),

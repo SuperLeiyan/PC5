@@ -397,9 +397,11 @@ int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder)
         }
         if (starting == 1) walk.all[lone].score = best + 5;
     }
+    /* Every program, best first: PC5 starts the first, and Change program offers the others,
+     * the tools and installers last (a game's own settings tool can be named like one:
+     * HardwareSetup.exe). */
     qsort(walk.all, (size_t)walk.all_count, sizeof(Pc5Exe), by_score);
-    for (int i = 0; i < walk.all_count && folder->exe_count < PC5_EXES; i++)
-        if (walk.all[i].score > -500 || folder->exe_count == 0) folder->exes[folder->exe_count++] = walk.all[i];
+    for (int i = 0; i < walk.all_count && folder->exe_count < PC5_EXES; i++) folder->exes[folder->exe_count++] = walk.all[i];
     /* Each program's own imports, joined by its folder's libraries. */
     for (int i = 0; i < folder->exe_count; i++) {
         char dir[PC5_PATH];
