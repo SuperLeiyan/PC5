@@ -2,7 +2,9 @@
 # needs putting right: the issue's number, then the game, one game a line (an issue about two
 # games has two lines). The game compatibility list (compatibility_list.py) lists each game by
 # how its issue stands, as it lists the issues made with the form, whose "Game" field names
-# it. A line here wins over that field.
+# it. A line here wins over that field: name the game as a report does, and the two are one
+# row (names that differ only in case, punctuation, a leading "The" or Roman numerals are one
+# game already).
 43 The Binding of Isaac: Rebirth
 65 Stellar Blade
 89 Batman: Arkham Knight

@@ -20,7 +20,7 @@ on:
 permissions:
   discussions: write
   contents: write
-  issues: read          # the games with an issue
+  issues: write         # the games with an issue, and one comment on an issue whose game a report lists
   pull-requests: read   # a number that turns out to be a pull request
 
 concurrency:

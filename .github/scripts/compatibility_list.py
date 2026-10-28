@@ -18,6 +18,11 @@ places.
   issue written by hand, before the form, games-by-issue.txt beside this script names it, or
   a report names it.
 
+A game both a report and an issue name (game_key: the same name but for case, punctuation, a
+leading "The" and Roman numerals; editions stay apart) has one row, the report's: the issue is
+named beside it, and a fixed one not at all. An open issue whose game a report lists as running
+gets one comment with what that report says (its settings may help).
+
 A report that a game doesn't run, made before issues were the way (the form no longer offers
 it), names its game's issue: without one it gets one comment saying so and is closed. The
 category's "Game compatibility list" discussion (made the first time, for pinning) points to
@@ -52,6 +57,23 @@ SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, NEEDS_TESTING, UN
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
+LISTED_ALREADY = "<!-- pc5-compatibility: listed already -->"   # its comment on an issue whose game a report lists
+NUMERALS = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
+ISSUE_STATE = {"🔍 Being looked at": "open", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run"}
+
+
+def game_key(name: str) -> str:
+    """What two names of one game have the same: "Baldur's Gate 2" and "baldurs gate II", "The
+    Binding of Isaac: Rebirth" and "Binding of Isaac Rebirth". Case, punctuation, a leading
+    "The" and Roman numerals (II to IX as words) aside; an edition named stays (the Enhanced
+    Edition isn't the original)."""
+    text = name.casefold().replace("&", " and ")
+    for apostrophe in ("'", "\u2019"):
+        text = text.replace(apostrophe, "")
+    words = [w for w in re.split(r"[\W_]+", text) if w]
+    if len(words) > 1 and words[0] == "the":
+        words = words[1:]
+    return "".join(NUMERALS.get(w, w) for w in words) or name.casefold()
 
 
 def graphql(query: str, fatal: bool = True, **variables):
@@ -163,11 +185,28 @@ def main() -> int:
         if not discussions["pageInfo"]["hasNextPage"]:
             break
         after = discussions["pageInfo"]["endCursor"]
-    # A game with an issue, by how it stands; one fixed, only when no report lists it already.
-    reported = {r["game"].casefold() for r in reports}
-    reports += [r for r in issue_reports(owner, name, named) if r["shown"] != FIXED or r["game"].casefold() not in reported]
+    # A game with an issue, by how it stands. One a report lists already is named beside the
+    # report that says it runs best (the newest of those), or, fixed, left out; while it is open,
+    # it is told once what the reports say.
+    listed = {}
+    for r in reports:
+        listed.setdefault(game_key(r["game"]), []).append(r)
+    told_issues = 0
+    for row in issue_reports(owner, name, named):
+        same = listed.get(game_key(row["game"]))
+        if not same:
+            reports.append(row)
+            continue
+        if row["shown"] == FIXED:
+            continue
+        best = sorted(sorted(same, key=lambda r: r["date"], reverse=True), key=lambda r: SHOWN.index(r["shown"]))[0]
+        best.setdefault("issues", []).append(row)
+        if row["open"] and not row["told_listed"]:
+            told_issues += tell_issue(row, same, owner, name)
+    if told_issues:
+        print(f"::notice::compatibility list: told {told_issues} issue{'s' * (told_issues != 1)} what reports say")
 
-    reports.sort(key=lambda r: (r["game"].casefold(), SHOWN.index(r["shown"]), r["date"]))
+    reports.sort(key=lambda r: (game_key(r["game"]), SHOWN.index(r["shown"]), r["date"]))
     counts = {shown: sum(1 for r in reports if r["shown"] == shown) for shown in SHOWN}
     add = f"https://github.com/{owner}/{name}/discussions/new?category=game-compatibility"
     lines = [
@@ -183,7 +222,9 @@ def main() -> int:
         lines.append(f"| {cell(r['game'], 60)} | {how} | {cell(r['pc5'], 12)} | {cell(r['edition'], 40)} | "
                      f"{cell(r['controller'], 20)} | {cell(r['settings'])} | {cell(r['notes'], 200)} | "
                      f"[#{r['number']}]({r['url']}) by "
-                     f"{cell(r['author'], 40)}, {r['date']} |")
+                     f"{cell(r['author'], 40)}, {r['date']}"
+                     + "".join(f"; issue [#{i['number']}]({i['url']}) {ISSUE_STATE.get(i['shown'], '')}"
+                               for i in r.get("issues", [])) + " |")
     if not reports:
         lines.append("| *No reports yet* | | | | | | | |")
     lines += ["", "A game that crashes, doesn't start or isn't playable: open an "
@@ -192,7 +233,8 @@ def main() -> int:
               "perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed "
               "as not planned. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
               "needing testing: it didn't run for them, but another copy or version of it may. Tested it? Reply on "
-              "the issue, or open a new one with your log."]
+              "the issue, or open a new one with your log. A game with both a report and an issue has one row, the "
+              "report's, with the issue beside it."]
 
     page = "\n".join([
         "Which games run in PC5: the games players report running, from the [Game compatibility]"
@@ -270,8 +312,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             repository(owner: $owner, name: $name) {
               issues(first: 100, after: $after, states: [OPEN, CLOSED], orderBy: {field: CREATED_AT, direction: ASC}) {
                 pageInfo { hasNextPage endCursor }
-                nodes { number title url body state stateReason createdAt author { login }
-                        labels(first: 20) { nodes { name } } }
+                nodes { id number title url body state stateReason createdAt author { login }
+                        labels(first: 20) { nodes { name } } comments(first: 50) { nodes { body } } }
               } } }""", owner=owner, name=name, after=after)["repository"]["issues"]
         for node in page["nodes"]:
             body = node["body"] or ""
@@ -293,13 +335,15 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             if not saw and SAW_LINE.search(body):
                 saw = SAW_LINE.search(body).group(1)
             for game in issue_games(issue, fields, named, by_number):
-                rows[game.casefold()] = {   # issues come oldest first: a newer one takes the game's row
+                rows[game_key(game)] = {   # issues come oldest first: a newer one takes the game's row
                     "told": True, "locked": True, "game": game, "shown": shown,
                     "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "", "settings": "",
                     "notes": ("No reply: another copy or version may run. " + saw).strip() if shown == NEEDS_TESTING
                              else saw if shown != FIXED else "",
                     "url": node["url"], "number": node["number"],
                     "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
+                    "id": node["id"], "open": node["state"] == "OPEN",
+                    "told_listed": any(LISTED_ALREADY in (c["body"] or "") for c in node["comments"]["nodes"]),
                 }
         if not page["pageInfo"]["hasNextPage"]:
             return list(rows.values())
@@ -330,6 +374,32 @@ def linked_issue(owner: str, name: str, text: str):
         return None
     return {"number": node["number"], "url": node["url"], "state": node["state"], "stateReason": node["stateReason"],
             "labels": [label["name"].casefold() for label in node["labels"]["nodes"]]}
+
+
+def tell_issue(issue: dict, reports: list, owner: str, name: str) -> int:
+    """One comment on an open issue whose game reports list: what each says. 1 when made."""
+    shown = [r for r in sorted(reports, key=lambda r: (SHOWN.index(r["shown"]), r["date"])) if r["shown"] in RESULTS]
+    if not shown:
+        return 0
+    whose = "a player's report" if len(shown) == 1 else "players' reports"
+    lines = [
+        LISTED_ALREADY,
+        f"**{issue['game']}** is in the [game compatibility list](https://github.com/{owner}/{name}/wiki/"
+        f"Game-compatibility) already, from {whose}:",
+        "",
+    ]
+    for r in shown[:5]:
+        about = [f"PC5 {r['pc5']}" if r["pc5"] else "", r["edition"], r["controller"]]
+        lines.append(f"- {label(r['shown'])}: " + " · ".join(cell(a, 60) for a in about if a)
+                     + (f". Settings that helped: {cell(r['settings'], 400)}" if r["settings"] else "")
+                     + (f". Notes: {cell(r['notes'], 300)}" if r["notes"] else "")
+                     + f" ([#{r['number']}]({r['url']}) by {r['author']})")
+    lines += ["", "What helped there may help here too. Please say here if it does; if not, this issue goes on with your log."]
+    if graphql("""mutation($id: ID!, $body: String!) { addComment(input: {subjectId: $id, body: $body}) {
+            commentEdge { node { id } } } }""", fatal=False, id=issue["id"], body="\n".join(lines)) is None:
+        return 0
+    print(f"compatibility list: issue #{issue['number']} told what {len(shown)} report(s) say")
+    return 1
 
 
 def tell_listed(report: dict, owner: str, name: str) -> int:
