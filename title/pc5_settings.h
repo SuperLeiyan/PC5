@@ -11,6 +11,14 @@ typedef enum Pc5Corner {
     PC5_CORNER_TOP_LEFT, PC5_CORNER_TOP_RIGHT, PC5_CORNER_BOTTOM_LEFT, PC5_CORNER_BOTTOM_RIGHT, PC5_CORNERS
 } Pc5Corner;
 
+/* The overlay's size (Settings › Overlay › Size). */
+typedef enum Pc5OverlaySize {
+    PC5_OVERLAY_NORMAL,       /* every line at once, in small text */
+    PC5_OVERLAY_LARGE,        /* twice the size, two lines at a time, taking turns */
+    PC5_OVERLAY_EXTRA_LARGE,  /* Large, shown at twice its size by the display (its cursor magnified) */
+    PC5_OVERLAY_SIZES
+} Pc5OverlaySize;
+
 typedef enum Pc5Light {
     PC5_LIGHT_GAME,       /* the colour of the game's cover */
     PC5_LIGHT_SCREEN,     /* the colour of what is on screen */
@@ -38,7 +46,7 @@ typedef struct Pc5Settings {
     int soc_temperature;
     int memory;
     Pc5Corner fps_corner;
-    int overlay_large;        /* the lines in twice the size, two at a time, taking turns (Size: Large) */
+    Pc5OverlaySize overlay_size;
     int vibration;            /* how strong the game's rumble is on the controller: 0 (off), 25, 50, 75, 100 % */
     Pc5Light light_bar;
     Pc5Triggers triggers;
@@ -63,6 +71,8 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings);
 const char *pc5_corner_name(Pc5Corner corner);      /* "Top right" */
 const char *pc5_light_name(Pc5Light light);         /* "Game's colour" */
 const char *pc5_triggers_name(Pc5Triggers triggers);
+const char *pc5_overlay_size_name(Pc5OverlaySize size);   /* "Extra large" */
+const char *pc5_overlay_size_key(Pc5OverlaySize size);    /* "extra-large", as in the settings file */
 /* The next step of a strength in percent: up (step 1) or down (-1), from
  * lowest (0 for Vibration's Off, else 25) to 100, round. */
 int pc5_strength_next(int percent, int lowest, int step);

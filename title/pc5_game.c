@@ -687,8 +687,10 @@ unsigned pc5_game_overlay_lines(const Pc5Settings *settings)
     unsigned lines = (settings->fps ? PW_PC5_HUD_FPS : 0u) | (settings->frame_time ? PW_PC5_HUD_FRAME_TIME : 0u) |
                      (settings->cpu_usage ? PW_PC5_HUD_CPU : 0u) | (settings->cpu_temperature ? PW_PC5_HUD_CPU_TEMP : 0u) |
                      (settings->soc_temperature ? PW_PC5_HUD_SOC_TEMP : 0u) | (settings->memory ? PW_PC5_HUD_MEMORY : 0u);
-    /* Large: the same lines, twice the size (pw_pc5_hud.h), only with a line to show. */
-    return lines && settings->overlay_large ? lines | PW_PC5_HUD_LARGE : lines;
+    /* Large: the same lines, twice the size (pw_pc5_hud.h), only with a line to show; Extra
+     * large: that, shown at twice its size again by the display. */
+    if (!lines || settings->overlay_size == PC5_OVERLAY_NORMAL) return lines;
+    return lines | PW_PC5_HUD_LARGE | (settings->overlay_size == PC5_OVERLAY_EXTRA_LARGE ? PW_PC5_HUD_DOUBLE : 0u);
 }
 
 /* A sensor's temperature, -1 when it can't be read; *rc what the console said. */
@@ -766,11 +768,30 @@ void pc5_game_hud(Pc5GameSession *game, int videoout, uint64_t frames, uint64_t 
     game->hud_second_frames = frames;
     if (!(height = pw_pc5_hud_draw_stats(image, &stats))) {
         game->ops.cursor(videoout, NULL, 0, 0);   /* nothing to show: hidden */
+        game->hud_magnified = -1;
         return;
     }
-    pw_pc5_hud_place_box((int)game->settings.fps_corner, 1920, 1080, height, &x, &y);
-    if (game->ops.cursor(videoout, image, x, y) && !game->hud_shown) say(game, "PC5 overlay refused");
+    int magnify = (lines & PW_PC5_HUD_DOUBLE) != 0;
+    pw_pc5_hud_place_scaled((int)game->settings.fps_corner, 1920, 1080, height,
+                            magnify && game->ops.cursor_magnify && !game->hud_magnify_refused ? 2 : 1, &x, &y);
+    if (game->ops.cursor(videoout, image, x, y)) {
+        if (!game->hud_shown) say(game, "PC5 overlay refused");
+        game->hud_shown = 1;
+        return;
+    }
     game->hud_shown = 1;
+    /* Extra large: the cursor at twice its size, asked as it changes (the console's answer
+     * logged); refused, the overlay stays Large where it was placed for twice the size. */
+    if (game->ops.cursor_magnify && magnify != game->hud_magnified && !(magnify && game->hud_magnify_refused)) {
+        int rc = game->ops.cursor_magnify(videoout, magnify);
+        say(game, "PC5 overlay magnified=%d rc=%d", magnify, rc);
+        if (!rc) game->hud_magnified = magnify;
+        else if (magnify) {
+            game->hud_magnify_refused = 1;
+            pw_pc5_hud_place_box((int)game->settings.fps_corner, 1920, 1080, height, &x, &y);
+            game->ops.cursor(videoout, image, x, y);
+        }
+    }
 }
 
 /* ---- the on-screen keyboard -------------------------------------------------------------- */

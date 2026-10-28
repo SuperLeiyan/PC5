@@ -37,6 +37,7 @@ int sceVideoOutCursorEnable(int32_t handle, int32_t index, const void *address);
 int sceVideoOutCursorDisable(int32_t handle, int32_t index);
 int sceVideoOutCursorSetImageAddress(int32_t handle, int32_t index, const void *address);
 int sceVideoOutCursorSetPosition(int32_t handle, int32_t index, uint32_t x, uint32_t y);
+int sceVideoOutCursorSet2xMagnify(int32_t handle, int32_t index, uint32_t enable);
 size_t sceKernelGetDirectMemorySize(void);
 int sceKernelAllocateDirectMemory(int64_t start, int64_t end, size_t bytes, size_t alignment, int type, int64_t *offset);
 int sceKernelMapDirectMemory(void **address, size_t bytes, int protection, int flags, int64_t offset, size_t alignment);
@@ -127,6 +128,11 @@ static int cursor(int videoout, const uint32_t *image, uint32_t x, uint32_t y)
     cursor_current = (int)((next - cursor_images) / PIXELS);
     cursor_enabled = 1;
     return sceVideoOutCursorSetPosition(videoout, 1, x, y);
+}
+
+static int cursor_magnify(int videoout, int on)
+{
+    return sceVideoOutCursorSet2xMagnify(videoout, 1, on ? 1u : 0u);
 }
 
 static uint64_t cpu_time_us(void)
@@ -358,7 +364,7 @@ void pc5_game_ps5_ops(Pc5GameOps *ops, void (*log)(const char *line))
     pc5_system_text(system, sizeof(system));
     if (log) log(system);
     *ops = (Pc5GameOps){ .light_bar = light_bar, .light_bar_reset = light_bar_reset, .triggers = triggers,
-                         .cursor = cursor, .log = log, .cpu_time_us = cpu_time_us, .cpu_count = cpu_count,
+                         .cursor = cursor, .cursor_magnify = cursor_magnify, .log = log, .cpu_time_us = cpu_time_us, .cpu_count = cpu_count,
                          .temperature = temperature, .memory = memory, .keyboard_open = keyboard_open,
                          .keyboard_state = keyboard_state, .keyboard_close = keyboard_close };
 }

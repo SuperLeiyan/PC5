@@ -1871,9 +1871,11 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_OVERLAY_SIZE:
         *label = "Size";
-        pc5_copy(about, about_size, set->overlay_large ? "Twice the size, two lines at a time, taking turns"
-                                                       : "Every line at once, in small text");
-        pc5_copy(value, value_size, set->overlay_large ? "Large" : "Normal");
+        pc5_copy(about, about_size,
+                 set->overlay_size == PC5_OVERLAY_EXTRA_LARGE ? "Large, shown twice as big again by the console"
+                 : set->overlay_size == PC5_OVERLAY_LARGE     ? "Twice the size, two lines at a time, taking turns"
+                                                              : "Every line at once, in small text");
+        pc5_copy(value, value_size, pc5_overlay_size_name(set->overlay_size));
         break;
     case SR_VIBRATION:
         *label = "Vibration";
@@ -1970,7 +1972,9 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
     case SR_SOC_TEMPERATURE: set->soc_temperature = !set->soc_temperature; break;
     case SR_MEMORY: set->memory = !set->memory; break;
     case SR_FPS_CORNER: set->fps_corner = (Pc5Corner)((set->fps_corner + PC5_CORNERS + step) % PC5_CORNERS); break;
-    case SR_OVERLAY_SIZE: set->overlay_large = !set->overlay_large; break;
+    case SR_OVERLAY_SIZE:
+        set->overlay_size = (Pc5OverlaySize)((set->overlay_size + PC5_OVERLAY_SIZES + step) % PC5_OVERLAY_SIZES);
+        break;
     case SR_VIBRATION: set->vibration = pc5_strength_next(set->vibration, 0, step); break;
     case SR_TRIGGER_RUMBLE: set->trigger_rumble = pc5_strength_next(set->trigger_rumble, 25, step); break;
     case SR_TRIGGER_RESISTANCE: set->trigger_resistance = pc5_strength_next(set->trigger_resistance, 25, step); break;
@@ -2007,7 +2011,7 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
         "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s startup_volume=%d "
         "pictures_off=%#x",
         set->fps, set->frame_time, set->cpu_usage, set->cpu_temperature, set->soc_temperature, set->memory,
-        (int)set->fps_corner, set->overlay_large ? "large" : "normal", set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
+        (int)set->fps_corner, pc5_overlay_size_key(set->overlay_size), set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
         set->trigger_resistance, set->check_updates, set->keep_logs, set->startup_sound, set->startup_volume,
         (unsigned)set->pictures_off);
     return 1;

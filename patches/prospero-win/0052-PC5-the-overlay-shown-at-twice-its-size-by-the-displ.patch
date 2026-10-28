@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 21:30:00 +0000
+Subject: [PATCH 52/52] PC5: the overlay shown at twice its size by the display
+ (PW_PC5_HUD_DOUBLE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The overlay is VideoOut's 64x64 hardware cursor: on a 1920x1080 picture
+shown on a TV its 5x7 glyphs, even the large overlay's twice-size ones,
+are hard to read from a sofa. With PW_PC5_HUD_DOUBLE (PC5's Settings ›
+Overlay › Size › Extra large) the cursor is magnified by the display,
+sceVideoOutCursorSet2xMagnify(handle, 1, 1): 128x128 on the picture, at
+no cost to the game, and placed by that size in its corner
+(pw_pc5_hud_place_scaled). The console's answer is logged as it is
+asked; refused, the overlay keeps its own size and isn't asked again.
+---
+ wine/ps5/pw_pc5_hud.h     | 25 +++++++++++++++++--------
+ wine/ps5/pw_vulkan_radv.c | 19 +++++++++++++++++--
+ 2 files changed, 34 insertions(+), 10 deletions(-)
+
+diff --git a/wine/ps5/pw_pc5_hud.h b/wine/ps5/pw_pc5_hud.h
+index 547ff64..2fc2fbb 100644
+--- a/wine/ps5/pw_pc5_hud.h
++++ b/wine/ps5/pw_pc5_hud.h
+@@ -64,16 +64,22 @@ static inline void pw_pc5_hud_draw(uint32_t *image, unsigned fps)
+ }
+ 
+ /* The image's top-left corner in a frame_width x frame_height frame, for a
+- * box box_height high at the image's top. */
+-static inline void pw_pc5_hud_place_box(int corner, uint32_t frame_width, uint32_t frame_height, uint32_t box_height,
+-                                        uint32_t *x, uint32_t *y)
++ * box box_height high at the image's top, the image shown scale times its size
++ * (2: the display's 2x magnified cursor, PW_PC5_HUD_DOUBLE). */
++static inline void pw_pc5_hud_place_scaled(int corner, uint32_t frame_width, uint32_t frame_height, uint32_t box_height,
++                                           uint32_t scale, uint32_t *x, uint32_t *y)
+ {
+     int right = corner == PW_PC5_HUD_TOP_RIGHT || corner == PW_PC5_HUD_BOTTOM_RIGHT;
+     int bottom = corner == PW_PC5_HUD_BOTTOM_LEFT || corner == PW_PC5_HUD_BOTTOM_RIGHT;
+-    *x = right && frame_width > PW_PC5_HUD_SIDE + PW_PC5_HUD_MARGIN ? frame_width - PW_PC5_HUD_SIDE - PW_PC5_HUD_MARGIN
+-                                                                    : PW_PC5_HUD_MARGIN;
+-    *y = bottom && frame_height > box_height + PW_PC5_HUD_MARGIN ? frame_height - box_height - PW_PC5_HUD_MARGIN
+-                                                                 : PW_PC5_HUD_MARGIN;
++    uint32_t side = PW_PC5_HUD_SIDE * scale, box = box_height * scale;
++    *x = right && frame_width > side + PW_PC5_HUD_MARGIN ? frame_width - side - PW_PC5_HUD_MARGIN : PW_PC5_HUD_MARGIN;
++    *y = bottom && frame_height > box + PW_PC5_HUD_MARGIN ? frame_height - box - PW_PC5_HUD_MARGIN : PW_PC5_HUD_MARGIN;
++}
++
++static inline void pw_pc5_hud_place_box(int corner, uint32_t frame_width, uint32_t frame_height, uint32_t box_height,
++                                        uint32_t *x, uint32_t *y)
++{
++    pw_pc5_hud_place_scaled(corner, frame_width, frame_height, box_height, 1, x, y);
+ }
+ 
+ /* The frame counter's corner (pw_pc5_hud_draw). */
+@@ -98,7 +104,10 @@ enum {
+     /* Not a line: the lines in twice the size, two at a time, taking turns every
+      * PW_PC5_HUD_TURN_S seconds when more are on (Settings › Overlay › Size). */
+     PW_PC5_HUD_LARGE = 64u,
+-    PW_PC5_HUD_FLAGS = 127u,     /* the lines and LARGE */
++    /* Not a line either: the image shown at twice its size by the display, its
++     * cursor magnified (sceVideoOutCursorSet2xMagnify; Size: Extra large). */
++    PW_PC5_HUD_DOUBLE = 128u,
++    PW_PC5_HUD_FLAGS = 255u,     /* the lines, LARGE and DOUBLE */
+     PW_PC5_HUD_LINES = 6,
+     PW_PC5_HUD_PITCH = 9,        /* a line: 7 rows of glyph and 2 of space */
+     PW_PC5_HUD_LARGE_PITCH = 30, /* a large line: its value 14 rows high, its label 7 under it */
+diff --git a/wine/ps5/pw_vulkan_radv.c b/wine/ps5/pw_vulkan_radv.c
+index eb4288f..c65e79f 100644
+--- a/wine/ps5/pw_vulkan_radv.c
++++ b/wine/ps5/pw_vulkan_radv.c
+@@ -71,6 +71,7 @@ extern int sceVideoOutCursorEnable(int32_t handle, int32_t index, const void *ad
+ extern int sceVideoOutCursorDisable(int32_t handle, int32_t index);
+ extern int sceVideoOutCursorSetImageAddress(int32_t handle, int32_t index, const void *address);
+ extern int sceVideoOutCursorSetPosition(int32_t handle, int32_t index, uint32_t x, uint32_t y);
++extern int sceVideoOutCursorSet2xMagnify(int32_t handle, int32_t index, uint32_t enable);
+ extern size_t sceKernelGetDirectMemorySize(void);
+ extern int sceKernelAllocateDirectMemory(int64_t start, int64_t end, size_t bytes, size_t alignment, int type,
+                                          int64_t *offset);
+@@ -251,9 +252,12 @@ static struct {
+     unsigned hud_lines;                     /* PW_PC5_HUD_*, 0 off */
+     unsigned hud_seconds;                   /* the overlay's updates, for the lines a large one shows */
+     int hud_corner, hud_enabled, hud_current;
++    /* The overlay's cursor shown at twice its size (PW_PC5_HUD_DOUBLE): 1 or 0 as
++     * set, -1 not set since it was enabled; refused once, it isn't asked again. */
++    int hud_magnified, hud_magnify_refused;
+     PwPc5HudStats hud_stats;                /* PC5's numbers: the CPU, the temperatures, the memory */
+     uint64_t flips, second_flips, second_at;
+-} pc5 = { .shown = -1, .hud_stats = { .cpu_percent = -1, .cpu_celsius = -1, .soc_celsius = -1 } };
++} pc5 = { .shown = -1, .hud_magnified = -1, .hud_stats = { .cpu_percent = -1, .cpu_celsius = -1, .soc_celsius = -1 } };
+ 
+ static void pc5_lock(void)
+ {
+@@ -334,6 +338,7 @@ static void pc5_hud_show_locked(int handle, const PwPc5HudStats *stats)
+     if (!(height = pw_pc5_hud_draw_stats(image, stats))) {
+         if (pc5.hud_enabled) sceVideoOutCursorDisable(handle, 1);
+         pc5.hud_enabled = 0;
++        pc5.hud_magnified = -1;
+         return;
+     }
+     /* Images 2 and 3 of the cursor's memory, in turn (0 and 1 are the game's cursor's). */
+@@ -347,8 +352,17 @@ static void pc5_hud_show_locked(int handle, const PwPc5HudStats *stats)
+     if (rc != 0) return;
+     pc5.hud_current = (int)((next - cursor.images) / CURSOR_PIXELS) - PC5_HUD_IMAGE;
+     pc5.hud_enabled = 1;
++    /* Twice the size, by the display (Size: Extra large): asked as it changes, and
++     * logged with the console's answer. */
++    int magnify = (stats->lines & PW_PC5_HUD_DOUBLE) != 0;
++    if (magnify != pc5.hud_magnified && !(magnify && pc5.hud_magnify_refused)) {
++        int magnify_rc = sceVideoOutCursorSet2xMagnify(handle, 1, (uint32_t)magnify);
++        fprintf(stderr, "pw_pc5_hud: overlay magnified=%d rc=%d\n", magnify, magnify_rc);
++        if (magnify_rc == 0) pc5.hud_magnified = magnify;
++        else if (magnify) pc5.hud_magnify_refused = 1;
++    }
+     if (!wsi_videoout_present_rect(&rect, &frame) || !frame.width || !frame.height) frame = (VkExtent2D){ 1920, 1080 };
+-    pw_pc5_hud_place_box(pc5.hud_corner, frame.width, frame.height, height, &x, &y);
++    pw_pc5_hud_place_scaled(pc5.hud_corner, frame.width, frame.height, height, pc5.hud_magnified == 1 ? 2 : 1, &x, &y);
+     sceVideoOutCursorSetPosition(handle, 1, x, y);
+ }
+ 
+@@ -385,6 +399,7 @@ void pw_pc5_hud(int lines, int corner)
+         cursor_lock();
+         if (pc5.hud_enabled) sceVideoOutCursorDisable(handle, 1);
+         pc5.hud_enabled = 0;
++        pc5.hud_magnified = -1;
+         cursor_unlock();
+     }
+ }
+-- 
+2.43.0
+

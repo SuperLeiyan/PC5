@@ -12,6 +12,8 @@ static const char *const corner_keys[] = { "top-left", "top-right", "bottom-left
 static const char *const corner_names[] = { "Top left", "Top right", "Bottom left", "Bottom right" };
 static const char *const light_keys[] = { "game", "screen", "console" };
 static const char *const light_names[] = { "Game's colour", "Follows the screen", "Console's colour" };
+static const char *const overlay_size_keys[] = { "normal", "large", "extra-large" };
+static const char *const overlay_size_names[] = { "Normal", "Large", "Extra large" };
 static const char *const trigger_keys[] = { "off", "rumble", "resistance", "both" };
 static const char *const trigger_names[] = { "Off", "Rumble", "Resistance", "Rumble + resistance" };
 
@@ -120,8 +122,8 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
         else if (!strcmp(name, "soc_temperature")) settings->soc_temperature = on_off(value, settings->soc_temperature);
         else if (!strcmp(name, "memory")) settings->memory = on_off(value, settings->memory);
         else if (!strcmp(name, "overlay_size")) {
-            if (!strcmp(value, "large")) settings->overlay_large = 1;
-            else if (!strcmp(value, "normal")) settings->overlay_large = 0;
+            settings->overlay_size =
+                (Pc5OverlaySize)pick(value, overlay_size_keys, PC5_OVERLAY_SIZES, (int)settings->overlay_size);
         } else if (!strcmp(name, "fps_corner"))
             settings->fps_corner = (Pc5Corner)pick(value, corner_keys, PC5_CORNERS, (int)settings->fps_corner);
         else if (!strcmp(name, "vibration")) settings->vibration = percent(value, 0, settings->vibration);
@@ -164,7 +166,7 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
                       settings->fps ? "on" : "off", settings->frame_time ? "on" : "off",
                       settings->cpu_usage ? "on" : "off", settings->cpu_temperature ? "on" : "off",
                       settings->soc_temperature ? "on" : "off", settings->memory ? "on" : "off",
-                      corner_keys[settings->fps_corner % PC5_CORNERS], settings->overlay_large ? "large" : "normal",
+                      corner_keys[settings->fps_corner % PC5_CORNERS], overlay_size_keys[settings->overlay_size % PC5_OVERLAY_SIZES],
                       settings->vibration,
                       light_keys[settings->light_bar % PC5_LIGHTS], trigger_keys[settings->triggers % PC5_TRIGGERS_COUNT],
                       settings->trigger_rumble, settings->trigger_resistance, settings->check_updates ? "on" : "off",
@@ -179,6 +181,8 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
 const char *pc5_corner_name(Pc5Corner corner) { return corner_names[corner % PC5_CORNERS]; }
 const char *pc5_light_name(Pc5Light light) { return light_names[light % PC5_LIGHTS]; }
 const char *pc5_triggers_name(Pc5Triggers triggers) { return trigger_names[triggers % PC5_TRIGGERS_COUNT]; }
+const char *pc5_overlay_size_name(Pc5OverlaySize size) { return overlay_size_names[size % PC5_OVERLAY_SIZES]; }
+const char *pc5_overlay_size_key(Pc5OverlaySize size) { return overlay_size_keys[size % PC5_OVERLAY_SIZES]; }
 
 static const char api_keys_text[] =
     "# PC5 API keys\n"

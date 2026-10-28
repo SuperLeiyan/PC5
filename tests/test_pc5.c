@@ -81,6 +81,7 @@ static void copy_file(const char *from, const char *to)
 }
 
 static int file_is(const char *file, const char *text);
+static int file_holds_text(const char *file, const char *text);
 static void write_png(const char *file, int w, int h, uint32_t color);
 static void save_shot(const Pc5Canvas *c, const char *name);
 
@@ -2025,9 +2026,16 @@ static void test_settings(void)
     write_text(file, "startup_sound = on\n");
     CHECK(!pc5_settings_load(dir, &back) && !strcmp(back.startup_sound, "cheap chinese speaker"), "1.7.0's on too");
     write_text(file, "fps = on\noverlay_size = large\n");
-    CHECK(!pc5_settings_load(dir, &back) && back.overlay_large && !pc5_settings_save(dir, &back) &&
-          !pc5_settings_load(dir, &back) && back.overlay_large &&
+    CHECK(!pc5_settings_load(dir, &back) && back.overlay_size == PC5_OVERLAY_LARGE && !pc5_settings_save(dir, &back) &&
+          !pc5_settings_load(dir, &back) && back.overlay_size == PC5_OVERLAY_LARGE &&
           pc5_game_overlay_lines(&back) == (PW_PC5_HUD_FPS | PW_PC5_HUD_LARGE), "Size: Large, read and saved");
+    write_text(file, "fps = on\noverlay_size = extra-large\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.overlay_size == PC5_OVERLAY_EXTRA_LARGE && !pc5_settings_save(dir, &back) &&
+          file_holds_text(file, "overlay_size = extra-large\n") &&
+          pc5_game_overlay_lines(&back) == (PW_PC5_HUD_FPS | PW_PC5_HUD_LARGE | PW_PC5_HUD_DOUBLE) &&
+          !strcmp(pc5_overlay_size_name(back.overlay_size), "Extra large"), "Size: Extra large, read and saved");
+    write_text(file, "fps = on\noverlay_size = giant\n");
+    CHECK(!pc5_settings_load(dir, &back) && back.overlay_size == PC5_OVERLAY_NORMAL, "a size PC5 doesn't know: Normal");
     back.fps = 0;
     CHECK(!pc5_game_overlay_lines(&back), "no line: no overlay, large or not");
     write_text(file, "vibration = 75\ntrigger_rumble = 50\n");
@@ -2125,6 +2133,15 @@ static void file_sha256(const char *file, char *out)
     pc5_sha256_final(&sha, digest);
     hex(digest, out);
     pc5_buf_free(&data);
+}
+
+/* 1 when file has text somewhere in it. */
+static int file_holds_text(const char *file, const char *text)
+{
+    Pc5Buf data = { 0 };
+    int holds = !pc5_read_file(file, &data, 1u << 20) && !pc5_buf_terminate(&data) && strstr((char *)data.data, text);
+    pc5_buf_free(&data);
+    return holds;
 }
 
 static int file_is(const char *file, const char *text)
@@ -3416,6 +3433,7 @@ static struct {
     int triggers;
     uint32_t cursor_image[64 * 64];
     uint32_t cursor_x, cursor_y;
+    int magnify_calls, magnified, magnify_rc;
 } pad_seen;
 
 static int fake_light(int handle, uint32_t rgb) { (void)handle; pad_seen.light = rgb; pad_seen.lights++; return 0; }
@@ -3436,6 +3454,13 @@ static int fake_cursor(int videoout, const uint32_t *image, uint32_t x, uint32_t
     pad_seen.cursor_y = y;
     pad_seen.cursors++;
     return 0;
+}
+static int fake_cursor_magnify(int videoout, int on)
+{
+    (void)videoout;
+    pad_seen.magnify_calls++;
+    pad_seen.magnified = on;
+    return pad_seen.magnify_rc;
 }
 
 /* The overlay's numbers: a process that has used 4 of 16 CPUs since, a
@@ -4160,7 +4185,7 @@ static void test_game(const char *fonts_path)
 {
     char game_root[PC5_PATH], app[PC5_PATH], file[PC5_PATH];
     const Pc5GameOps ops = { .light_bar = fake_light, .light_bar_reset = fake_light_reset, .triggers = fake_triggers,
-                             .cursor = fake_cursor, .cpu_time_us = fake_cpu_time_us, .cpu_count = fake_cpu_count,
+                             .cursor = fake_cursor, .cursor_magnify = fake_cursor_magnify, .cpu_time_us = fake_cpu_time_us, .cpu_count = fake_cpu_count,
                              .temperature = fake_temperature, .memory = fake_memory };
     Pc5GameSession game;
     Pc5Settings set;
@@ -4313,7 +4338,7 @@ static void test_game(const char *fonts_path)
         CHECK(white > 150 && label > 100 && !pad_seen.cursor_image[60 * 64 + 32], "its lines drawn: %d %d", white, label);
         /* Large: two of the five lines at a time, their values twice the size, the next two every 3
          * seconds, then RAM alone, then the first two again. */
-        game.settings.overlay_large = 1;
+        game.settings.overlay_size = PC5_OVERLAY_LARGE;
         uint32_t first[64 * 64];
         int large_white = 0, turned = 0;
         for (int second = 0; second < 9; second++) {
@@ -4331,7 +4356,30 @@ static void test_game(const char *fonts_path)
         CHECK(large_white > white * 2 / 3 && turned, "large values drawn (%d white pixels for two lines, %d for five), "
               "taking turns: %d", large_white, white, turned);
         CHECK(pc5_game_overlay_lines(&game.settings) & PW_PC5_HUD_LARGE, "the large flag goes with the lines");
-        game.settings.overlay_large = 0;
+        CHECK(!pad_seen.magnify_calls, "Large: the cursor isn't magnified");
+        /* Extra large: the same, the cursor magnified once (twice the size by the display), placed by
+         * its 128x128 in the corner; refused, placed again by its own size, and not asked again. */
+        game.settings.overlay_size = PC5_OVERLAY_EXTRA_LARGE;
+        pad_seen.cursors = 0;
+        for (int second = 9; second < 12; second++) pc5_game_hud(&game, 3, 120 + (uint64_t)second * 30, 64000 + (uint64_t)second * 1000);
+        CHECK(pad_seen.magnify_calls == 1 && pad_seen.magnified == 1 && pad_seen.cursor_x == 1920 - 128 - 24,
+              "extra large: magnified once, at %u,%u", pad_seen.cursor_x, pad_seen.cursor_y);
+        CHECK(1080 - 24 - pad_seen.cursor_y == 2 * 64 || 1080 - 24 - pad_seen.cursor_y == 2 * 34,
+              "extra large: a box twice its height: %u", 1080 - 24 - pad_seen.cursor_y);
+        game.settings.overlay_size = PC5_OVERLAY_LARGE;
+        pc5_game_hud(&game, 3, 120 + 12 * 30, 64000 + 12 * 1000);
+        CHECK(pad_seen.magnify_calls == 2 && pad_seen.magnified == 0 && pad_seen.cursor_x == 1920 - 64 - 24,
+              "back to Large: its own size again");
+        game.hud_magnified = 0;
+        pad_seen.magnify_rc = -1;
+        game.settings.overlay_size = PC5_OVERLAY_EXTRA_LARGE;
+        pc5_game_hud(&game, 3, 120 + 13 * 30, 64000 + 13 * 1000);
+        pc5_game_hud(&game, 3, 120 + 14 * 30, 64000 + 14 * 1000);
+        CHECK(pad_seen.magnify_calls == 3 && pad_seen.cursor_x == 1920 - 64 - 24 && game.hud_magnify_refused,
+              "refused: asked once, placed by its own size: %d %u", pad_seen.magnify_calls, pad_seen.cursor_x);
+        pad_seen.magnify_rc = 0;
+        game.hud_magnify_refused = 0;
+        game.settings.overlay_size = PC5_OVERLAY_NORMAL;
         game.settings.fps = game.settings.frame_time = game.settings.cpu_usage = game.settings.memory = 0;
         game.settings.cpu_temperature = 0;   /* the chip alone, which can't be read: nothing shown */
         pad_seen.cursors = 0;

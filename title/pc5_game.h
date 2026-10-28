@@ -51,6 +51,9 @@ typedef struct Pc5GameOps {
     /* The second hardware cursor of the title's own VideoOut: a 64x64 image at
      * (x, y), or hidden (image NULL). */
     int (*cursor)(int videoout, const uint32_t *image, uint32_t x, uint32_t y);
+    /* That cursor shown at twice its size by the display (on) or at its own
+     * (sceVideoOutCursorSet2xMagnify): 0 or the console's error. NULL where there is none. */
+    int (*cursor_magnify)(int videoout, int on);
     void (*log)(const char *line);
     /* The overlay's numbers: the process's CPU time (microseconds) and the
      * CPUs it has; a temperature in degrees (sensor 0 the CPU, 1 the chip)
@@ -86,6 +89,8 @@ typedef struct Pc5GameSession {
     uint64_t matrix_at;
     int matrix_failed;
     int hud_shown;
+    int hud_magnified;            /* the overlay's cursor at twice its size: 1, 0, -1 not asked yet */
+    int hud_magnify_refused;      /* the console refused it once: not asked again */
     uint64_t hud_second_at, hud_second_frames;
     unsigned hud_seconds;         /* the overlay's updates, for the lines a large one shows */
     PwPc5HudStats stats;          /* what PC5 measured last for the overlay */
