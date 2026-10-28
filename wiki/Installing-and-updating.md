@@ -36,6 +36,15 @@ Either way, your games, saves and settings are in `/data/prospero-win`, not in t
 
 When a new version brings something games need (for example new video and sound decoders, or a newer DXVK), a game installed with an older PC5 gets it the next time it starts. That first start can take a little longer.
 
+### The home screen background
+
+From 1.8.7, PC5 has a background of its own on the PS5's home screen, shown while PC5 is chosen there. If the home screen doesn't show it after an update:
+
+1. On the home screen, choose PC5, press **Options** and choose **Delete**.
+2. Reload ShadowMountPlus. It installs PC5 again, and the home screen shows the new background.
+
+Your games, saves and settings are in `/data/prospero-win`, so they stay where they are.
+
 ## Checking for a newer version
 
 PC5 can ask GitHub whether a newer release is out. Open **Settings › System**.

@@ -68,3 +68,9 @@ When something doesn't work, PC5 usually says why in a message. This page lists 
 | The home screen tile shows the old cover | Turn the tile off and on again: **△ › Appearance › Home screen tile**. |
 
 See also [Home screen tiles](Home-screen-tiles#if-something-goes-wrong) for problems with tiles.
+
+## PC5 on the home screen
+
+| Problem | What to do |
+| --- | --- |
+| The PS5's home screen shows no background for PC5 | Delete PC5 from the home screen (**Options › Delete**), then reload ShadowMountPlus to install it again: that brings the new background. Your games and settings stay. See [The home screen background](Installing-and-updating#the-home-screen-background). |
