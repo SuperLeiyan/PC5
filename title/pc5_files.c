@@ -485,7 +485,8 @@ int pc5_files_step(Pc5FilesJob *job, int budget_ms)
         }
         job->task_at++;
         job->done_items++;
-        if (pc5_now_ms() >= until) return job->task_at < job->task_count;
+        /* out of time with work left: more next step; the last item done: finished below */
+        if (job->task_at < job->task_count && pc5_now_ms() >= until) return 1;
     }
     job->current[0] = 0;
     job->state = PC5_FILES_DONE;

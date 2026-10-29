@@ -5773,8 +5773,11 @@ static int files_run(Pc5FilesOp op, const char *const *sources, int count, const
                      Pc5FilesJob *job)
 {
     int rc = pc5_files_begin(job, op, sources, count, dest, conflict), steps = 0;
-    if (!rc)
-        while (pc5_files_step(job, 5) && steps < 100000) steps++;
+    if (!rc) {
+        while (pc5_files_step(job, 1) && steps < 100000) steps++;
+        /* once a step says there is no more, it says how it ended (never still working) */
+        CHECK(job->state != PC5_FILES_WORKING, "a %d job ended, not still working", (int)op);
+    }
     return rc;
 }
 
@@ -5977,6 +5980,28 @@ static void test_files(void)
         CHECK(!pc5_exists(one) && !pc5_exists(two), "both gone");
         path(file, sizeof(file), "%s/readme (2).txt", b);
         CHECK(read_is(file, "hello"), "and nothing else");
+    }
+
+    /* A step that runs out of time just as the last item is done still says Done: on the console a
+     * folder on a USB drive is deleted slowly enough for that ("Not everything was deleted" with
+     * nothing left). Each folder here takes a few milliseconds, the steps one. */
+    {
+        int ended = 1;
+        for (int round = 0; round < 40; round++) {
+            char folder[PC5_PATH], one[PC5_PATH];
+            path(folder, sizeof(folder), "%s/slow-%d", base, round);
+            for (int i = 0; i < 150; i++) {
+                path(one, sizeof(one), "%s/f%03d.txt", folder, i);
+                write_text(one, "x");
+            }
+            const char *sources[] = { folder };
+            int steps = 0;
+            if (pc5_files_begin(&job, PC5_FILES_DELETE, sources, 1, NULL, PC5_FILES_REPLACE)) ended = 0;
+            while (pc5_files_step(&job, 1) && steps < 100000) steps++;
+            ended &= job.state == PC5_FILES_DONE && !pc5_exists(folder);
+            pc5_files_end(&job);
+        }
+        CHECK(ended, "every slow delete ended Done");
     }
 
     /* too little room is said before anything is copied */
