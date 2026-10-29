@@ -1,0 +1,32 @@
+PW_REPORT/1 build=ab231977f161bfdb81f02a62aaaf719e72a0b9e3 profile=launcher cycle=0 pid=198 time=1793275549
+REC seq=1 t=23591.704729615 PW_WINE64 title id=PPSA11018 from=param.json built=PPSA11018
+REC seq=2 t=23591.709510430 PW_WINE64 hid preload libSceKeyboard id=0x106 status=0 handle=208
+REC seq=3 t=23591.713825929 PW_WINE64 hid preload libSceMouse id=0xa9 status=0 handle=209
+REC seq=4 t=23593.285426178 PW_WINE64 data_mount data_before=1 elevated_before=0 helper_completed=1 helper_errno=0 data_after=1 elevated_after=1 waited_ms=0 settled_ms=1000 root=/data/prospero-win
+REC seq=5 t=23593.287523588 PW_WINE64 library status=ok listed_by=1 scan_errno=0 entries=2 games=2 root=/data/prospero-win
+REC seq=6 t=23593.302578962 PW_WINE64 args argc=1 mode=launcher profile=- cycle=0 refused=0 tile=- exit_after=0
+REC seq=7 t=23593.302666925 PC5 start version=1.9.6 root=/data/prospero-win app=/mnt/sandbox/PPSA11018_000/app0 cycle=0 time_format=1 zone=570 summer=1 enter=1 locale=en_GB.UTF-8
+REC seq=8 t=23593.302700362 PC5 system firmware=13.00 firmware_version=0x13590001 reported=13.59 data_free=422.2GB version=1.9.6
+REC seq=9 t=23593.312035950 keyboard module=0xd0 init=0 open=0x1550700 user=309542613
+REC seq=10 t=23593.312136102 mouse module=0xd1 init=0 open=0x560700 merged=1 user=309542613
+REC seq=11 t=23593.313014373 PC5 devices pad=ok keyboard=ok
+REC seq=12 t=23593.313045485 PC5 system firmware=13.00 firmware_version=0x13590001 reported=13.59 data_free=422.2GB version=1.9.6
+REC seq=13 t=23593.313054546 PC5 controller reset light=0 triggers=0
+REC seq=14 t=23593.327290264 mouse record 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+REC seq=15 t=23593.347130302 PW_WINE64 the line before came 1 more times
+REC seq=16 t=23593.347132066 PC5 library games=2 leftovers=0
+REC seq=17 t=23593.370322572 PC5 screen=update
+REC seq=18 t=23593.392049694 mouse record 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+REC seq=19 t=23593.395725875 PC5 net roots file=/system/common/cert/CA_LIST.cer certificates=90 refused=0
+REC seq=20 t=23593.399514716 PC5 net roots file=/mnt/sandbox/PPSA11018_000/app0/pc5/ca-certificates.crt certificates=120 refused=0
+REC seq=21 t=23593.830297979 PC5 update state=4 latest=1.9.8 zip=1
+REC seq=22 t=23593.845876243 PC5 screen=upgrade-ask
+REC seq=23 t=23595.546265984 PC5 update later latest=1.9.8
+REC seq=24 t=23595.546344646 PC5 screen=library
+REC seq=25 t=23597.267792041 PC5 screen=game-menu
+REC seq=26 t=23601.891374413 PC5 tile linker status=2 linked=0 errno=2 where=LICENSE
+REC seq=27 t=23601.896122993 PC5 home tile app id=warriors-orochi-3-ude from=/data/homebrew/PPSA11018 made=-1 tile= why=PC5's linking helper stopped at LICENSE: No such file or directory.
+REC seq=28 t=23601.896125559 PC5 screen=message
+REC seq=29 t=23623.341626616 PC5 frames=2307 drawn=101 draw_ms_avg=24.9 screen=message
+REC seq=30 t=23625.194737189 PC5 screen=game-menu
+REC seq=31 t=23653.350375086 PC5 frames=2476 drawn=1 draw_ms_avg=29.0 screen=game-menu
