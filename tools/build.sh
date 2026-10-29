@@ -555,7 +555,7 @@ EOF_SOURCES
     # (pic1): the background at 4K as BC7 in a DDS (tools/make-dds.c), as the shell reads it.
     mkdir -p "$B/art"
     python3 "$here/art/make-art.py" "$B/art" --background-4k "$B/art/background-4k.ppm" >/dev/null
-    cc -std=c11 -O2 -o "$B/art/make-dds" "$here/tools/make-dds.c" -lm
+    cc -std=c11 -O2 -o "$B/art/make-dds" "$here/tools/make-dds.c" "$here/title/pc5_dds.c" -lm
     "$B/art/make-dds" "$B/art/background-4k.ppm" "$app/sce_sys/pic0.dds" >/dev/null
     cp "$app/sce_sys/pic0.dds" "$app/sce_sys/pic1.dds"
     # The music the home screen plays while PC5's tile is chosen (ATRAC9), when there is one.

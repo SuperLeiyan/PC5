@@ -83,9 +83,13 @@ If the game is missing, or preparing it fails, the tile opens PC5's screens with
 
 ### Closing
 
-When the game quits, or the player holds touchpad + Options, `exit_after` sends the title to
-`close_title_to_home` (patch `0053`). That function ends the title by its own app id, so it
-works for any ID unchanged.
+When the game quits, `exit_after` sends the title to `close_title_to_home` (patch `0053`).
+That function ends the title by its own app id, so it works for any ID unchanged.
+
+A tile has no touchpad + Options combo (patch `0057`): it is closed like any other app, from
+the PS button's menu or by quitting the game. Quitting it from the home screen ends the whole
+process at once, so the game gets no chance to save first. Games started from PC5's own screens
+keep the combo, which sends the game Alt+F4.
 
 A game whose own launcher hands off to another program (patch `0029`) restarts the title. It
 restarts `/app0/eboot.bin`, which is the tile's own, so it stays inside the tile. That costs
@@ -164,6 +168,9 @@ elfldr (`pw_lapy_elevation.c`); the SHA-256 pin is checked only at build time
 | 6 | Refresh tiles after a PC5 update. **Done:** as PC5 opens, `pc5_tile_refresh` gives every tile that runs from PC5's folder this PC5's `eboot.bin`, `libc.prx` and a re-patched `lapy.elf` whenever its program differs, or when PC5's folder moved. A tile's program and its runtime must match | `title/pc5_tile.c`, `title/pc5_ui.c` (`S_START`) | New |
 | 7 | Tests: tile layout, Lapy patching (good file, wrong file, wrong bytes), finding both kinds of tile, refresh on version change, `pc5_tile_prepare` | `tests/test_pc5.c`, `tests/test.sh` (the `lapy-title.py` check) | New |
 | 8 | Console checklist and wiki | `tests/PS5-CHECKLIST.md`, `wiki/Home-screen-tiles.md`, `wiki/Files-and-folders.md`, `wiki/Troubleshooting.md` | Changed |
+| 10 | No close combo in a tile. **Done:** patch `0057` counts touchpad + Options only when `exit_after` isn't set, so a game a tile started is closed like any app | `native/wine64_main.c`, as `patches/prospero-win/0057-…` | New patch |
+| 11 | A square tile picture: △ › Appearance › Tile picture. **Done:** the search asks Steam (to know the game), then only SteamGridDB's square grids (`dimensions=512x512,1024x1024`), so it needs the player's SteamGridDB key. The pick is kept as `prefixes/<p>/pc5/icon.bin` (512×512); "Made from its cover" deletes it. `pc5_home_picture` prefers it | `title/pc5_cover.c`, `title/pc5_image.c`, `title/pc5_home.c`, `title/pc5_ui.c`, `test_icon_search` | New |
+| 12 | Tile art from the game's pictures. **Done:** `pc5_tile_art` writes the tile's `icon0.png`, and from the game's background `pic0.png` (1920×1080) and `pic0.dds`/`pic1.dds` (3840×2160, BC7); with no background, PC5's own. It also writes the console's registered copies (`/user/appmeta/<ID>`, `/user/app/<ID>`). It runs when a tile is made, after any picture is saved, and in `pc5_tile_refresh` when a picture is newer than the tile's icon. The BC7 encoder moved from `tools/make-dds.c` into `title/pc5_dds.c` (the tool's output is byte-identical) | `title/pc5_tile.c`, `title/pc5_dds.c`, `tools/make-dds.c`, `test_tile_make`, `test_dds` | New |
 | 9 | Remove forwarder tiles once the new ones are proven: `pc5/forwarder/`, psfwd's launcher use, `src_forwarder` (keep psfwd's ID and `param.json` helpers, or replace them) | Several | Later |
 
 ## Console tests
@@ -238,7 +245,7 @@ those Unix modules, and Wine patch `0919` lets `dnsapi` run without its backend.
 as that app end to end: `/data`, its own runtime, a game, and the restart back. Work item 1 is
 proven on the console. Tile mode (work items 2 and 3) is now written; test 3 checks it.
 
-### Test 3: tile mode (to do)
+### Test 3: tile mode (passed, 2026-10-29)
 
 This needs a build with patches `0054` and `0055`.
 
@@ -260,7 +267,7 @@ Expected:
   - `exit to the home screen: started from a tile`
 - **Step 4:** the log has `PC5 tile game=<id> can't start: It isn't in PC5 any more…`. PC5's screens open with "This tile's game can't start".
 
-### Test 4: a tile made by PC5 (to do)
+### Test 4: a tile made by PC5 (passed, 2026-10-29)
 
 This needs a build with patches `0054`–`0056`. **PC5 itself must be that build:** install it as
 `/data/homebrew/PPSA11018`. Delete the hand-made `PPSA99437` tile first.
@@ -274,6 +281,22 @@ This needs a build with patches `0054`–`0056`. **PC5 itself must be that build
 
    This is the new unknown: Wine's modules loaded from PC5's folder instead of the tile's own.
 5. In PC5, turn the tile off again. The tile's folder is deleted, and PC5 still starts and runs games.
+
+**Result:** the tile was made by PC5, started its game straight away from PC5's folder, and
+behaved as expected (build at `4f48637`, Actions run 40874885332).
+
+### Test 5: tile picture, tile art and no close combo (to do)
+
+This needs a build with patches `0054`–`0057` and the tile picture work, installed as
+`/data/homebrew/PPSA11018`. SteamGridDB's key must be in `api_keys.txt` (Covers on the wiki).
+
+1. In PC5, open a game that has a background. △ › Appearance › Tile picture. Expect only square pictures from SteamGridDB, and "Made from its cover" last. Pick one.
+2. △ › Appearance › Home screen tile (or keep the tile from test 4: PC5 refreshes its art when it opens or after a picture is saved).
+3. The tile's folder has `sce_sys/icon0.png` (the square picture), `sce_sys/pic0.png`, `pic0.dds` and `pic1.dds` (the game's background).
+4. Close PC5. On the home screen, the tile shows the square picture, and selecting it shows the game's background. An already-registered tile may need a console restart to show the new art.
+5. Start the tile. Hold touchpad + Options in the game: nothing happens. Quit the game from the PS button's menu.
+6. In PC5, pick "Made from its cover" in Tile picture. The tile's icon goes back to the cover.
+7. Start a game from PC5's screens: touchpad + Options still closes it.
 
 ### Attempt: hard links (2026-10-29, failed)
 

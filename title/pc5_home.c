@@ -117,6 +117,22 @@ int pc5_home_picture(const char *library_root, const char *prefix, Pc5Buf *png)
     int status;
 
     *png = (Pc5Buf){ 0 };
+    /* The tile picture chosen for it (Appearance › Tile picture), as it is. */
+    if (!pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/icon.bin", library_root, prefix) &&
+        !pc5_cover_load(path, &icon, NULL) && icon.w > 0 && icon.h > 0) {
+        Pc5Image sized = { 0 };
+        if (icon.w == PC5_HOME_ICON && icon.h == PC5_HOME_ICON) sized = icon, icon = (Pc5Image){ 0 };
+        else if (pc5_image_resize(&icon, PC5_HOME_ICON, PC5_HOME_ICON, &sized)) sized = (Pc5Image){ 0 };
+        pc5_image_free(&icon);
+        if (sized.px) {
+            status = pc5_image_png(&sized, png) ? -1 : 0;
+            pc5_image_free(&sized);
+            if (!status) return 0;
+            pc5_buf_free(png);
+        }
+    }
+    pc5_image_free(&icon);
+    /* Otherwise one made from its cover. */
     if (pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/cover.bin", library_root, prefix) ||
         pc5_cover_load(path, &cover, &tint))
         cover = (Pc5Image){ 0 };

@@ -60,6 +60,9 @@ typedef struct Pc5TileMake {
     const char *pc5;             /* PC5's installed folder (pc5_upgrade_find): the tiles' runtime */
     const char *library_root;    /* /data/prospero-win */
     const char *id, *prefix, *name;   /* the game's */
+    /* The console's copies of registered apps' sce_sys (/user), for a tile made again in
+     * place: its new art there too. NULL: none. */
+    const char *user;
 } Pc5TileMake;
 
 enum { PC5_TILE_MADE = 0, PC5_TILE_FAILED = -1 };
@@ -67,18 +70,29 @@ enum { PC5_TILE_MADE = 0, PC5_TILE_FAILED = -1 };
 /* Makes the game's tile under tiles: a folder named after its title ID (the
  * game's old tile's, or a new one) holding only what the console starts, a few
  * MB: PC5's eboot.bin and sce_module/libc.prx copied, its lapy.elf patched for
- * the tile's ID, its sce_sys param.json as the tile's with the game's name, the
- * game's picture, and pc5-tile.json naming the game and PC5's folder, where the
+ * the tile's ID, its sce_sys param.json as the tile's with the game's name, its
+ * art (pc5_tile_art), and pc5-tile.json naming the game and PC5's folder, where the
  * tile finds its Wine and the rest of PC5's files. Made beside as .staging-<ID>
  * and renamed into place. PC5_TILE_MADE with the ID in out, or PC5_TILE_FAILED
  * with a reason in error. */
 int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t size);
 
+/* The tile's art in tile/sce_sys: icon0.png (the game's tile picture, or one made from its
+ * cover: pc5_home_picture), and behind it the game's background (prefixes/<prefix>/pc5/
+ * background.bin) as pic0.png (1920x1080) and pic0.dds and pic1.dds (4K BC7, pc5_dds.h), or
+ * PC5's own (pc5's sce_sys) when it has none. With user, the console's copies of the tile's
+ * sce_sys (user/appmeta/<title_id>, user/app/<title_id>/sce_sys), which it shows, get them
+ * too. 0, or -1 with a reason in error. */
+int pc5_tile_art(const char *tile, const char *title_id, const char *library_root, const char *prefix, const char *pc5,
+                 const char *user, char *error, size_t size);
+
 /* Every tile under tiles whose runtime is a PC5 folder, given pc5's program, its
  * helper and its folder as runtime when its program isn't pc5's (PC5 updated, or
- * moved): a tile's program has to match its runtime. log, when given, gets a line
- * for each. How many were refreshed. */
-int pc5_tile_refresh(const char *tiles, const char *pc5, void (*log)(void *context, const char *line), void *context);
+ * moved): a tile's program has to match its runtime. With library_root, also its
+ * art again (pc5_tile_art, with user) when one of its game's pictures is newer than
+ * it. log, when given, gets a line for each. How many were refreshed. */
+int pc5_tile_refresh(const char *tiles, const char *pc5, const char *library_root, const char *user,
+                     void (*log)(void *context, const char *line), void *context);
 
 /* ---- readying a tile's game ------------------------------------------------------- */
 

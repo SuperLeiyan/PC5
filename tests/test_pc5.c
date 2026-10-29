@@ -23,6 +23,7 @@
 #include "pc5_ui.h"
 #include "pc5_sound.h"
 #include "pc5_tile.h"
+#include "pc5_dds.h"
 #include "pc5_update.h"
 #include "pc5_upgrade.h"
 #include "pc5_zip.h"
@@ -329,6 +330,9 @@ static int fake_get_authorized(void *context, const char *url, const char *autho
     } else if ((!strncmp(url, "grids/steam/901001?", 19) || !strncmp(url, "grids/game/5001?", 16)) &&
                strstr(url, "?dimensions=600x900%2C660x930&") && strstr(url, plain)) {
         path(file, sizeof(file), "%s/griddb-grids.json", fixtures);
+    } else if ((!strncmp(url, "grids/steam/901001?", 19) || !strncmp(url, "grids/game/5001?", 16)) &&
+               strstr(url, "?dimensions=512x512%2C1024x1024&") && strstr(url, plain)) {
+        path(file, sizeof(file), "%s/griddb-squares.json", fixtures);
     } else if ((!strncmp(url, "heroes/steam/901001?", 20) || !strncmp(url, "heroes/game/5001?", 17)) &&
                strstr(url, "?dimensions=1920x620%2C3840x1240&") && strstr(url, plain)) {
         path(file, sizeof(file), "%s/griddb-heroes.json", fixtures);
@@ -375,6 +379,51 @@ static int fake_download(void *context, const char *url, const Pc5Sink *sink, in
 out:
     pc5_buf_free(&zip);
     return result;
+}
+
+/* Square pictures for a game's tile: Steam to know the game, then SteamGridDB's square grids
+ * alone, each a choice with its icon; nothing without a key. */
+static void test_icon_search(void)
+{
+    FakeNet net = { 0 };
+    Pc5Http http = { &net, fake_get, NULL, fake_get_authorized };
+    Pc5CoverSearch *search = pc5_alloc(sizeof(*search));
+    Pc5CoverHint hint = { .folder = "NeonDrift", .product = "Neon Drift: Complete Edition", .program = "NeonDrift",
+                          .icons = 1 };
+    Pc5Image icon = { 0 };
+    int icons = 0, first = -1;
+
+    pc5_cover_search_start(search, &hint);
+    while (pc5_cover_search_step(search, &http)) {}
+    for (int i = 0; i < search->count; i++) icons += search->choices[i].icon[0] != 0;
+    CHECK(!icons && net.griddb_requests == 0, "no key: no square pictures, SteamGridDB not asked");
+
+    pc5_copy(hint.steamgriddb_key, sizeof(hint.steamgriddb_key), TEST_GRIDDB_KEY);
+    net.requests = net.griddb_requests = 0;
+    pc5_cover_search_start(search, &hint);
+    while (pc5_cover_search_step(search, &http)) {}
+    icons = 0;
+    for (int i = 0; i < search->count; i++) {
+        const Pc5CoverChoice *choice = &search->choices[i];
+        CHECK(strcmp(choice->source, "GOG") && strcmp(choice->source, "PCGamingWiki") && strcmp(choice->source, "Wikidata"),
+              "only Steam and SteamGridDB asked: %s", choice->source);
+        if (!choice->icon[0]) continue;
+        icons++;
+        if (first < 0) first = i;
+        CHECK(!strcmp(choice->source, "SteamGridDB") && !strcmp(choice->icon, choice->url) &&
+              !strstr(choice->icon, "notsquare"), "a square one: %s", choice->icon);
+    }
+    CHECK(icons == 2 && net.griddb_requests == 1 && strstr(net.last, "dimensions=512x512%2C1024x1024"),
+          "two square pictures in one request: %d %d %s", icons, net.griddb_requests, net.last);
+    CHECK(first == 0 && strstr(search->choices[0].icon, "91sq1024"), "SteamGridDB's best first, ahead of Steam's covers");
+    CHECK(!pc5_icon_fetch(&search->choices[first], &http, &icon) && icon.w == PC5_ICON_SIZE && icon.h == PC5_ICON_SIZE,
+          "made a tile picture: %dx%d", icon.w, icon.h);
+    pc5_image_free(&icon);
+    {
+        Pc5CoverChoice none = { .source = "Steam", .url = "https://example.invalid/cover.jpg" };
+        CHECK(pc5_icon_fetch(&none, &http, &icon) == -1 && !icon.px, "a choice without a square picture: none");
+    }
+    pc5_free(search);
 }
 
 static void test_cover_search(void)
@@ -4303,6 +4352,25 @@ static size_t fake_lapy(uint8_t *out, size_t size)
     return n;
 }
 
+/* The home screen's background as the shell reads it: a DDS of BC7 mode 6 blocks. */
+static void test_dds(void)
+{
+    uint32_t pixels[8 * 4];
+    uint8_t out[148 + 2 * 16];
+
+    for (int i = 0; i < 8 * 4; i++) pixels[i] = i < 4 * 4 ? 0xff102030u : 0xffc08040u;   /* two blocks... */
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 8; x++) pixels[y * 8 + x] = x < 4 ? 0xff102030u : 0xffc08040u;
+    CHECK(pc5_dds_size(8, 4) == sizeof(out), "size: %zu", pc5_dds_size(8, 4));
+    CHECK(!pc5_dds_bc7(pixels, 8, 4, 8, out) && !memcmp(out, "DDS ", 4) && out[4] == 124 && out[12] == 4 && out[16] == 8 &&
+          !memcmp(out + 84, "DX10", 4) && out[128] == 98 && out[132] == 3 && out[140] == 1 && out[144] == 1,
+          "a DX10 header, BC7_UNORM, one 2D surface, alpha straight");
+    CHECK((out[148] & 0x7f) == 0x40 && (out[164] & 0x7f) == 0x40, "mode 6 blocks: %02x %02x", out[148], out[164]);
+    CHECK(memcmp(out + 148, out + 164, 16), "each block its own colour");
+    CHECK(pc5_dds_bc7(pixels, 6, 4, 8, out) == -1 && pc5_dds_bc7(pixels, 8, 3, 8, out) == -1 &&
+          pc5_dds_bc7(pixels, 8, 4, 4, out) == -1, "sides of 4s only, a whole row");
+}
+
 /* A log line kept, for the checks. */
 static void test_log_line(void *context, const char *line)
 {
@@ -4377,7 +4445,7 @@ static void test_tile_make(void)
     pc5_mkdirs(file);
     pc5_buf_free(&text);
 
-    Pc5TileMake make = { tiles, pc5, root, "neon", "neon", "Neon Drift" };
+    Pc5TileMake make = { tiles, pc5, root, "neon", "neon", "Neon Drift", NULL };
     CHECK(pc5_tile_make(&make, id, error, sizeof(error)) == PC5_TILE_MADE && strlen(id) == 9 && !strncmp(id, "PPSA99", 6),
           "made: %s %s", id, error);
     path(file, sizeof(file), "%s/%s/eboot.bin", tiles, id);
@@ -4389,8 +4457,11 @@ static void test_tile_make(void)
     path(file, sizeof(file), "%s/%s/win", tiles, id);
     path(other, sizeof(other), "%s/%s/pc5", tiles, id);
     CHECK(!pc5_exists(file) && !pc5_exists(other), "no Wine and no PC5 files in it: they are PC5's folder's");
+    /* No background of its own: PC5's behind its tile. */
     path(file, sizeof(file), "%s/%s/sce_sys/pic0.dds", tiles, id);
-    CHECK(!pc5_exists(file), "nor PC5's background");
+    CHECK(!pc5_read_file(file, &text, 64) && text.len == 16 && !memcmp(text.data, "PC5's background", 16),
+          "PC5's background behind it");
+    pc5_buf_free(&text);
     path(file, sizeof(file), "%s/%s/lapy.elf", tiles, id);
     CHECK(!stat(file, &a) && (a.st_mode & 0111) && !pc5_read_file(file, &text, 8192) && find_bytes(text.data, text.len, id, 9) &&
           !find_bytes(text.data, text.len, "PPSA1101", 8), "its own lapy.elf, for its ID");
@@ -4436,13 +4507,13 @@ static void test_tile_make(void)
     CHECK(pc5_tile_make(&make, again, error, sizeof(error)) == PC5_TILE_MADE && !strcmp(again, id), "made again: %s", error);
 
     /* PC5 updated: the tile gets its new program; one already current is left. */
-    CHECK(pc5_tile_refresh(tiles, pc5, NULL, NULL) == 0, "current: nothing to do");
+    CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL) == 0, "current: nothing to do");
     path(file, sizeof(file), "%s/eboot.bin", pc5);
     write_text(file, "PC5's new program");
     {
         char line[PC5_PATH + 200] = "";
-        CHECK(pc5_tile_refresh(tiles, pc5, test_log_line, line) == 1 && strstr(line, "PC5 tile refreshed") &&
-              strstr(line, id), "refreshed: %s", line);
+        CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, test_log_line, line) == 1 && strstr(line, "PC5 tile refreshed") &&
+              strstr(line, id) && strstr(line, "program=1 art=0"), "refreshed: %s", line);
     }
     path(file, sizeof(file), "%s/%s/eboot.bin", tiles, id);
     CHECK(!pc5_read_file(file, &text, 64) && text.len == 17 && !memcmp(text.data, "PC5's new program", 17),
@@ -4450,19 +4521,78 @@ static void test_tile_make(void)
     pc5_buf_free(&text);
     path(file, sizeof(file), "%s/%s/sce_sys/param.json", tiles, id);
     CHECK(pc5_exists(file), "its name and picture kept");
-    CHECK(pc5_tile_refresh(tiles, pc5, NULL, NULL) == 0, "and current again");
+    CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL) == 0, "and current again");
+
+    /* Its art: the game's background behind its tile, 1920x1080 and a 4K BC7 DDS, and its tile
+     * picture in front; the console's copies of a registered tile too. */
+    {
+        char user[PC5_PATH], dir[PC5_PATH];
+        Pc5Image background = { 0 }, picture = { 0 };
+        path(user, sizeof(user), "%s/tile-user", work);
+        path(dir, sizeof(dir), "%s/appmeta/%s", user, id);
+        pc5_mkdirs(dir);
+        path(dir, sizeof(dir), "%s/app/%s/sce_sys", user, id);
+        pc5_mkdirs(dir);
+        CHECK(!pc5_image_new(&background, PC5_BACKGROUND_WIDTH, PC5_BACKGROUND_HEIGHT), "a background");
+        for (int i = 0; background.px && i < background.w * background.h; i++) background.px[i] = 0xff3060c0u;
+        path(file, sizeof(file), "%s/prefixes/neon/pc5", root);
+        pc5_mkdirs(file);
+        path(file, sizeof(file), "%s/prefixes/neon/pc5/background.bin", root);
+        CHECK(!pc5_cover_save(file, &background, 0), "saved as PC5 keeps it");
+        CHECK(!pc5_image_new(&picture, PC5_ICON_SIZE, PC5_ICON_SIZE), "a tile picture");
+        for (int i = 0; picture.px && i < picture.w * picture.h; i++) picture.px[i] = 0xffe02040u;
+        path(file, sizeof(file), "%s/prefixes/neon/pc5/icon.bin", root);
+        CHECK(!pc5_cover_save(file, &picture, 0), "saved as PC5 keeps it");
+        pc5_image_free(&background);
+        pc5_image_free(&picture);
+        /* Newer than the tile's art: the refresh makes it again (the files' times, a second apart). */
+        path(file, sizeof(file), "%s/%s/sce_sys/icon0.png", tiles, id);
+        {
+            struct timespec old[2] = { { 1000000000, 0 }, { 1000000000, 0 } };
+            utimensat(AT_FDCWD, file, old, 0);
+        }
+        char line[PC5_PATH + 200] = "";
+        CHECK(pc5_tile_refresh(tiles, pc5, root, user, test_log_line, line) == 1 && strstr(line, "program=0 art=1"),
+              "its art again: %s", line);
+        Pc5Image shown = { 0 };
+        CHECK(!pc5_read_file(file, &text, 4u << 20) && !pc5_image_decode(text.data, text.len, &shown) &&
+              shown.w == 512 && (shown.px[256 * 512 + 256] & 0xffffffu) == 0xe02040u,
+              "its tile picture in front: %06x", shown.px ? (unsigned)(shown.px[256 * 512 + 256] & 0xffffffu) : 0);
+        pc5_image_free(&shown);
+        pc5_buf_free(&text);
+        path(file, sizeof(file), "%s/%s/sce_sys/pic0.png", tiles, id);
+        CHECK(!pc5_read_file(file, &text, 8u << 20) && !pc5_image_decode(text.data, text.len, &shown) &&
+              shown.w == 1920 && shown.h == 1080 && (shown.px[540 * 1920 + 960] & 0xffffffu) == 0x3060c0u,
+              "the game's background behind it, 1920x1080: %dx%d", shown.w, shown.h);
+        pc5_image_free(&shown);
+        pc5_buf_free(&text);
+        path(file, sizeof(file), "%s/%s/sce_sys/pic0.dds", tiles, id);
+        path(other, sizeof(other), "%s/%s/sce_sys/pic1.dds", tiles, id);
+        {
+            Pc5Buf dds = { 0 };
+            CHECK(!pc5_read_file(file, &text, 16u << 20) && text.len == pc5_dds_size(3840, 2160) &&
+                  !memcmp(text.data, "DDS ", 4) && text.data[128] == 98 && !pc5_read_file(other, &dds, 16u << 20) &&
+                  dds.len == text.len && !memcmp(dds.data, text.data, text.len), "and as 4K BC7 DDS, both: %zu", text.len);
+            pc5_buf_free(&dds);
+        }
+        pc5_buf_free(&text);
+        path(file, sizeof(file), "%s/appmeta/%s/icon0.png", user, id);
+        path(other, sizeof(other), "%s/app/%s/sce_sys/pic0.dds", user, id);
+        CHECK(pc5_is_file(file) && pc5_is_file(other), "the console's copies too");
+        CHECK(pc5_tile_refresh(tiles, pc5, root, user, NULL, NULL) == 0, "and nothing to do after");
+    }
 
     /* PC5 without its helper: nothing made, nothing left. */
     path(file, sizeof(file), "%s/lapy.elf", pc5);
     path(other, sizeof(other), "%s/lapy.elf.kept", pc5);
     rename(file, other);
-    Pc5TileMake second = { tiles, pc5, root, "plain", "plain", "Plain" };
+    Pc5TileMake second = { tiles, pc5, root, "plain", "plain", "Plain", NULL };
     CHECK(pc5_tile_make(&second, again, error, sizeof(error)) == PC5_TILE_FAILED && !again[0] && strstr(error, "lapy.elf"),
           "no helper: %s", error);
     CHECK(!pc5_home_find(tiles, "plain", again), "no tile for it");
     CHECK(count_entries(tiles, ".staging-") == 0, "nothing staged left after it");
     rename(other, file);
-    Pc5TileMake relative = { tiles, "homebrew/PPSA11018", root, "plain", "plain", "Plain" };
+    Pc5TileMake relative = { tiles, "homebrew/PPSA11018", root, "plain", "plain", "Plain", NULL };
     CHECK(pc5_tile_make(&relative, again, error, sizeof(error)) == PC5_TILE_FAILED, "PC5's folder as an absolute path only");
 
     /* Taken away: the tile goes, PC5 stays. */
@@ -5942,6 +6072,7 @@ int main(int argc, char **argv)
     test_json();
     test_names();
     test_cover_search();
+    test_icon_search();
     test_pe();
     make_usb();
     test_sources();
@@ -5964,6 +6095,7 @@ int main(int argc, char **argv)
     test_home();
     test_tile();
     test_tile_make();
+    test_dds();
     test_own_covers();
     test_prefix_system();
     test_prefix_dxvk();

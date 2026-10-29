@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: a home screen tile that is an app of its own (pc5_tile.h). */
 #include "pc5_tile.h"
+#include "pc5_dds.h"
 #include "pc5_home.h"
+#include "pc5_image.h"
 #include "pc5_json.h"
 #include "third_party/psfwd/psfwd.h"
 
@@ -289,7 +291,112 @@ done:
     return status;
 }
 
-/* The tile's sce_sys: PC5's param.json as the tile's, and the game's picture. */
+/* ---- the tile's art --------------------------------------------------------------- */
+
+enum { PIC0_WIDTH = 1920, PIC0_HEIGHT = 1080, DDS_WIDTH = 3840, DDS_HEIGHT = 2160 };
+
+/* The tile's art, by name in sce_sys, and what each is made of. */
+typedef struct Art {
+    Pc5Buf icon0, pic0, dds;   /* icon0.png; pic0.png; pic0.dds and pic1.dds, the same picture */
+} Art;
+
+static void art_free(Art *art)
+{
+    pc5_buf_free(&art->icon0);
+    pc5_buf_free(&art->pic0);
+    pc5_buf_free(&art->dds);
+}
+
+/* The game's background (background.bin, 960x540) as the home screen's: a 1920x1080 PNG and a
+ * 4K BC7 DDS (pc5_dds.h). -1 when the game has none (or out of memory). */
+static int background_art(const char *library_root, const char *prefix, Art *art)
+{
+    char path[PC5_PATH];
+    Pc5Image background = { 0 }, sized = { 0 };
+    int status = -1;
+
+    if (pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/background.bin", library_root, prefix) ||
+        pc5_cover_load(path, &background, NULL))
+        return -1;
+    if (pc5_image_resize(&background, PIC0_WIDTH, PIC0_HEIGHT, &sized) || pc5_image_png(&sized, &art->pic0)) goto done;
+    pc5_image_free(&sized);
+    if (pc5_image_resize(&background, DDS_WIDTH, DDS_HEIGHT, &sized) ||
+        !(art->dds.data = pc5_alloc(pc5_dds_size(DDS_WIDTH, DDS_HEIGHT))) ||
+        pc5_dds_bc7(sized.px, sized.w, sized.h, sized.w, art->dds.data))
+        goto done;
+    art->dds.len = art->dds.cap = pc5_dds_size(DDS_WIDTH, DDS_HEIGHT);
+    status = 0;
+done:
+    if (status) {
+        pc5_buf_free(&art->pic0);
+        pc5_buf_free(&art->dds);
+    }
+    pc5_image_free(&sized);
+    pc5_image_free(&background);
+    return status;
+}
+
+/* art's files into folder (a tile's sce_sys, or the console's copy of it). */
+static int art_write(const char *folder, const Art *art)
+{
+    char path[PC5_PATH];
+    int failed = 0;
+    if (art->icon0.len)
+        failed |= pc5_format(path, sizeof(path), "%s/icon0.png", folder) || pc5_write_file(path, art->icon0.data, art->icon0.len);
+    if (art->pic0.len)
+        failed |= pc5_format(path, sizeof(path), "%s/pic0.png", folder) || pc5_write_file(path, art->pic0.data, art->pic0.len);
+    if (art->dds.len)
+        failed |= pc5_format(path, sizeof(path), "%s/pic0.dds", folder) || pc5_write_file(path, art->dds.data, art->dds.len) ||
+                  pc5_format(path, sizeof(path), "%s/pic1.dds", folder) || pc5_write_file(path, art->dds.data, art->dds.len);
+    return failed ? -1 : 0;
+}
+
+int pc5_tile_art(const char *tile, const char *title_id, const char *library_root, const char *prefix, const char *pc5,
+                 const char *user, char *error, size_t size)
+{
+    static const char *const pc5_art[] = { "pic0.png", "pic0.dds", "pic1.dds" };
+    char path[PC5_PATH], copy[PC5_PATH];
+    Art art;
+    int status = -1;
+
+    memset(&art, 0, sizeof(art));
+    if (pc5_format(path, sizeof(path), "%s/sce_sys", tile) || pc5_mkdirs(path)) {
+        snprintf(error, size, "PC5 can't make the tile's sce_sys.");
+        return -1;
+    }
+    if (pc5_home_picture(library_root, prefix, &art.icon0)) {
+        snprintf(error, size, "PC5 can't make the tile's picture.");
+        goto done;
+    }
+    /* The game's background behind its tile; PC5's own when it has none. */
+    if (background_art(library_root, prefix, &art)) {
+        for (size_t i = 0; pc5 && i < sizeof(pc5_art) / sizeof(pc5_art[0]); i++) {
+            Pc5Buf data = { 0 };
+            if (!pc5_format(copy, sizeof(copy), "%s/sce_sys/%s", pc5, pc5_art[i]) && !pc5_read_file(copy, &data, 32u << 20) &&
+                !pc5_format(copy, sizeof(copy), "%s/sce_sys/%s", tile, pc5_art[i]))
+                (void)pc5_write_file(copy, data.data, data.len);
+            pc5_buf_free(&data);
+        }
+    }
+    if (art_write(path, &art)) {
+        snprintf(error, size, "PC5 can't write the tile's pictures.");
+        goto done;
+    }
+    /* The console's copies of a registered tile's sce_sys, which ShadowMountPlus made once when it
+     * first registered the tile: brought up to date as PC5's updater does its own. Best effort. */
+    if (user && title_id) {
+        if (!pc5_format(copy, sizeof(copy), "%s/appmeta/%s", user, title_id) && pc5_is_dir(copy)) (void)art_write(copy, &art);
+        if (!pc5_format(copy, sizeof(copy), "%s/app/%s/sce_sys", user, title_id) && pc5_is_dir(copy)) (void)art_write(copy, &art);
+        if (!pc5_format(copy, sizeof(copy), "%s/app/%s/icon0.png", user, title_id) && pc5_is_file(copy))
+            (void)pc5_write_file(copy, art.icon0.data, art.icon0.len);
+    }
+    status = 0;
+done:
+    art_free(&art);
+    return status;
+}
+
+/* The tile's sce_sys: PC5's param.json as the tile's, and its art. */
 static int tile_sce_sys(const Pc5TileMake *make, const char *dir, const char *title_id, char *error, size_t size)
 {
     char from[PC5_PATH], to[PC5_PATH];
@@ -307,12 +414,9 @@ static int tile_sce_sys(const Pc5TileMake *make, const char *dir, const char *ti
         snprintf(error, size, "PC5 can't write the tile's param.json from its own.");
         goto done;
     }
-    pc5_buf_free(&data);
-    if (pc5_home_picture(make->library_root, make->prefix ? make->prefix : make->id, &data) ||
-        pc5_format(to, sizeof(to), "%s/sce_sys/icon0.png", dir) || pc5_write_file(to, data.data, data.len)) {
-        snprintf(error, size, "PC5 can't make the tile's picture.");
+    if (pc5_tile_art(dir, title_id, make->library_root, make->prefix ? make->prefix : make->id, make->pc5, make->user,
+                     error, size))
         goto done;
-    }
     status = 0;
 done:
     pc5_buf_free(&data);
@@ -361,7 +465,23 @@ int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t siz
     return PC5_TILE_MADE;
 }
 
-int pc5_tile_refresh(const char *tiles, const char *pc5, void (*log)(void *context, const char *line), void *context)
+/* 1 when one of the game's pictures is newer than the tile's art (its icon0.png). */
+static int art_stale(const char *folder, const char *library_root, const char *game)
+{
+    static const char *const pictures[] = { "cover.bin", "background.bin", "icon.bin", "background-none.txt" };
+    char path[PC5_PATH];
+    struct stat art, picture;
+
+    if (pc5_format(path, sizeof(path), "%s/sce_sys/icon0.png", folder) || stat(path, &art)) return 1;
+    for (size_t i = 0; i < sizeof(pictures) / sizeof(pictures[0]); i++)
+        if (!pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/%s", library_root, game, pictures[i]) &&
+            !stat(path, &picture) && picture.st_mtime > art.st_mtime)
+            return 1;
+    return 0;
+}
+
+int pc5_tile_refresh(const char *tiles, const char *pc5, const char *library_root, const char *user,
+                     void (*log)(void *context, const char *line), void *context)
 {
     char line[PC5_PATH + 200];
     DIR *dir;
@@ -374,13 +494,17 @@ int pc5_tile_refresh(const char *tiles, const char *pc5, void (*log)(void *conte
         if (!tile_id(entry->d_name) || pc5_join(folder, sizeof(folder), tiles, entry->d_name) ||
             pc5_tile_read_all(folder, game, runtime, sizeof(runtime), error, sizeof(error)) != 1 || !runtime[0])
             continue;
-        /* Already this PC5's program, with this folder as its runtime. */
-        if (!strcmp(runtime, pc5) && !pc5_format(ours, sizeof(ours), "%s/eboot.bin", pc5) &&
-            !pc5_format(theirs, sizeof(theirs), "%s/eboot.bin", folder) && same_file(ours, theirs))
-            continue;
-        int status = program_files(pc5, folder, entry->d_name, game, error, sizeof(error));
-        snprintf(line, sizeof(line), "PC5 tile refreshed %s game=%s runtime=%s%s%s", entry->d_name, game, pc5,
-                 status ? " failed: " : "", status ? error : "");
+        /* This PC5's program, with this folder as its runtime. */
+        int program = strcmp(runtime, pc5) || pc5_format(ours, sizeof(ours), "%s/eboot.bin", pc5) ||
+                      pc5_format(theirs, sizeof(theirs), "%s/eboot.bin", folder) || !same_file(ours, theirs);
+        /* The game's pictures, changed since (a background found while the library showed). */
+        int art = library_root && art_stale(folder, library_root, game);
+        if (!program && !art) continue;
+        int status = program ? program_files(pc5, folder, entry->d_name, game, error, sizeof(error)) : 0;
+        if (!status && art)
+            status = pc5_tile_art(folder, entry->d_name, library_root, game, pc5, user, error, sizeof(error));
+        snprintf(line, sizeof(line), "PC5 tile refreshed %s game=%s runtime=%s program=%d art=%d%s%s", entry->d_name, game,
+                 pc5, program, art, status ? " failed: " : "", status ? error : "");
         if (log) log(context, line);
         if (!status) refreshed++;
     }
