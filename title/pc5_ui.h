@@ -10,7 +10,6 @@
 #include "pc5.h"
 #include "pc5_cover.h"
 #include "pc5_draw.h"
-#include "pc5_linker.h"
 
 typedef struct Pc5Platform {
     void *context;
@@ -40,10 +39,6 @@ typedef struct Pc5Platform {
     int (*keyboard_open)(void *context, const char *title, const char *text);
     int (*keyboard_state)(void *context);
     int (*keyboard_close)(void *context, char *out, size_t size);
-    /* PC5's folder linked into a tile's staging folder by the linking helper
-     * (pc5_linker.h): 0 with its reply, -1 when it couldn't be asked (no helper, no
-     * elfldr). NULL where there is none: tiles are forwarders then. */
-    int (*link)(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply);
 } Pc5Platform;
 
 enum {

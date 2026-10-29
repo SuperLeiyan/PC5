@@ -2064,7 +2064,7 @@ static void game_menu_open(Pc5Ui *ui, const char *id)
 /* The game's home screen tile: made, or taken away when it has one. */
 static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
 {
-    char error[PC5_ERROR] = "", body[600];
+    char error[PC5_ERROR] = "", body[1600];
 
     if (!ui->config.tiles_root || !ui->config.tile_template) {
         message(ui, 0, "Home screen tiles aren't available", "This copy of PC5 has no tile program.", S_GAME_MENU);
@@ -2083,35 +2083,31 @@ static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
                 "The tile's folder is deleted. If the tile is still on the home screen, delete it there.", S_GAME_MENU);
         return;
     }
-    /* An app of its own (pc5_tile.h), its files PC5's own linked, when PC5's folder is on
-     * the tiles' drive; otherwise a forwarder that starts PC5 with the game. */
+    /* An app of its own (pc5_tile.h) that runs the game from PC5's installed folder, when
+     * PC5 finds that folder; otherwise a forwarder that starts PC5 with the game. */
     {
         Pc5UpgradeConfig find = { ui->platform.http, ui->app, ui->root, ui->config.drives, ui->config.user,
                                   ui->platform.log, ui->platform.context };
         char folder[PC5_PATH] = "", other[PC5_PATH] = "";
         int found = ui->app[0] ? pc5_upgrade_find(&find, folder, sizeof(folder), other, sizeof(other)) : -1;
         if (!found) {
-            Pc5TileMake make = { ui->config.tiles_root, folder, ui->root, game->id, game->prefix, game->title,
-                                 ui->platform.link, ui->platform.context };
+            Pc5TileMake make = { ui->config.tiles_root, folder, ui->root, game->id, game->prefix, game->title };
             int made = pc5_tile_make(&make, ui->tile, error, sizeof(error));
-            say(ui, "PC5 home tile app id=%s from=%s made=%d tile=%s%s%s", game->id, folder, made, ui->tile,
+            say(ui, "PC5 home tile app id=%s runtime=%s made=%d tile=%s%s%s", game->id, folder, made, ui->tile,
                 error[0] ? " why=" : "", error);
-            if (made == PC5_TILE_MADE) {
-                snprintf(body, sizeof(body),
-                         "Its tile, %s, appears on the home screen once you close PC5 and ShadowMountPlus finds it in "
-                         "%s. It is the game's own app: it starts the game straight away, and leaving the game goes "
-                         "back to the home screen.", ui->tile, ui->config.tiles_root);
-                message(ui, 1, "Added to the home screen", body, S_GAME_MENU);
-                return;
-            }
-            if (made == PC5_TILE_FAILED) {
+            if (made != PC5_TILE_MADE) {
                 message(ui, 0, "The tile wasn't made", error, S_GAME_MENU);
                 return;
             }
-            error[0] = 0;   /* no links on that drive: a forwarder instead */
-        } else {
-            say(ui, "PC5 home tile forwarder id=%s: PC5's folder %s", game->id, found == -2 ? "is there twice" : "not found");
+            snprintf(body, sizeof(body),
+                     "Its tile, %s, appears on the home screen once you close PC5 and ShadowMountPlus finds it in %s. "
+                     "It is the game's own app: it starts the game straight away, and leaving the game goes back to "
+                     "the home screen. It runs from PC5's folder, %s: keep PC5 there.", ui->tile,
+                     ui->config.tiles_root, folder);
+            message(ui, 1, "Added to the home screen", body, S_GAME_MENU);
+            return;
         }
+        say(ui, "PC5 home tile forwarder id=%s: PC5's folder %s", game->id, found == -2 ? "is there twice" : "not found");
     }
     if (pc5_home_add(ui->config.tiles_root, ui->config.tile_template, ui->root, game->id, game->prefix, game->title,
                      ui->tile, error, sizeof(error))) {
@@ -2297,6 +2293,17 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         pc5_remove_end(&ui->remove);
         /* The API keys, its file made for the player when there is none. */
         pc5_api_key(ui->root, PC5_STEAMGRIDDB_KEY, ui->griddb_key, sizeof(ui->griddb_key));
+        /* Tiles that run from PC5's folder get this PC5's program, should it have changed
+         * (an update) or moved: a tile's program and its runtime must match. */
+        if (ui->config.tiles_root && ui->app[0]) {
+            Pc5UpgradeConfig find = { ui->platform.http, ui->app, ui->root, ui->config.drives, ui->config.user,
+                                      ui->platform.log, ui->platform.context };
+            char folder[PC5_PATH] = "", other[PC5_PATH] = "";
+            if (!pc5_upgrade_find(&find, folder, sizeof(folder), other, sizeof(other))) {
+                int refreshed = pc5_tile_refresh(ui->config.tiles_root, folder, ui->platform.log, ui->platform.context);
+                if (refreshed) say(ui, "PC5 tiles refreshed=%d runtime=%s", refreshed, folder);
+            }
+        }
         {
             char id[PC5_ID];
             int offset = 0;

@@ -3128,7 +3128,7 @@ static void test_background_screen(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0,
-                             NULL, NULL, NULL, NULL, NULL, NULL };
+                             NULL, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
@@ -4303,39 +4303,19 @@ static size_t fake_lapy(uint8_t *out, size_t size)
     return n;
 }
 
-/* The linking helper, as elfldr would run it, in this process: its request checked as the
- * helper checks it, then PC5's folder linked. */
-static int fake_link_calls;
-static int fake_link(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply)
+/* A log line kept, for the checks. */
+static void test_log_line(void *context, const char *line)
 {
-    struct stat st;
-    (void)context;
-    fake_link_calls++;
-    memset(reply, 0, sizeof(*reply));
-    reply->magic = PC5_LINKER_MAGIC;
-    reply->version = PC5_LINKER_VERSION;
-    reply->size = sizeof(*reply);
-    if (!pc5_linker_request_ok(request) || stat(request->from, &st) || !lstat(request->to, &st)) {
-        reply->status = PC5_LINKER_REFUSED;
-        return 0;
-    }
-    pc5_link_tree(request->from, request->to, reply);
-    return 0;
+    snprintf((char *)context, PC5_PATH + 200, "%s", line);
 }
 
-/* No helper to ask: elfldr not running. */
-static int no_link(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply)
-{
-    (void)context, (void)request, (void)reply;
-    return -1;
-}
-
-/* Making a game's tile as an app of its own: PC5's folder linked, its own sce_sys,
- * lapy.elf and pc5-tile.json; made again in place; taken away leaving PC5 whole. */
+/* Making a game's tile as an app of its own that runs from PC5's folder: only what the
+ * console starts in it, PC5's folder named as its runtime; made again in place; refreshed
+ * when PC5's program changes; taken away leaving PC5 whole. */
 static void test_tile_make(void)
 {
     char pc5[PC5_PATH], tiles[PC5_PATH], root[PC5_PATH], file[PC5_PATH], other[PC5_PATH], id[16], again[16],
-         game[PC5_ID], error[PC5_ERROR];
+         game[PC5_ID], runtime[PC5_PATH], error[PC5_ERROR];
     uint8_t *lapy = pc5_alloc(4096), *copy = pc5_alloc(4096);
     size_t lapy_size = fake_lapy(lapy, 4096);
     Pc5Buf text = { 0 }, param = { 0 };
@@ -4349,8 +4329,6 @@ static void test_tile_make(void)
     {
         const uint8_t *x = find_bytes(copy, lapy_size, "\x48\x83\xf1", 3), *y = find_bytes(copy, lapy_size, "\x48\x83\xf2", 3);
         CHECK(x && y && x[3] == '7' && y[3] == '7', "and the ninth character's compares");
-    }
-    {
         size_t changed = 0;
         for (size_t i = 0; i < lapy_size; i++) changed += copy[i] != lapy[i];
         CHECK(changed == 15, "15 bytes changed: %zu", changed);
@@ -4358,7 +4336,7 @@ static void test_tile_make(void)
     memcpy(copy, lapy, lapy_size);
     CHECK(pc5_tile_lapy_patch(copy, lapy_size, "CUSA99437", error, sizeof(error)) == -1, "a tile's ID is PPSA");
     CHECK(pc5_tile_lapy_patch(copy, lapy_size, "PPSA9943", error, sizeof(error)) == -1, "and nine characters");
-    copy[lapy_size - 40] = 'X';   /* the name gone: not the helper PC5 knows */
+    copy[lapy_size - 40] = 'X';
     memcpy(copy + 64 + 9, "9", 1);
     CHECK(pc5_tile_lapy_patch(copy, lapy_size, "PPSA99437", error, sizeof(error)) == -1 && strstr(error, "isn't the one"),
           "another helper: %s", error);
@@ -4372,97 +4350,49 @@ static void test_tile_make(void)
           strstr((char *)param.data, "\"titleName\": \"Neon \\\"Drift\\\" \\\\ II\"") &&
           !strstr((char *)param.data, "11018") && strstr((char *)param.data, "\"attribute3\": 64"),
           "the tile's: %s", param.len ? (char *)param.data : "");
-    {
-        Pc5Json json = { 0 };
-        char name[64];
-        CHECK(!pc5_json_parse(&json, (const char *)param.data, param.len, 1024) &&
-              !pc5_json_text(&json, pc5_json_get(&json, pc5_json_get(&json, pc5_json_get(&json, 0, "localizedParameters"),
-                                                                     "en-US"), "titleName"), name, sizeof(name)) &&
-              !strcmp(name, "Neon \"Drift\" \\ II"), "still JSON, the name as it was");
-        pc5_json_free(&json);
-    }
     pc5_buf_free(&param);
     CHECK(pc5_tile_param("{\"titleId\": \"PPSA11018\"}", 24, "PPSA99437", "x", &param) == -1, "not a whole param.json");
 
-    /* PC5's folder as installed, on the tiles' drive. */
+    /* PC5's folder as installed. */
     path(tiles, sizeof(tiles), "%s/tile-drive/homebrew", work);
     path(pc5, sizeof(pc5), "%s/PPSA11018", tiles);
     path(root, sizeof(root), "%s/tile-drive/prospero-win", work);
     path(file, sizeof(file), "%s/eboot.bin", pc5);
     write_text(file, "PC5's program");
-    chmod(file, 0755);
     path(file, sizeof(file), "%s/sce_module/libc.prx", pc5);
     write_text(file, "its libc");
     path(file, sizeof(file), "%s/win/wine/lib/wine/x86_64-unix/ntdll.prx", pc5);
     write_text(file, "Wine");
     path(file, sizeof(file), "%s/pc5/fonts.bin", pc5);
     write_text(file, "fonts");
-    path(file, sizeof(file), "%s/pc5/forwarder/eboot.bin", pc5);
-    write_text(file, "forwarder program");
     path(file, sizeof(file), "%s/sce_sys", pc5);
     pc5_mkdirs(file);
     path(file, sizeof(file), "%s/sce_sys/param.json", pc5);
     CHECK(!pc5_write_file(file, text.data, text.len), "PC5's param.json in its folder");
     path(file, sizeof(file), "%s/sce_sys/pic0.dds", pc5);
     write_text(file, "PC5's background");
-    path(file, sizeof(file), "%s/sce_sys/icon0.png", pc5);
-    write_text(file, "PC5's icon");
     path(file, sizeof(file), "%s/lapy.elf", pc5);
     pc5_write_file(file, lapy, lapy_size);
     path(file, sizeof(file), "%s/profiles", root);
     pc5_mkdirs(file);
     pc5_buf_free(&text);
 
-    /* The helper's requests: only a tile's staging folder, whole absolute paths. */
-    {
-        Pc5LinkerRequest request = { PC5_LINKER_MAGIC, PC5_LINKER_VERSION, sizeof(request), "", "" };
-        snprintf(request.from, sizeof(request.from), "/data/homebrew/PPSA11018");
-        snprintf(request.to, sizeof(request.to), "/data/homebrew/.staging-PPSA99437");
-        CHECK(pc5_linker_request_ok(&request), "a tile's request");
-        snprintf(request.to, sizeof(request.to), "/data/homebrew/PPSA99437");
-        CHECK(!pc5_linker_request_ok(&request), "not into a tile itself");
-        snprintf(request.to, sizeof(request.to), "/data/homebrew/.staging-PPSA9943x");
-        CHECK(!pc5_linker_request_ok(&request), "not another name");
-        snprintf(request.to, sizeof(request.to), "/data/homebrew/../.staging-PPSA99437");
-        CHECK(!pc5_linker_request_ok(&request), "no .. in it");
-        snprintf(request.to, sizeof(request.to), "data/.staging-PPSA99437");
-        CHECK(!pc5_linker_request_ok(&request), "absolute only");
-        snprintf(request.to, sizeof(request.to), "/data/homebrew/.staging-PPSA99437");
-        request.version = 2;
-        CHECK(!pc5_linker_request_ok(&request), "this version only");
-        CHECK(pc5_linker_skips("lapy.elf") && pc5_linker_skips("sce_sys/param.json") && pc5_linker_skips("pc5/forwarder") &&
-              pc5_linker_skips("pc5/forwarder/eboot.bin") && !pc5_linker_skips("sce_sys/pic0.dds") &&
-              !pc5_linker_skips("eboot.bin") && !pc5_linker_skips("pc5/forwarders"), "what a tile has of its own");
-    }
-
-    /* No helper, or no elfldr: nothing made, a forwarder instead. */
-    {
-        Pc5TileMake none = { tiles, pc5, root, "neon", "neon", "Neon Drift", NULL, NULL };
-        CHECK(pc5_tile_make(&none, id, error, sizeof(error)) == PC5_TILE_NO_LINKS && !id[0], "no helper: %s", error);
-        none.link = no_link;
-        CHECK(pc5_tile_make(&none, id, error, sizeof(error)) == PC5_TILE_NO_LINKS && !id[0] && strstr(error, "elfldr"),
-              "no elfldr: %s", error);
-        CHECK(!pc5_home_find(tiles, "neon", again), "and no tile");
-    }
-
-    Pc5TileMake make = { tiles, pc5, root, "neon", "neon", "Neon Drift", fake_link, NULL };
+    Pc5TileMake make = { tiles, pc5, root, "neon", "neon", "Neon Drift" };
     CHECK(pc5_tile_make(&make, id, error, sizeof(error)) == PC5_TILE_MADE && strlen(id) == 9 && !strncmp(id, "PPSA99", 6),
           "made: %s %s", id, error);
-    path(file, sizeof(file), "%s/%s/win/wine/lib/wine/x86_64-unix/ntdll.prx", tiles, id);
-    path(other, sizeof(other), "%s/win/wine/lib/wine/x86_64-unix/ntdll.prx", pc5);
-    CHECK(!stat(file, &a) && !stat(other, &b) && a.st_ino == b.st_ino && a.st_nlink == 2, "Wine linked, not copied");
     path(file, sizeof(file), "%s/%s/eboot.bin", tiles, id);
-    path(other, sizeof(other), "%s/eboot.bin", pc5);
-    CHECK(!stat(file, &a) && !stat(other, &b) && a.st_ino == b.st_ino && (a.st_mode & 0111), "the program linked, runnable");
+    CHECK(!stat(file, &a) && (a.st_mode & 0111) && !pc5_read_file(file, &text, 64) && text.len == 13 &&
+          !memcmp(text.data, "PC5's program", 13), "PC5's program in it, runnable");
+    pc5_buf_free(&text);
+    path(file, sizeof(file), "%s/%s/sce_module/libc.prx", tiles, id);
+    CHECK(!stat(file, &a) && (a.st_mode & 0111), "and its libc");
+    path(file, sizeof(file), "%s/%s/win", tiles, id);
+    path(other, sizeof(other), "%s/%s/pc5", tiles, id);
+    CHECK(!pc5_exists(file) && !pc5_exists(other), "no Wine and no PC5 files in it: they are PC5's folder's");
     path(file, sizeof(file), "%s/%s/sce_sys/pic0.dds", tiles, id);
-    path(other, sizeof(other), "%s/sce_sys/pic0.dds", pc5);
-    CHECK(!stat(file, &a) && !stat(other, &b) && a.st_ino == b.st_ino, "PC5's background linked");
-    path(file, sizeof(file), "%s/%s/pc5/forwarder", tiles, id);
-    CHECK(!pc5_exists(file), "no forwarder in it");
+    CHECK(!pc5_exists(file), "nor PC5's background");
     path(file, sizeof(file), "%s/%s/lapy.elf", tiles, id);
-    path(other, sizeof(other), "%s/lapy.elf", pc5);
-    CHECK(!stat(file, &a) && !stat(other, &b) && a.st_ino != b.st_ino && a.st_nlink == 1 && (a.st_mode & 0111) &&
-          !pc5_read_file(file, &text, 8192) && find_bytes(text.data, text.len, id, 9) &&
+    CHECK(!stat(file, &a) && (a.st_mode & 0111) && !pc5_read_file(file, &text, 8192) && find_bytes(text.data, text.len, id, 9) &&
           !find_bytes(text.data, text.len, "PPSA1101", 8), "its own lapy.elf, for its ID");
     pc5_buf_free(&text);
     path(file, sizeof(file), "%s/lapy.elf", pc5);
@@ -4482,35 +4412,65 @@ static void test_tile_make(void)
         pc5_buf_free(&text);
     }
     path(file, sizeof(file), "%s/%s", tiles, id);
-    CHECK(pc5_tile_read(file, game, error, sizeof(error)) == 1 && !strcmp(game, "neon"), "its game: %s", game);
+    CHECK(pc5_tile_read_all(file, game, runtime, sizeof(runtime), error, sizeof(error)) == 1 && !strcmp(game, "neon") &&
+          !strcmp(runtime, pc5), "its game and its runtime, PC5's folder: %s %s", game, runtime);
     CHECK(pc5_home_find(tiles, "neon", again) && !strcmp(again, id), "found as the game's tile");
-    path(file, sizeof(file), "%s/.staging-%s", tiles, id);
-    CHECK(!pc5_exists(file), "nothing staged left");
+    CHECK(count_entries(tiles, ".staging-") == 0, "nothing staged left");
 
-    /* Made again: the same ID, still linked. */
+    /* A tile's file naming its runtime: an absolute path, or none at all (a hand-made copy). */
+    path(other, sizeof(other), "%s/tile-files", work);
+    path(file, sizeof(file), "%s/pc5-tile.json", other);
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": \"neon\"}");
+    CHECK(pc5_tile_read_all(other, game, runtime, sizeof(runtime), error, sizeof(error)) == 1 && !runtime[0],
+          "no runtime: in the tile");
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": \"neon\", \"runtime\": \"data/homebrew/PPSA11018\"}");
+    CHECK(pc5_tile_read_all(other, game, runtime, sizeof(runtime), error, sizeof(error)) == -1 && strstr(error, "where PC5"),
+          "a relative runtime: %s", error);
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": \"neon\", \"runtime\": \"/data/homebrew/../x\"}");
+    CHECK(pc5_tile_read_all(other, game, runtime, sizeof(runtime), error, sizeof(error)) == -1, "no .. in it");
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": \"neon\", \"runtime\": \"/data/My \\\"PC5\\\"\"}");
+    CHECK(pc5_tile_read_all(other, game, runtime, sizeof(runtime), error, sizeof(error)) == 1 &&
+          !strcmp(runtime, "/data/My \"PC5\""), "quotes in it: %s", runtime);
+
+    /* Made again: the same ID. */
     CHECK(pc5_tile_make(&make, again, error, sizeof(error)) == PC5_TILE_MADE && !strcmp(again, id), "made again: %s", error);
-    path(file, sizeof(file), "%s/win/wine/lib/wine/x86_64-unix/ntdll.prx", pc5);
-    CHECK(!stat(file, &b) && b.st_nlink == 2, "one tile's links, not two");
+
+    /* PC5 updated: the tile gets its new program; one already current is left. */
+    CHECK(pc5_tile_refresh(tiles, pc5, NULL, NULL) == 0, "current: nothing to do");
+    path(file, sizeof(file), "%s/eboot.bin", pc5);
+    write_text(file, "PC5's new program");
+    {
+        char line[PC5_PATH + 200] = "";
+        CHECK(pc5_tile_refresh(tiles, pc5, test_log_line, line) == 1 && strstr(line, "PC5 tile refreshed") &&
+              strstr(line, id), "refreshed: %s", line);
+    }
+    path(file, sizeof(file), "%s/%s/eboot.bin", tiles, id);
+    CHECK(!pc5_read_file(file, &text, 64) && text.len == 17 && !memcmp(text.data, "PC5's new program", 17),
+          "its new program");
+    pc5_buf_free(&text);
+    path(file, sizeof(file), "%s/%s/sce_sys/param.json", tiles, id);
+    CHECK(pc5_exists(file), "its name and picture kept");
+    CHECK(pc5_tile_refresh(tiles, pc5, NULL, NULL) == 0, "and current again");
 
     /* PC5 without its helper: nothing made, nothing left. */
     path(file, sizeof(file), "%s/lapy.elf", pc5);
     path(other, sizeof(other), "%s/lapy.elf.kept", pc5);
     rename(file, other);
-    Pc5TileMake second = { tiles, pc5, root, "plain", "plain", "Plain", fake_link, NULL };
+    Pc5TileMake second = { tiles, pc5, root, "plain", "plain", "Plain" };
     CHECK(pc5_tile_make(&second, again, error, sizeof(error)) == PC5_TILE_FAILED && !again[0] && strstr(error, "lapy.elf"),
           "no helper: %s", error);
     CHECK(!pc5_home_find(tiles, "plain", again), "no tile for it");
     CHECK(count_entries(tiles, ".staging-") == 0, "nothing staged left after it");
-    path(file, sizeof(file), "%s/lapy.elf", pc5);
     rename(other, file);
+    Pc5TileMake relative = { tiles, "homebrew/PPSA11018", root, "plain", "plain", "Plain" };
+    CHECK(pc5_tile_make(&relative, again, error, sizeof(error)) == PC5_TILE_FAILED, "PC5's folder as an absolute path only");
 
-    /* Taken away: the tile's names go, PC5's files stay. */
+    /* Taken away: the tile goes, PC5 stays. */
     CHECK(pc5_home_remove(tiles, "neon") == 1, "taken away");
     path(file, sizeof(file), "%s/%s", tiles, id);
     CHECK(!pc5_exists(file), "its folder gone");
     path(file, sizeof(file), "%s/win/wine/lib/wine/x86_64-unix/ntdll.prx", pc5);
-    CHECK(!stat(file, &b) && b.st_nlink == 1 && !pc5_read_file(file, &text, 64) && text.len == 4, "PC5's Wine whole");
-    pc5_buf_free(&text);
+    CHECK(!stat(file, &b) && pc5_is_file(file), "PC5's Wine whole");
     path(file, sizeof(file), "%s/eboot.bin", pc5);
     CHECK(pc5_is_file(file), "and its program");
     pc5_free(lapy);
@@ -5017,7 +4977,7 @@ static void test_tile_start(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
-                             NULL, NULL, NULL, NULL };
+                             NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
@@ -5199,7 +5159,7 @@ static void test_screens(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
-                             fake_sound, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text, NULL };
+                             fake_sound, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
     {
         /* The sounds to choose from: the app's, and one of the player's. */
         char from[PC5_PATH], to[PC5_PATH];
@@ -5811,7 +5771,7 @@ static void test_report(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
-                             NULL, NULL, NULL, NULL };
+                             NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
@@ -5874,7 +5834,7 @@ static void test_upgrade_screens(const char *fonts)
     FakeConsole console = { 0 };
     static FakeNet net;
     Pc5Platform platform = { &console, { &net, fake_get, fake_download, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify,
-                             fake_time, 0, fake_restart, NULL, NULL, NULL, NULL, NULL };
+                             fake_time, 0, fake_restart, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     char app[PC5_PATH], drive[PC5_PATH], folder[PC5_PATH], file[PC5_PATH], zip[PC5_PATH], digest[65];
     static char json[2048];

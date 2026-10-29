@@ -370,13 +370,6 @@ step_title() {
     lacks=$(defined libkernel_sys libkernel_web libScePosixForWebKit)
     bad=$( (comm -12 <(sort -u "$imports") <(echo "$lacks") | comm -23 - <(echo "$gets"); grep -xE 'f?statv?fs|getfsstat|getmntinfo' "$imports") | sort -u || true)
     [[ -z $bad ]] || { echo "the eboot imports what a title doesn't get: $(echo $bad)" >&2; return 1; }
-    # The tiles' linking helper (title/pc5_linker.h): a payload elfldr runs, as Lapy's helper,
-    # so it has link(), which a title doesn't. It is in the title's folder, and so in the app.
-    mkdir -p "$PW/dist/$TITLE/pc5"
-    "$sdk/bin/prospero-clang" -std=c11 -O2 -Wall -Wextra -Werror -I"$here/title" \
-        "$here/tools/linker/pc5_link_tree.c" "$here/tools/linker/pc5_linker_main.c" -o "$PW/dist/$TITLE/pc5/linker.elf"
-    [[ $(head -c 4 "$PW/dist/$TITLE/pc5/linker.elf") == $'\x7fELF' ]] || { echo "pc5/linker.elf is not an ELF file" >&2; return 1; }
-    chmod 755 "$PW/dist/$TITLE/pc5/linker.elf"
 }
 
 step_radv() {
@@ -712,8 +705,7 @@ key_of() { # piece
     # Zink as GitHub's build has kept it since 1.6: Mesa and llvm-mingw as prospero-win pins them.
     zink) echo "zink-$(cat "$PW/tools/build_mesa_zink.sh" "$PW/tools/mesa_zink_manifest.py" | sha256sum | cut -c1-16)"; return ;;
     title) hash=$(printf '%s\n' "$(git -C "$PW" rev-parse 'HEAD^{tree}')" "$BOILERPLATE_URL" "$LAPY_URL" "$LAPY_COMMIT" \
-                  "$MBEDTLS_VERSION" "$(commands step_title need_sdk)" \
-                  "$(cat "$here"/tools/linker/*.c | sha256sum | cut -c1-64)") ;;
+                  "$MBEDTLS_VERSION" "$(commands step_title need_sdk)") ;;
     radv) hash=$(printf '%s\n' "$VULKAN_COMMIT" "$(patches_id radv)" "$(pwid tools/mesa_zink_requirements.txt)" \
                  "$(commands step_radv)") ;;
     tools) hash=$(printf '%s\n' "$WINE_URL" "$(pwid wine)" "$(pwid tools)" "$(commands step_tools)") ;;

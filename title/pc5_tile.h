@@ -17,7 +17,6 @@
 #include "pc5.h"
 #include "pc5_game.h"
 #include "pc5_library.h"
-#include "pc5_linker.h"
 
 #define PC5_TILE_FILE "pc5-tile.json"
 #define PC5_TILE_FORMAT "pc5-tile/1"
@@ -26,6 +25,9 @@
  * tile, 0 when it isn't (no such file), -1 when the file is there but isn't
  * a tile PC5 can start (a reason in error). */
 int pc5_tile_read(const char *app, char game[PC5_ID], char *error, size_t size);
+/* The same, and where the tile's Wine and PC5's files are, in runtime: PC5's
+ * installed folder ("runtime"), or "" when they are in the tile itself. */
+int pc5_tile_read_all(const char *app, char game[PC5_ID], char *runtime, size_t runtime_size, char *error, size_t size);
 
 /* Readying a tile's game, a step at a time so the loading screen can turn. */
 typedef struct Pc5TilePrep {
@@ -55,26 +57,28 @@ int pc5_tile_param(const char *text, size_t length, const char *title_id, const 
 
 typedef struct Pc5TileMake {
     const char *tiles;           /* where tiles go: /data/homebrew */
-    const char *pc5;             /* PC5's installed folder (pc5_upgrade_find), on the tiles' drive */
+    const char *pc5;             /* PC5's installed folder (pc5_upgrade_find): the tiles' runtime */
     const char *library_root;    /* /data/prospero-win */
     const char *id, *prefix, *name;   /* the game's */
-    /* The linking helper (pc5_linker.h; a title can't link), as the platform's link. */
-    int (*link)(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply);
-    void *context;
 } Pc5TileMake;
 
-enum { PC5_TILE_MADE = 0, PC5_TILE_FAILED = -1, PC5_TILE_NO_LINKS = 1 };
+enum { PC5_TILE_MADE = 0, PC5_TILE_FAILED = -1 };
 
 /* Makes the game's tile under tiles: a folder named after its title ID (the
- * game's old tile's, or a new one) holding PC5's app as hard links to the files
- * of PC5's folder, made by the linking helper, so it takes next to no room; its
- * own are its sce_sys param.json and icon0.png (the game's name and picture), its
- * lapy.elf (patched for its ID) and pc5-tile.json. Made beside as .staging-<ID>
- * and renamed into place. PC5_TILE_MADE with the ID in out; PC5_TILE_NO_LINKS when
- * PC5's files can't be linked there (PC5 on another drive, no helper, no elfldr):
- * nothing is left, and a forwarder tile can be made instead; PC5_TILE_FAILED with a
- * reason in error. */
+ * game's old tile's, or a new one) holding only what the console starts, a few
+ * MB: PC5's eboot.bin and sce_module/libc.prx copied, its lapy.elf patched for
+ * the tile's ID, its sce_sys param.json as the tile's with the game's name, the
+ * game's picture, and pc5-tile.json naming the game and PC5's folder, where the
+ * tile finds its Wine and the rest of PC5's files. Made beside as .staging-<ID>
+ * and renamed into place. PC5_TILE_MADE with the ID in out, or PC5_TILE_FAILED
+ * with a reason in error. */
 int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t size);
+
+/* Every tile under tiles whose runtime is a PC5 folder, given pc5's program, its
+ * helper and its folder as runtime when its program isn't pc5's (PC5 updated, or
+ * moved): a tile's program has to match its runtime. log, when given, gets a line
+ * for each. How many were refreshed. */
+int pc5_tile_refresh(const char *tiles, const char *pc5, void (*log)(void *context, const char *line), void *context);
 
 /* ---- readying a tile's game ------------------------------------------------------- */
 

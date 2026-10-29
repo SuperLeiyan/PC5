@@ -12,9 +12,6 @@
 #include "pc5_ui.h"
 #include "pc5_upgrade.h"
 
-#include "pc5_linker.h"
-
-#include "ps5log/ps5log_ps5_net.h"
 #include "pw_audio_ps5.h"
 #include "pw_diagnostics.h"
 #include "pw_hid_ps5.h"
@@ -23,9 +20,7 @@
 #include "../src/pw_present.h"
 #include "../include/prospero_win.h"
 
-#include <errno.h>
 #include <fcntl.h>
-#include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -33,12 +28,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
 int sceSystemServiceParamGetInt(int id, int *value);
-int sceNetRecv(int socket, void *data, size_t length, int flags);
 int sceSystemServiceLoadExec(const char *path, char *const argv[]);
 
 /* The console's notification (libkernel): text in the request's message. */
@@ -406,97 +399,6 @@ static uint32_t key_of(uint16_t vk)
     }
 }
 
-/* ---- the tiles' linking helper (pc5_linker.h) --------------------------------------- */
-
-/* The console's own sockaddr_in, with its length byte (as prospero-win's Lapy client). */
-typedef struct LinkerAddress {
-    uint8_t length, family;
-    uint16_t port;
-    uint32_t address;
-    uint16_t virtual_port;
-    uint8_t zero[6];
-} LinkerAddress;
-
-enum { ELFLDR_PORT = 9021, LINKER_TIMEOUT_US = 120000000, LINKER_MAX_ELF = 4u << 20 };
-
-static int linker_send(int socket, const void *data, size_t size)
-{
-    const uint8_t *bytes = data;
-    while (size) {
-        long count = ps5log_ps5_send(socket, bytes, size, 0);
-        if (count <= 0) return -1;
-        bytes += count;
-        size -= (size_t)count;
-    }
-    return 0;
-}
-
-static int linker_receive(int socket, void *data, size_t size)
-{
-    uint8_t *bytes = data;
-    while (size) {
-        int count = sceNetRecv(socket, bytes, size, 0);
-        if (count <= 0 || (size_t)count > size) return -1;
-        bytes += count;
-        size -= (size_t)count;
-    }
-    return 0;
-}
-
-/* pc5/linker.elf sent to elfldr, which runs it with this connection as its stdin and
- * stdout; then the request, and its reply when the helper is done. It exits after. */
-static int link_tile(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply)
-{
-    static const int options[] = { 0x1105, 0x1106, 0x1109 };   /* the send and receive timeouts, as Lapy's client */
-    char path[PC5_PATH], line[512];
-    Pc5Buf elf = { 0 };
-    LinkerAddress address;
-    uint32_t timeout = LINKER_TIMEOUT_US;
-    int socket = -1, status = -1;
-    const char *why = "";
-
-    (void)context;
-    if (!console || pc5_format(path, sizeof(path), "%s/pc5/linker.elf", console->app) ||
-        pc5_read_file(path, &elf, LINKER_MAX_ELF) || elf.len < 4 || memcmp(elf.data, "\x7f" "ELF", 4)) {
-        why = "no pc5/linker.elf in the app";
-        goto done;
-    }
-    if ((socket = ps5log_ps5_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
-        why = "no socket";
-        goto done;
-    }
-    for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); i++)
-        (void)ps5log_ps5_setsockopt(socket, 0xffff, options[i], &timeout, sizeof(timeout));
-    memset(&address, 0, sizeof(address));
-    address.length = sizeof(address);
-    address.family = AF_INET;
-    address.port = (uint16_t)((ELFLDR_PORT << 8) | (ELFLDR_PORT >> 8));
-    address.address = UINT32_C(0x0100007f);
-    if (ps5log_ps5_connect(socket, (const struct sockaddr *)&address, sizeof(address)) < 0) {
-        why = "elfldr isn't listening on port 9021";
-        goto done;
-    }
-    if (linker_send(socket, elf.data, elf.len) || linker_send(socket, request, sizeof(*request))) {
-        why = "elfldr didn't take the helper";
-        goto done;
-    }
-    if (linker_receive(socket, reply, sizeof(*reply))) {
-        why = "the helper didn't answer";
-        goto done;
-    }
-    reply->where[sizeof(reply->where) - 1] = 0;
-    status = 0;
-done:
-    if (socket >= 0) (void)ps5log_ps5_close(socket);
-    pc5_buf_free(&elf);
-    if (status) snprintf(line, sizeof(line), "PC5 tile linker failed: %s (errno %d)", why, errno);
-    else
-        snprintf(line, sizeof(line), "PC5 tile linker status=%u linked=%u errno=%d where=%s", (unsigned)reply->status,
-                 (unsigned)reply->linked, (int)reply->error, reply->where[0] ? reply->where : "-");
-    plain_log(line);
-    return status;
-}
-
 void pc5_console_run(const Pc5Console *config)
 {
     static const PwPadKeyMap open_map[] = { { PAD_CROSS, 0x20, 0, 0, "cross" } };
@@ -568,8 +470,7 @@ void pc5_console_run(const Pc5Console *config)
 
     watch_for_crashes(config->root);
     platform = (Pc5Platform){ NULL, { NULL, pc5_net_get, pc5_net_download, pc5_net_get_authorized }, clock_text, play, log_line, notify_text,
-                              unix_time, enter == 0, restart, sound_try, keyboard_open, keyboard_state, keyboard_close,
-                              link_tile };
+                              unix_time, enter == 0, restart, sound_try, keyboard_open, keyboard_state, keyboard_close };
     {
         Pc5UiConfig ui_config = { config->root, template_prefix, fonts, usb_roots, PC5_HOME_ROOT, tile_template,
                                   config->start, pc5_upgrade_drives, "/user", finished, 1 };
