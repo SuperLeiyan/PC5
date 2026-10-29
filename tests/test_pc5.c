@@ -9,6 +9,7 @@
 #include "pc5.h"
 #include "pc5_backgrounds.h"
 #include "pc5_cover.h"
+#include "pc5_files.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
 #include "pc5_image.h"
@@ -5703,6 +5704,239 @@ static void test_upgrade_screens(const char *fonts)
     pc5_free(canvas.px);
 }
 
+/* ---- the file manager's core (pc5_files.c) ---------------------------------------------------- */
+
+static int read_is(const char *file, const char *text)
+{
+    Pc5Buf buf = {0};
+    int same = !pc5_read_file(file, &buf, 1 << 20) && buf.len == strlen(text) && !memcmp(buf.data, text, buf.len);
+    pc5_buf_free(&buf);
+    return same;
+}
+
+static int files_run(Pc5FilesOp op, const char *const *sources, int count, const char *dest, Pc5FilesConflict conflict,
+                     Pc5FilesJob *job)
+{
+    int rc = pc5_files_begin(job, op, sources, count, dest, conflict), steps = 0;
+    if (!rc)
+        while (pc5_files_step(job, 5) && steps < 100000) steps++;
+    return rc;
+}
+
+static void test_files(void)
+{
+    char base[PC5_PATH], a[PC5_PATH], b[PC5_PATH], file[PC5_PATH], why[PC5_ERROR], name[PC5_FILES_NAME];
+    Pc5FileList list;
+    Pc5FilesJob job;
+
+    path(base, sizeof(base), "%s/files", work);
+    path(a, sizeof(a), "%s/a", base);
+    path(b, sizeof(b), "%s/b", base);
+    path(file, sizeof(file), "rm -rf '%s'", base);
+    run(file);
+    path(file, sizeof(file), "%s/Game.exe", a); write_text(file, "program");
+    path(file, sizeof(file), "%s/data/level1.pak", a); write_text(file, "one");
+    path(file, sizeof(file), "%s/data/deep/x.txt", a); write_text(file, "x");
+    path(file, sizeof(file), "%s/readme.txt", a); write_text(file, "hello");
+    path(file, sizeof(file), "%s/Zeta", a); pc5_mkdirs(file);
+    pc5_mkdirs(b);
+
+    /* listing: folders first, by name with case aside */
+    CHECK(!pc5_files_list(a, &list) && list.count == 4, "a's four items listed (%d)", list.count);
+    if (list.count == 4) {
+        CHECK(list.items[0].dir && !strcmp(list.items[0].name, "data") && list.items[1].dir && !strcmp(list.items[1].name, "Zeta"),
+              "folders first, case aside: %s %s", list.items[0].name, list.items[1].name);
+        CHECK(!strcmp(list.items[2].name, "Game.exe") && list.items[2].size == 7 && !strcmp(list.items[3].name, "readme.txt"),
+              "then files with their sizes");
+    }
+    pc5_files_list_free(&list);
+    path(file, sizeof(file), "%s/none", base);
+    CHECK(pc5_files_list(file, &list) == -1 && list.error == ENOENT && !list.count, "a folder that isn't there says why");
+    pc5_files_list_free(&list);
+
+    /* places and names */
+    CHECK(pc5_files_within("/data", "/data") && pc5_files_within("/data", "/data/a/b") && pc5_files_within("/data/", "/data/x"),
+          "inside /data");
+    CHECK(!pc5_files_within("/data", "/data2") && !pc5_files_within("/data", "/mnt/usb0") && !pc5_files_within("/data", "/data/../etc") &&
+          !pc5_files_within("/data", "/data/./x"), "not inside /data");
+    CHECK(pc5_files_within("/", "/system") && !pc5_files_within("/", "/a/../b"), "everything is inside /, but dot parts");
+    CHECK(!pc5_files_name_ok("Saves 2", why, sizeof(why)) && !pc5_files_name_ok(".hidden", why, sizeof(why)), "good names");
+    CHECK(pc5_files_name_ok("", why, sizeof(why)) && pc5_files_name_ok("..", why, sizeof(why)) && pc5_files_name_ok("a/b", why, sizeof(why)) &&
+          pc5_files_name_ok("a:b", why, sizeof(why)) && pc5_files_name_ok("end.", why, sizeof(why)) && pc5_files_name_ok("end ", why, sizeof(why)) &&
+          pc5_files_name_ok("tab\there", why, sizeof(why)), "bad names refused");
+    pc5_files_name_ok("a?b", why, sizeof(why));
+    CHECK(strstr(why, "?") != NULL, "the reason names the character: %s", why);
+    {
+        char longer[300];
+        memset(longer, 'n', 299); longer[299] = 0;
+        CHECK(pc5_files_name_ok(longer, why, sizeof(why)) && strstr(why, "255"), "a name over 255 bytes refused");
+    }
+    CHECK(!pc5_files_free_name(a, "new.txt", name, sizeof(name)) && !strcmp(name, "new.txt"), "a free name stays");
+    CHECK(!pc5_files_free_name(a, "readme.txt", name, sizeof(name)) && !strcmp(name, "readme (2).txt"), "a taken name gets (2): %s", name);
+    path(file, sizeof(file), "%s/readme (2).txt", a); write_text(file, "");
+    CHECK(!pc5_files_free_name(a, "readme.txt", name, sizeof(name)) && !strcmp(name, "readme (3).txt"), "then (3): %s", name);
+    unlink(file);
+    CHECK(!pc5_files_free_name(a, "data", name, sizeof(name)) && !strcmp(name, "data (2)"), "a folder gets (2): %s", name);
+
+    /* copy a folder and a file into b */
+    {
+        char data[PC5_PATH], readme[PC5_PATH];
+        path(data, sizeof(data), "%s/data", a);
+        path(readme, sizeof(readme), "%s/readme.txt", a);
+        const char *sources[] = { data, readme };
+        CHECK(pc5_files_conflicts(sources, 2, b) == 0, "nothing in b yet");
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "copied: %s", job.error);
+        CHECK(job.total_bytes == 9 && job.done_bytes == 9 && job.done_items == job.total_items && job.total_items == 5,
+              "progress counted (%llu/%llu bytes, %u/%u items)", (unsigned long long)job.done_bytes,
+              (unsigned long long)job.total_bytes, job.done_items, job.total_items);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/data/deep/x.txt", b);
+        CHECK(read_is(file, "x"), "the deep file came");
+        path(file, sizeof(file), "%s/readme.txt", b);
+        CHECK(read_is(file, "hello"), "the file came");
+        CHECK(read_is(readme, "hello") && pc5_is_dir(data), "the sources stay");
+        path(file, sizeof(file), "%s/readme.txt.pc5part", b);
+        CHECK(!pc5_exists(file), "no .pc5part left");
+        CHECK(pc5_files_conflicts(sources, 2, b) == 2, "both names are in b now");
+
+        /* Skip: nothing changes */
+        path(file, sizeof(file), "%s/readme.txt", b); write_text(file, "mine");
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_SKIP, &job) && job.state == PC5_FILES_DONE && job.skipped == 2,
+              "skipped both (%u)", job.skipped);
+        pc5_files_end(&job);
+        CHECK(read_is(file, "mine"), "Skip left b's file");
+
+        /* Replace: the file overwritten, the folder merged */
+        path(file, sizeof(file), "%s/data/only-in-b.txt", b); write_text(file, "b");
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "replaced: %s", job.error);
+        pc5_files_end(&job);
+        CHECK(read_is(file, "b"), "Replace merges: b's own file stays");
+        path(file, sizeof(file), "%s/readme.txt", b);
+        CHECK(read_is(file, "hello"), "Replace overwrote the file");
+
+        /* Keep both */
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_KEEP_BOTH, &job) && job.state == PC5_FILES_DONE, "kept both: %s", job.error);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/readme (2).txt", b);
+        CHECK(read_is(file, "hello"), "the copy is readme (2).txt");
+        path(file, sizeof(file), "%s/data (2)/level1.pak", b);
+        CHECK(read_is(file, "one"), "the folder copy is data (2)");
+
+        /* a copy pasted where it is: Keep both makes a copy beside it, the others do nothing */
+        CHECK(!files_run(PC5_FILES_COPY, &sources[1], 1, a, PC5_FILES_REPLACE, &job) && job.skipped == 1, "pasted on itself: nothing");
+        pc5_files_end(&job);
+        CHECK(read_is(readme, "hello"), "and the file is whole");
+        CHECK(!files_run(PC5_FILES_COPY, &sources[1], 1, a, PC5_FILES_KEEP_BOTH, &job) && job.state == PC5_FILES_DONE, "duplicated");
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/readme (2).txt", a);
+        CHECK(read_is(file, "hello"), "the duplicate is readme (2).txt");
+        unlink(file);
+
+        /* a file and a folder in each other's place, under Replace */
+        path(file, sizeof(file), "rm -rf '%s/data' '%s/readme.txt' && mkdir '%s/readme.txt' && printf f > '%s/data'", b, b, b, b);
+        run(file);
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "kinds swapped: %s", job.error);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/data/level1.pak", b);
+        CHECK(read_is(file, "one"), "a file where a folder goes is replaced by the folder");
+        path(file, sizeof(file), "%s/readme.txt", b);
+        CHECK(read_is(file, "hello"), "a folder where a file goes is replaced by the file");
+
+        /* a folder into itself */
+        char inner[PC5_PATH];
+        path(inner, sizeof(inner), "%s/data/deep", a);
+        CHECK(files_run(PC5_FILES_COPY, sources, 1, inner, PC5_FILES_REPLACE, &job) == -1 && job.state == PC5_FILES_FAILED &&
+              strstr(job.error, "itself"), "a folder into itself refused: %s", job.error);
+        pc5_files_end(&job);
+        CHECK(files_run(PC5_FILES_MOVE, sources, 1, data, PC5_FILES_REPLACE, &job) == -1, "or moved into itself");
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/gone", base);
+        CHECK(files_run(PC5_FILES_COPY, sources, 1, file, PC5_FILES_REPLACE, &job) == -1 && strstr(job.error, "isn't there"),
+              "pasting into a folder that's gone: %s", job.error);
+        pc5_files_end(&job);
+    }
+
+    /* move within the drive: a rename; then a move that merges a folder */
+    {
+        char from[PC5_PATH], to[PC5_PATH];
+        path(from, sizeof(from), "%s/data (2)", b);
+        const char *sources[] = { from };
+        CHECK(!files_run(PC5_FILES_MOVE, sources, 1, a, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "moved: %s", job.error);
+        CHECK(job.total_items == 1, "a move on one drive is one rename (%u)", job.total_items);
+        pc5_files_end(&job);
+        path(to, sizeof(to), "%s/data (2)/deep/x.txt", a);
+        CHECK(read_is(to, "x") && !pc5_exists(from), "it is in a and not in b");
+        /* cut and pasted in the same folder: nothing */
+        path(from, sizeof(from), "%s/data (2)", a);
+        CHECK(!files_run(PC5_FILES_MOVE, sources, 1, a, PC5_FILES_KEEP_BOTH, &job) && job.skipped == 1 && pc5_is_dir(from),
+              "cut and pasted where it is: nothing");
+        pc5_files_end(&job);
+        /* merging into b/data: its own file stays, the source goes */
+        path(to, sizeof(to), "%s/data/only-in-a.txt", a);
+        write_text(to, "a");
+        path(from, sizeof(from), "%s/data", a);
+        CHECK(!files_run(PC5_FILES_MOVE, sources, 1, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "merged: %s", job.error);
+        pc5_files_end(&job);
+        path(to, sizeof(to), "%s/data/only-in-a.txt", b);
+        CHECK(read_is(to, "a") && !pc5_exists(from), "a merged move moves the files and deletes the source");
+        path(to, sizeof(to), "%s/data/level1.pak", b);
+        CHECK(read_is(to, "one"), "and keeps the rest");
+    }
+
+    /* stop: the file being copied goes, a move deletes none of its sources */
+    {
+        char big[PC5_PATH], dest[PC5_PATH];
+        path(big, sizeof(big), "%s/big.bin", a);
+        path(dest, sizeof(dest), "%s/stop", base);
+        pc5_mkdirs(dest);
+        {
+            uint8_t *bytes = pc5_alloc(64u << 20);
+            pc5_write_file(big, bytes, 64u << 20);
+            pc5_free(bytes);
+        }
+        const char *sources[] = { big };
+        /* across drives is planned as copy then delete; on one drive the test uses Copy to see a stop part way */
+        CHECK(!pc5_files_begin(&job, PC5_FILES_COPY, sources, 1, dest, PC5_FILES_REPLACE), "began");
+        pc5_files_step(&job, 0);   /* at least one chunk */
+        pc5_files_stop(&job);
+        pc5_files_step(&job, 5);
+        CHECK(job.state == PC5_FILES_STOPPED, "stopped (%d)", job.state);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/big.bin", dest);
+        CHECK(!pc5_exists(file), "no half file under its name");
+        path(file, sizeof(file), "%s/big.bin.pc5part", dest);
+        CHECK(!pc5_exists(file), "and no .pc5part");
+        CHECK(pc5_exists(big), "the source stays");
+    }
+
+    /* delete */
+    {
+        char one[PC5_PATH], two[PC5_PATH];
+        path(one, sizeof(one), "%s/data", b);
+        path(two, sizeof(two), "%s/readme.txt", b);
+        const char *sources[] = { one, two };
+        CHECK(!files_run(PC5_FILES_DELETE, sources, 2, NULL, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "deleted: %s", job.error);
+        pc5_files_end(&job);
+        CHECK(!pc5_exists(one) && !pc5_exists(two), "both gone");
+        path(file, sizeof(file), "%s/readme (2).txt", b);
+        CHECK(read_is(file, "hello"), "and nothing else");
+    }
+
+    /* too little room is said before anything is copied */
+    {
+        char big[PC5_PATH];
+        uint64_t room = 0;
+        path(big, sizeof(big), "%s/big.bin", a);
+        const char *sources[] = { big };
+        if (!pc5_free_bytes(b, &room)) {
+            Pc5FilesJob plan;
+            pc5_files_begin(&plan, PC5_FILES_COPY, sources, 1, b, PC5_FILES_REPLACE);
+            CHECK(plan.state == PC5_FILES_WORKING && plan.total_bytes == (64u << 20), "planned 64 MB");
+            pc5_files_end(&plan);
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     char fonts[PC5_PATH];
@@ -5745,6 +5979,7 @@ int main(int argc, char **argv)
     test_named_libraries();
     test_java();
     test_batch_bits();
+    test_files();
     test_game(fonts);
     test_screens(fonts);
     test_tile_start(fonts);
