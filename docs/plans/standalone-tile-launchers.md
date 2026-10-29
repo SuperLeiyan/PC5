@@ -197,7 +197,7 @@ The unpatched helper grants only `PPSA11018`, so it would have refused the tile.
 
 Both unknowns are answered. The design needs neither Lapy's resident service nor an upstream Lapy change.
 
-### Test 2: the same tile with patch 0054 (to do)
+### Test 2: the same tile with patch 0054 (passed, 2026-10-29)
 
 This test needs a PC5 build with patch `0054`: `tools/build.sh`, or Actions › Build. The patch
 changes only prospero-win's `native/`, `tests/`, `Makefile` and allowlist, not its `tools/` or
@@ -216,6 +216,27 @@ Expected:
 Until tile mode exists, the tile shows the whole of PC5. Don't run an update or install a game
 from inside the tile during this test. The updater looks for PC5's own `PPSA11018` folder, and
 updating it from a copy is untested.
+
+**Results.** The build was Actions run 40846923000, at `e14034f`. The logs are in `test-artifacts/`:
+- `session-0.log`: the tile opening.
+- `log-2026-10-29_20-40_warriors-orochi-3-ude.zip`: PC5's kept log of the game session, with the game's own `LOG.txt`.
+- `session-3.log`: the tile after the game closed.
+
+| Expected | Result | Log |
+|---|---|---|
+| The eboot reads its own ID | **Yes**, in every session | `seq=1 PW_WINE64 title id=PPSA99437 from=param.json built=PPSA11018` |
+| Lapy grants `/data` | **Yes**, in every session | `data_mount … helper_completed=1 helper_errno=0 … elevated_after=1` |
+| PC5's screens open with the library, with no `pc5 files missing` | **Yes** | `session-0` `seq=7 PC5 start version=1.9.6 … app=/mnt/sandbox/PPSA99437_000/app0`, `seq=17 PC5 screen=library` |
+| A game started from those screens runs, with Wine from the tile's own folder | **Yes.** Warriors Orochi 3 Ultimate (Direct3D 9 through DXVK) started at 1920×1080, with sound and controller input, and its own log reports every device made. It ran for about 14 s until it was closed | game log `seq=6 args … mode=game profile=warriors-orochi-3-ude`, `seq=14 runtime not at /app0/…`, `seq=15 ntdll=/mnt/sandbox/PPSA99437_000/app0/win/wine/lib/wine/x86_64-unix/ntdll.prx prefix=/data/prospero-win/prefixes/warriors-orochi-3-ude` |
+| Closing the game returns to PC5's screens inside the tile | **Yes.** The restart through `/app0/eboot.bin` started the tile again, not PPSA11018 | game log `seq=1329 restart to=launcher cycle=1 reason=wine-exit eboot=/app0/eboot.bin`; `session-3` `cycle=1 … app=/mnt/sandbox/PPSA99437_000/app0`, `screen=library` |
+
+Expected noise: the Wine server can't find `dnsapi.so` and `winspool.so`. PC5 doesn't ship
+those Unix modules, and Wine patch `0919` lets `dnsapi` run without its backend.
+
+**Conclusion.** One build of PC5, copied under another app ID with its `lapy.elf` patched, runs
+as that app end to end: `/data`, its own runtime, a game, and the restart back. Work item 1 is
+proven on the console. Next is tile mode: work items 2 and 3, which start the game straight from
+the tile with one Lapy run and close to the home screen.
 
 ## Costs and limits
 
