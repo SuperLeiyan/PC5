@@ -12,7 +12,10 @@ places.
   (unless a player's report lists the game already); needs testing once it is closed for no
   reply (labelled "needs testing" by no_reply.py: it didn't run for its reporter, but another
   copy or version may); unresolved (it doesn't run) once it is closed as not planned
-  otherwise. An issue closed as a duplicate
+  otherwise. An issue labelled "needs steam" (its copy of the game needs Steam or another
+  store's client running, which PC5 can't do) shows as such, not as a game that doesn't run:
+  another copy may. Labelled while open, it gets one comment saying so and is closed as not
+  planned. An issue closed as a duplicate
   isn't listed. The game is the issue's "Game" field (.github/ISSUE_TEMPLATE/1-game.yml, which
   PC5's Report on GitHub opens filled in), or the "**Game:**" line older PC5s wrote. For an
   issue written by hand, before the form, games-by-issue.txt beside this script names it, or
@@ -36,6 +39,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -53,13 +58,18 @@ FIXED = "Works perfectly"           # an issue closed as completed
 UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
 NEEDS_TESTING = "🧪 Needs testing"    # an issue closed for no reply (no_reply.py's label)
 NO_REPLY = "needs testing"
-SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, NEEDS_TESTING, UNRESOLVED]
+NEEDS_STORE = "🏪 This copy needs Steam"   # an issue labelled STORE: the copy, not the game
+STORE = "needs steam"
+STORE_ABOUT = "This copy needs Steam or another store's client running, which PC5 can't do: another copy may run"
+STORED = "<!-- pc5-compatibility: needs steam -->"   # its comment when it closes such an issue
+SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, NEEDS_TESTING, NEEDS_STORE, UNRESOLVED]
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
 LISTED_ALREADY = "<!-- pc5-compatibility: listed already -->"   # its comment on an issue whose game a report lists
 NUMERALS = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
-ISSUE_STATE = {"🔍 Being looked at": "open", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run"}
+ISSUE_STATE = {"🔍 Being looked at": "open", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run",
+               NEEDS_STORE: "this copy needs Steam"}
 
 
 def game_key(name: str) -> str:
@@ -188,6 +198,7 @@ def main() -> int:
     # A game with an issue, by how it stands. One a report lists already is named beside the
     # report that says it runs best (the newest of those), or, fixed, left out; while it is open,
     # it is told once what the reports say.
+    store_label(owner, name)
     listed = {}
     for r in reports:
         listed.setdefault(game_key(r["game"]), []).append(r)
@@ -231,7 +242,8 @@ def main() -> int:
               f"[issue](https://github.com/{owner}/{name}/issues/new/choose) with its log (PC5's **Report on GitHub** "
               "writes one for you). The game shows as being looked at while the issue is open, then as working "
               "perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed "
-              "as not planned. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
+              "as not planned. A copy of a game that needs Steam or another store's client running, which PC5 can't "
+              "do, shows as such: another copy of it may run. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
               "needing testing: it didn't run for them, but another copy or version of it may. Tested it? Reply on "
               "the issue, or open a new one with your log. A game with both a report and an issue has one row, the "
               "report's, with the issue beside it."]
@@ -322,7 +334,9 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             fields = answers(body)
             if node["stateReason"] == "DUPLICATE":
                 continue
-            if node["state"] == "OPEN":
+            if STORE in issue["labels"]:
+                shown = NEEDS_STORE
+            elif node["state"] == "OPEN":
                 shown = LOOKED_AT
             elif NO_REPLY in issue["labels"]:
                 shown = NEEDS_TESTING
@@ -339,15 +353,58 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                     "told": True, "locked": True, "game": game, "shown": shown,
                     "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "", "settings": "",
                     "notes": ("No reply: another copy or version may run. " + saw).strip() if shown == NEEDS_TESTING
+                             else "This copy needs Steam (or another store's client) running, which PC5 can't do: "
+                                  "a copy that runs without it may run." if shown == NEEDS_STORE
                              else saw if shown != FIXED else "",
                     "url": node["url"], "number": node["number"],
                     "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
                     "id": node["id"], "open": node["state"] == "OPEN",
                     "told_listed": any(LISTED_ALREADY in (c["body"] or "") for c in node["comments"]["nodes"]),
                 }
+            if shown == NEEDS_STORE and node["state"] == "OPEN":
+                close_store_copy(node, owner, name)
         if not page["pageInfo"]["hasNextPage"]:
             return list(rows.values())
         after = page["pageInfo"]["endCursor"]
+
+
+def close_store_copy(node: dict, owner: str, name: str) -> None:
+    """An open issue labelled STORE: one comment saying why, and closed as not planned."""
+    if not any(STORED in (c["body"] or "") for c in node["comments"]["nodes"]):
+        body = "\n".join([
+            STORED,
+            "This copy of the game needs Steam (or another store's client) running, which PC5 can't do: a PS5 "
+            "title can't run a store's client beside the game. So I'm closing this. The "
+            f"[game compatibility list](https://github.com/{owner}/{name}/wiki/Game-compatibility) shows the game as "
+            "**this copy needs Steam**, not as a game that doesn't run.",
+            "",
+            "A copy that runs without its store's client may run. If you try one, please open a new issue with its log.",
+        ])
+        if graphql("""mutation($id: ID!, $body: String!) { addComment(input: {subjectId: $id, body: $body}) { clientMutationId } }""",
+                   fatal=False, id=node["id"], body=body) is None:
+            return
+    if graphql("""mutation($id: ID!) { closeIssue(input: {issueId: $id, stateReason: NOT_PLANNED}) { issue { id } } }""",
+               fatal=False, id=node["id"]) is not None:
+        print(f"compatibility list: #{node['number']} needs Steam: closed")
+
+
+def store_label(owner: str, name: str) -> None:
+    """The STORE label, made the first time, so it is there to choose."""
+    url = f"https://api.github.com/repos/{owner}/{name}/labels"
+    headers = {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"}
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"{url}/{urllib.parse.quote(STORE)}", headers=headers), timeout=60)
+        return
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            print(f"::warning::compatibility list: the '{STORE}' label couldn't be looked up ({error.code})")
+            return
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, method="POST", headers=headers, data=json.dumps(
+            {"name": STORE, "color": "fbca04", "description": STORE_ABOUT}).encode()), timeout=60)
+        print(f"compatibility list: the '{STORE}' label made")
+    except urllib.error.HTTPError as error:
+        print(f"::warning::compatibility list: the '{STORE}' label couldn't be made ({error.code})")
 
 
 def label(shown: str) -> str:

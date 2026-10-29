@@ -473,7 +473,8 @@ void pc5_console_run(const Pc5Console *config)
                               unix_time, enter == 0, restart, sound_try, keyboard_open, keyboard_state, keyboard_close };
     {
         Pc5UiConfig ui_config = { config->root, template_prefix, fonts, usb_roots, PC5_HOME_ROOT, tile_template,
-                                  config->start, pc5_upgrade_drives, "/user", finished, 1 };
+                                  config->start, pc5_upgrade_drives, "/user", finished, 1,
+                                  !config->cycle && !(config->start && config->start[0]) };
         ui = pc5_ui_create(&ui_config, &platform);
     }
     if (!ui) {

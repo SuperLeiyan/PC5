@@ -570,6 +570,21 @@ static void test_pe(void)
     Pc5PeInfo pe;
     Pc5Image icon;
 
+    {
+        /* An Unreal Engine 5 program that loads Direct3D 12 itself. */
+        char ue[PC5_PATH], other[PC5_PATH];
+        path(ue, sizeof(ue), "%s/ue5/Game/Binaries/Win64/Game-Win64-Shipping.exe", work);
+        write_text(ue, "MZ ... D3D12RHI d3d12.dll ...");
+        path(other, sizeof(other), "%s/ue5/Game-Win64-Shipping.exe", work);
+        write_text(other, "MZ ... D3D12RHI d3d12.dll ...");
+        CHECK(pc5_pe_unreal_d3d12(ue, PC5_IMPORT_D3D11) && pc5_pe_unreal_d3d12(ue, PC5_IMPORT_DXGI),
+              "an Unreal program naming d3d12.dll draws with Direct3D 12");
+        CHECK(!pc5_pe_unreal_d3d12(ue, PC5_IMPORT_D3D12 | PC5_IMPORT_D3D11) && !pc5_pe_unreal_d3d12(ue, PC5_IMPORT_D3D9) &&
+              !pc5_pe_unreal_d3d12(other, PC5_IMPORT_D3D11), "not one importing it, a Direct3D 9 one, or one elsewhere");
+        CHECK(pc5_pe_unreal_d3d12("Game\\Binaries\\Win64\\missing.exe", PC5_IMPORT_D3D11) == 0, "nor a missing one");
+        write_text(ue, "MZ ... d3d11.dll only ...");
+        CHECK(!pc5_pe_unreal_d3d12(ue, PC5_IMPORT_D3D11), "nor one that doesn't name it");
+    }
     path(file, sizeof(file), "%s/game64.exe", programs);
     CHECK(!pc5_pe_read(file, &pe), "game64 reads");
     CHECK(pe.bits == 64 && pe.gui && !pe.dll, "game64: bits %d gui %d", pe.bits, pe.gui);
@@ -2098,13 +2113,20 @@ static void test_update(void)
 
 /* A release's JSON with its zip and, when update_size isn't 0, its update zip at update_url:
  * a digest "" leaves it out. */
+/* The update zip's label on GitHub: the release it holds the changes since (NULL: none). */
+static const char *update_label = "from " PC5_VERSION;
+
 static void release_json_with(char *out, size_t size, const char *tag, uint64_t zip_size, const char *digest,
                               uint64_t update_size, const char *update_digest, const char *update_url)
 {
-    char extra[120] = "", update[1024] = "", update_extra[120] = "";
+    char extra[120] = "", update[1024] = "", update_extra[200] = "";
     if (digest && digest[0]) snprintf(extra, sizeof(extra), ",\"digest\":\"sha256:%s\"", digest);
     if (update_digest && update_digest[0])
         snprintf(update_extra, sizeof(update_extra), ",\"digest\":\"sha256:%s\"", update_digest);
+    if (update_label) {
+        size_t n = strlen(update_extra);
+        snprintf(update_extra + n, sizeof(update_extra) - n, ",\"label\":\"%s\"", update_label);
+    }
     if (update_size)
         snprintf(update, sizeof(update), ",{\"name\":\"PPSA11018-update.zip\",\"size\":%llu%s,\"browser_download_url\":\"%s\"}",
                  (unsigned long long)update_size, update_extra, update_url);
@@ -2296,6 +2318,20 @@ static void test_upgrade(void)
         release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
         pc5_update_check(&config.http, PC5_VERSION, &update);
         CHECK(!strcmp(update.delta_url, TEST_UPDATE_URL) && !update.delta_sha256[0], "one without a digest has none");
+        /* Its label names the release it holds the changes since: only for that one. */
+        CHECK(!strcmp(update.delta_from, PC5_VERSION) && pc5_update_small(&update, PC5_VERSION) &&
+              !pc5_update_small(&update, "1.0.0"), "made from this PC5: %s", update.delta_from);
+        update_label = "from v1.0.0";
+        release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
+        pc5_update_check(&config.http, PC5_VERSION, &update);
+        CHECK(!strcmp(update.delta_from, "1.0.0") && !pc5_update_small(&update, PC5_VERSION) &&
+              pc5_update_small(&update, "1.0.0"), "made from another: %s", update.delta_from);
+        update_label = "Only what changed";
+        release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
+        pc5_update_check(&config.http, PC5_VERSION, &update);
+        CHECK(!update.delta_from[0] && !pc5_update_small(&update, PC5_VERSION), "a label that doesn't say: %s",
+              update.delta_from);
+        update_label = "from " PC5_VERSION;
         net.release = json;
     }
 
@@ -2734,6 +2770,13 @@ static void test_upgrade_delta(void)
           net.update_downloads, net.zip_downloads);
     CHECK(strstr(delta_log, "PC5 update using PPSA11018-update.zip size=") && !strstr(delta_log, "using PPSA11018.zip"),
           "the log names the zip used: %s", delta_log);
+    {
+        /* Only the folders it changed are flushed, not every one of the release's. */
+        const char *at = strstr(delta_log, "flushed=");
+        unsigned flushed = 0, of = 0;
+        CHECK(at && sscanf(at, "flushed=%u of %u", &flushed, &of) == 2 && flushed < of,
+              "only the folders it changed flushed: %s", at ? at : delta_log);
+    }
     for (size_t i = 0; i < sizeof(new_release) / sizeof(new_release[0]); i++) {
         path(file, sizeof(file), "%s/%s", folder, new_release[i].name);
         CHECK(file_is(file, new_release[i].text), "the new release's %s in place", new_release[i].name);
@@ -2802,6 +2845,24 @@ static void test_upgrade_delta(void)
                           (uint64_t)small_st.st_size, small_digest, TEST_UPDATE_URL);
     }
     pc5_copy(net.update_zip, sizeof(net.update_zip), small);
+
+    /* More than one release behind (the update zip holds the changes since another): the
+     * whole app at once, the update zip not downloaded. */
+    make_installed(app, folder);
+    update_label = "from 1.0.0";
+    release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest,
+                      (uint64_t)small_st.st_size, small_digest, TEST_UPDATE_URL);
+    net.zip_downloads = net.update_downloads = 0;
+    delta_log[0] = 0;
+    pc5_upgrade_run(&upgrade);
+    path(file, sizeof(file), "%s/eboot.bin", folder);
+    CHECK(atomic_load(&upgrade.step) == PC5_UPGRADE_DONE && file_is(file, "PC5 DELTA EBOOT\n") &&
+              net.zip_downloads == 1 && net.update_downloads == 0 && strstr(delta_log, "the changes since 1.0.0"),
+          "more than one release behind: the whole app only: %d %s (%d %d) %s", atomic_load(&upgrade.step), upgrade.error,
+          net.update_downloads, net.zip_downloads, delta_log);
+    update_label = "from " PC5_VERSION;
+    release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest,
+                      (uint64_t)small_st.st_size, small_digest, TEST_UPDATE_URL);
 
     /* A download of the update zip that fails only falls back. */
     make_installed(app, folder);
@@ -3148,7 +3209,7 @@ static void test_background_screen(const char *fonts)
         memory.checked = 1792700000;   /* no update check now */
         pc5_update_save(root, &memory);
     }
-    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0 };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     until_screen(ui, "library", &canvas);
     for (int i = 0; i < 12; i++) press(ui, PC5_KEY_LEFT, &canvas);   /* the first game */
@@ -4644,7 +4705,7 @@ static void test_tile_start(const char *fonts)
     CHECK(library.count > 0, "games to start");
     if (!library.count) return;
     {
-        Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, library.games[0].id, NULL, NULL, NULL, 0 };
+        Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, library.games[0].id, NULL, NULL, NULL, 0, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         for (int i = 0; i < 2000 && !console.plays; i++) frames(ui, 0, 0, 1, &canvas);
         CHECK(console.plays == 1 && !strcmp(console.played, library.games[0].id), "the tile's game started: %d %s",
@@ -4652,7 +4713,7 @@ static void test_tile_start(const char *fonts)
         pc5_ui_destroy(ui);
     }
     {
-        Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, "not-installed", NULL, NULL, NULL, 0 };
+        Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, "not-installed", NULL, NULL, NULL, 0, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         until_screen(ui, "message", &canvas);
         CHECK(!strcmp(pc5_ui_screen(ui), "message") && console.plays == 1, "a game no longer there: %s",
@@ -4681,7 +4742,7 @@ static void test_tile_start(const char *fonts)
         later[0].tv_sec += 60;
         later[1] = later[0];
         utimes(file, later);
-        Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
+        Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         until_screen(ui, "library", &canvas);
         CHECK(!pc5_exists(leftover[0]) && !pc5_exists(leftover[1]) && !pc5_exists(leftover[2]),
@@ -4828,7 +4889,7 @@ static void test_screens(const char *fonts)
     char tiles[PC5_PATH], tile_template[PC5_PATH], tile[PC5_HOME_ID];
     path(tiles, sizeof(tiles), "%s/screens-homebrew", work);
     make_tile_template(tile_template, sizeof(tile_template));
-    Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0, 0 };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     Pc5Library library;
@@ -5444,7 +5505,7 @@ static void test_report(const char *fonts)
     path(file, sizeof(file), "%s/session-0.log", logs);
     write_text(file, text);
     {
-        Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0 };
+        Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         until_screen(ui, "message", &canvas);
         CHECK(!strcmp(pc5_ui_screen(ui), "message"), "the crash told: %s", pc5_ui_screen(ui));
@@ -5522,7 +5583,7 @@ static void test_upgrade_screens(const char *fonts)
         set.check_updates = 1;
         pc5_settings_save(root, &set);
     }
-    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, drives, NULL, NULL, 0 };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, drives, NULL, NULL, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     until_screen(ui, "upgrade-ask", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "upgrade-ask") && !console.notifications, "asked when PC5 opens: %s %d",
@@ -5579,6 +5640,33 @@ static void test_upgrade_screens(const char *fonts)
     save_shot(&canvas, "upgrade-finished");
     press(ui, PC5_KEY_ACCEPT, &canvas);
     CHECK(console.restarts == 2, "and it restarts: %d", console.restarts);
+    pc5_ui_destroy(ui);
+    /* Opened by the player, though it asked a moment ago: it asks again, tells with the
+     * console's notification, and the question says how much it downloads. */
+    {
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        memory.checked = 1792700000;
+        pc5_update_save(root, &memory);
+    }
+    path(folder, sizeof(folder), "%s/homebrew/PPSA11018", drive);
+    make_installed(app, folder);
+    config.finished = NULL;
+    config.opened = 1;
+    console.notifications = 0;
+    ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "upgrade-ask", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "upgrade-ask") && console.notifications == 1 && strstr(console.told, "99.0.0") &&
+              strstr(console.told, PC5_VERSION),
+          "opened: asked again, and told: %s %d '%s'", pc5_ui_screen(ui), console.notifications, console.told);
+    pc5_ui_destroy(ui);
+    /* Back after a game (not opened), within the hour: not asked again. */
+    config.opened = 0;
+    console.notifications = 0;
+    ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "library", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library") && !console.notifications, "after a game: not asked within the hour: %s",
+          pc5_ui_screen(ui));
     pc5_ui_destroy(ui);
     pc5_free(canvas.px);
 }

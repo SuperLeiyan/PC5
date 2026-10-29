@@ -642,6 +642,29 @@ static void notify(Pc5Ui *ui, const char *text)
     if (ui->platform.notify) ui->platform.notify(ui->platform.context, text);
 }
 
+/* What updating to the newest PC5 downloads, as the update dialog and Update now say it: only
+ * what changed when this PC5 is the release before (and has its list of files), otherwise the
+ * whole app ("You have 1.9.2, more than one version behind: PC5 downloads the whole app (388 MB)"). */
+static void update_how(const Pc5Ui *ui, char *out, size_t size)
+{
+    const Pc5Update *u = &ui->update.last;
+    char manifest[PC5_PATH], bytes[32];
+    int listed = ui->app[0] && !pc5_format(manifest, sizeof(manifest), "%s/pc5/manifest.txt", ui->app) &&
+                 pc5_is_file(manifest);
+
+    if (listed && pc5_update_small(u, PC5_VERSION)) {
+        pc5_size_text(u->delta_size, bytes, sizeof(bytes));
+        snprintf(out, size, "You have %s, the version before: PC5 downloads only what changed (%s)", PC5_VERSION, bytes);
+        return;
+    }
+    pc5_size_text(u->asset_size, bytes, sizeof(bytes));
+    if (u->delta_from[0] && pc5_version_compare(PC5_VERSION, u->delta_from) < 0)
+        snprintf(out, size, "You have %s, more than one version behind: PC5 downloads the whole app (%s)", PC5_VERSION,
+                 bytes);
+    else
+        snprintf(out, size, "You have %s: PC5 downloads the whole app (%s)", PC5_VERSION, bytes);
+}
+
 static int64_t unix_now(Pc5Ui *ui, int *offset_s)
 {
     int offset = 0;
@@ -1910,7 +1933,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_CHECK_ON_OPEN:
         *label = "Check when PC5 opens";
-        pc5_copy(about, about_size, "Asks GitHub for a newer PC5, at most once an hour");
+        pc5_copy(about, about_size, "Asks GitHub for a newer PC5 each time you open PC5, and tells you");
         pc5_copy(value, value_size, set->check_updates ? "On" : "Off");
         break;
     case SR_CHECK_NOW:
@@ -1933,8 +1956,11 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_UPDATE_NOW:
         *label = "Update now";
-        snprintf(about, about_size, "Downloads PC5 %s from GitHub, installs it and restarts PC5; your games, saves "
-                 "and settings stay", ui->update.last.version);
+    {
+        char how[200];
+        update_how(ui, how, sizeof(how));
+        snprintf(about, about_size, "%s, installs it and restarts PC5", how);
+    }
         break;
     default:
         if (row >= SR_SOURCE && row < SR_SOURCE + PC5_PICTURE_SOURCES) {
@@ -2124,17 +2150,26 @@ static int system_row(const Pc5Ui *ui, SettingRow row)
     return 0;
 }
 
-/* Asks GitHub (blocking, one request) and tells once per release, unless asked (quiet
- * when PC5 will offer to install it at once). 1 when the release has PC5's zip. */
-static int update_check_now(Pc5Ui *ui, int quiet_if_offered)
+/* Asks GitHub (blocking, one request) and tells with the console's notification: each time
+ * the player opens PC5 while a newer one is out (opening), otherwise once per release, and
+ * not when asked to be quiet (PC5 will offer to install it at once). 1 when the release has
+ * PC5's zip. */
+static int update_check_now(Pc5Ui *ui, int quiet_if_offered, int opening)
 {
     Pc5Update update;
     pc5_update_check(&ui->platform.http, PC5_VERSION, &update);
     ui->update.last = update;
     ui->update.checked = unix_now(ui, NULL);
-    say(ui, "PC5 update state=%d latest=%s zip=%d", (int)update.state, update.version, update.asset_url[0] != 0);
+    say(ui, "PC5 update state=%d latest=%s zip=%d update_zip=%d from=%s small=%d", (int)update.state, update.version,
+        update.asset_url[0] != 0, update.delta_url[0] != 0, update.delta_from[0] ? update.delta_from : "-",
+        pc5_update_small(&update, PC5_VERSION));
     int offered = update.state == PC5_UPDATE_AVAILABLE && update.asset_url[0] && can_upgrade(ui);
-    if (offered && quiet_if_offered) {
+    if (update.state == PC5_UPDATE_AVAILABLE && opening) {
+        char text[200];
+        snprintf(text, sizeof(text), "PC5 %s is available (you have %s).", update.version, PC5_VERSION);
+        notify(ui, text);
+        pc5_copy(ui->update.told, sizeof(ui->update.told), update.version);
+    } else if (offered && quiet_if_offered) {
         pc5_copy(ui->update.told, sizeof(ui->update.told), update.version);
     } else if (update.state == PC5_UPDATE_AVAILABLE && strcmp(ui->update.told, update.version)) {
         char text[200];
@@ -2295,8 +2330,9 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 break;
             }
             queue_missing_covers(ui);
-            if (ui->settings.check_updates && (now <= 0 || now - ui->update.checked >= PC5_UPDATE_EVERY_S ||
-                                               now < ui->update.checked))
+            /* Each time the player opens PC5; after a game (the title restarts), at most once an hour. */
+            if (ui->settings.check_updates && (ui->config.opened || now <= 0 ||
+                                               now - ui->update.checked >= PC5_UPDATE_EVERY_S || now < ui->update.checked))
                 go(ui, S_UPDATE);
             else if (ui->cover_count) go(ui, S_COVERS);
             else to_library(ui);
@@ -2304,7 +2340,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_UPDATE:
         if (!ui->drawn) break;
-        if (update_check_now(ui, 1)) {
+        if (update_check_now(ui, 1, ui->config.opened)) {
             ui->button = 0;
             go(ui, S_UPGRADE_ASK);
         } else if (ui->cover_count) {
@@ -2461,7 +2497,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     }
     case S_CHECKING:
         if (!ui->drawn) break;
-        update_check_now(ui, 0);
+        update_check_now(ui, 0, 0);
         /* on Update now when there is one */
         settings_open(ui, PAGE_SYSTEM, system_row(ui, offer_update(ui) ? SR_UPDATE_NOW : SR_CHECK_NOW));
         break;
@@ -4569,15 +4605,11 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_SETTINGS: settings_screen(ui, c); break;
     case S_CHECKING: settings_screen(ui, c); busy_dialog(ui, c, "Checking for a newer PC5", "Asking GitHub", 0); break;
     case S_UPGRADE_ASK: {
-        char title[120], body[400], size[32];
-        /* The update zip's size when PC5 will try it (this PC5 has its list of files), else the whole app's. */
-        char manifest[PC5_PATH];
-        int small = ui->update.last.delta_url[0] && !pc5_format(manifest, sizeof(manifest), "%s/pc5/manifest.txt", ui->app) &&
-                    pc5_is_file(manifest);
-        pc5_size_text(small ? ui->update.last.delta_size : ui->update.last.asset_size, size, sizeof(size));
+        char title[120], body[400], how[200];
+        update_how(ui, how, sizeof(how));
         snprintf(title, sizeof(title), "PC5 %s is available", ui->update.last.version);
-        snprintf(body, sizeof(body), "You have %s. PC5 can download it from GitHub (%s), install it and restart. "
-                 "Your games, saves and settings stay. Later: Settings \xe2\x80\xba System.", PC5_VERSION, size);
+        snprintf(body, sizeof(body), "%s, installs it and restarts. Your games, saves and settings stay. "
+                 "Later: Settings \xe2\x80\xba System.", how);
         confirm_dialog(ui, c, title, body, "Update now", "Later", 0, NULL);
         break;
     }

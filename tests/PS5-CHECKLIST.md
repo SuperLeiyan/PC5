@@ -366,3 +366,15 @@ controller's speaker.
 | 174 | Start a game from its home screen tile, play, hold the touchpad and Options for two seconds | back to the home screen with no "Game or App Error CE-108255-1" | `PW_WINE64 exit to the home screen: started from a tile app=…` and no `tile exit refused` |
 | 175 | The same, quitting from the game's own menu | the same | the same |
 | 176 | Start the game from its tile again, then a game from PC5's library | both start; leaving the library's game goes back to PC5 | `PW_WINE64 restart to=launcher … reason=wine-exit` |
+
+## Updates and Direct3D 12 (1.9.7)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 177 | With a newer PC5 on GitHub, Check when PC5 opens on: open PC5 twice within an hour | each time: a notification "PC5 x.y.z is available", then the question | `PC5 update state=4 …`, `PC5 notification rc=0` |
+| 178 | The question from the version before | "You have …, the version before: PC5 downloads only what changed (… MB)"; Update now downloads that size only | `small=1`, `PC5 update using PPSA11018-update.zip` |
+| 179 | The question from two or more versions behind | "… more than one version behind: PC5 downloads the whole app (… MB)"; only the whole app is downloaded | `small=0`, `the whole app is downloaded`, `PC5 update using PPSA11018.zip` |
+| 180 | Update from the version before | step 3 of 3 is over in a moment | `flushed=… of … folders` (a handful), `registration copies=… unchanged=…` |
+| 181 | Play a game, come back to PC5 | no question again within the hour | no `PC5 update state=` line |
+| 182 | An Unreal Engine 5 game PC5 had as DirectX 11 (its program in Binaries\Win64) | △ shows DirectX 12; the game starts on VKD3D-Proton | `dll_overrides=…d3d12,d3d12core,dxgi=n` |
+| 183 | An Unreal Engine 5 game on Direct3D 12 that crashed at start (shared resources) | it gets past its first frames | `Can't export memory … an ordinary allocation` with `WINEDEBUG` warn+vulkan, no crash |

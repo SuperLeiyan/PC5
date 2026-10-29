@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 09:00:00 +0000
+Subject: [PATCH 54/54] PC5: memory a game asks to share is ordinary memory
+ when the console can't share it (Wine patch 0937)
+
+DXVK making a shared texture for an Unreal Engine 5 game on Direct3D
+12 (STRETCHER.MEN) asked Wine for memory it could share as a Win32
+handle. Wine exports that through the host's VK_KHR_external_memory_fd,
+which the PS5's RADV lacks: the allocation failed ("Unsupported handle
+type 0") and the game crashed calling a null function. The memory is now
+an ordinary allocation, as on a driver that shares nothing.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...ary-memory-when-it-can-t-be-exported.patch | 42 +++++++++++++++++++
+ 3 files changed, 44 insertions(+)
+ create mode 100644 wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 939cc41..9144dda 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -582,6 +582,7 @@ wine/patches/0933-dinput-ps5-list-the-title-s-controllers-as-xinput-devices.patc
+ wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+ wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+ wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
++wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index a446dcb..bfa37de 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -140,6 +140,7 @@ before evaluating a candidate built from that cache.
+ | 0934 | `nsi`: without `\\.\Nsi` (a PS5 title starts no `winedevice.exe`, so no `nsiproxy.sys`) the NSI requests are answered in `nsi.dll` with the software loopback interface alone, as Windows always has it: the NDIS interface table and index-to-LUID map, and the IPv4 and IPv6 interface and unicast tables (127.0.0.1/8, ::1/128), filled as `nsiproxy.sys` fills a Unix `lo`; the other tables list no rows. `GetAdaptersAddresses`, `GetIfTable`, `GetIpAddrTable` and the like failed with error 2, and Java's `NetworkInterface` threw an Error on that: Shattered Pixel Dungeon closed when it started a new game. With the device nothing changes |
+ | 0935 | `ntdll`: when the kernel doesn't apply a 0928 repair (the same fault again within a millisecond, in the same state), the faulting instruction, a plain MOV of a byte or a dword between a register and a `%fs:` operand, is done by the handler on the 32-bit TEB and the thread goes on after it; the thread's later faulting `%fs:` MOVs are done so at once, with the repair still written into each frame. falloutwHR.exe was repaired once in `GetStdHandle`, then faulted 64 times in a row in `RtlEnterCriticalSection` (`mov %fs:0x18,%eax`) and crashed. The first miss is logged with the frame's selector and base |
+ | 0936 | `ntdll`: a directory whose handle the server keeps no Unix name for (patch 0140 enters directories by that name) is entered by the Unix name of its NT name (`\??\C:\...`), as `NtCreateFile` resolves it; `NtQueryDirectoryFile` failed with `STATUS_INVALID_HANDLE` (`fchdir`'s `EBADF`), and .NET's `FileSystemEnumerator` threw "invalid handle" for a game's folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`), whose maps then never loaded. A directory still not entered is logged with which name failed and why |
++| 0937 | `win32u`: memory a program asks `vkAllocateMemory` for as shareable (`VkExportMemoryAllocateInfo` with Win32 handle types) is an ordinary allocation when the host can't export memory: the PS5's RADV has no `VK_KHR_external_memory_fd`, so the export failed ("Unsupported handle type 0") and the allocation with it. DXVK making a shared texture for an Unreal Engine 5 game on Direct3D 12 (STRETCHER.MEN) got no memory, and the game crashed calling a null function; now it gets its memory, and a handle for it can't be had |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch b/wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+new file mode 100644
+index 0000000..d0d6ea4
+--- /dev/null
++++ b/wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+@@ -0,0 +1,42 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Thu, 29 Oct 2026 09:00:00 +0000
++Subject: [PATCH] win32u: Allocate memory a program asks to share as ordinary
++ memory when the PS5 can't export it.
++
++A program asking vkAllocateMemory for memory it can share as a Win32
++handle (VkExportMemoryAllocateInfo) has it exported through the host's
++VK_KHR_external_memory_fd. The PS5's RADV has no such extension, so the
++host handle type was 0, the export failed ("Unsupported handle type 0")
++and the allocation with it: DXVK, making a shared texture for an Unreal
++Engine 5 game on Direct3D 12 (STRETCHER.MEN), got no memory and the game
++crashed calling a null function.
++
++When the host can't export, the export request is dropped and the
++memory is an ordinary allocation, as on a driver that shares nothing;
++a handle for it can't be had.
++---
++diff --git a/dlls/win32u/vulkan.c b/dlls/win32u/vulkan.c
++--- a/dlls/win32u/vulkan.c
+++++ b/dlls/win32u/vulkan.c
++@@ -893,6 +893,17 @@
++             export_info = (VkExportMemoryAllocateInfo *)*next;
++             if (!(export_info->handleTypes & EXTERNAL_MEMORY_WIN32_BITS))
++                 FIXME( "Unsupported handle types %#x\n", export_info->handleTypes );
+++            else if (!get_host_external_memory_type())
+++            {
+++                /* The host can't export memory (no VK_KHR_external_memory_fd: the PS5's
+++                 * RADV), so the memory can't be shared. It is an ordinary allocation
+++                 * instead of a failed one, as on a driver that shares nothing: a program
+++                 * that only asks for shareable memory (DXVK for a shared texture of an
+++                 * Unreal Engine 5 game) runs on, and a handle for it can't be had. */
+++                WARN( "Can't export memory for handle types %#x: an ordinary allocation\n", export_info->handleTypes );
+++                *next = (*next)->pNext; next = &prev;
+++                export_info = NULL;
+++            }
++             else
++             {
++                 nt_shared = !(export_info->handleTypes & (VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT |
++-- 
++2.43.0
++
+-- 
+2.43.0
+

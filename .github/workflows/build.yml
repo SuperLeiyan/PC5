@@ -394,7 +394,8 @@ jobs:
         # PPSA11018-update.zip: the files that differ from the newest published release's
         # PPSA11018.zip, and the new release's list of its files (tools/make-update.py).
         # PC5's updater uses it when the console's files are that release's; otherwise it
-        # downloads PPSA11018.zip.
+        # downloads PPSA11018.zip. Its label on the release names that release ("from 1.9.6"):
+        # from 1.9.7, PC5 takes the whole app at once when it is older than that.
         run: |
           base=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
           case $base in v[0-9]*) ;; *) base= ;; esac   # none published: GitHub answers 404
@@ -421,6 +422,7 @@ jobs:
           python3 tools/make-update.py "$RUNNER_TEMP/base/PPSA11018.zip" release/PPSA11018.zip \
             release/PPSA11018-update.zip --markdown "$GITHUB_STEP_SUMMARY" | tee update.txt
           echo "Made against $base's PPSA11018.zip." >> "$GITHUB_STEP_SUMMARY"
+          echo "${base#v}" > release/update-from.txt
           echo "::notice title=Update zip against $base::$(sed 's/^make-update: [^:]*: //' update.txt)"
 
       - uses: actions/upload-artifact@v7
@@ -473,9 +475,12 @@ jobs:
           [ "$state" = none ] || gh release delete "$tag" --yes
           notes="release-notes/$VERSION.md"
           [ -f "$notes" ] || { echo "PC5 $VERSION" > "$RUNNER_TEMP/notes.md"; notes=$RUNNER_TEMP/notes.md; }
+          update=()
+          if [ -f release/PPSA11018-update.zip ]; then
+            update=("release/PPSA11018-update.zip#from $(cat release/update-from.txt)")
+          fi
           gh release create "$tag" --draft --target "$GITHUB_SHA" --title "PC5 $VERSION" --notes-file "$notes" \
-            release/PPSA11018.zip $(ls release/PPSA11018-update.zip 2>/dev/null) release/PPSA11018-sources.tar.xz \
-            release/wine-mono-*-src.tar.xz
+            release/PPSA11018.zip "${update[@]}" release/PPSA11018-sources.tar.xz release/wine-mono-*-src.tar.xz
           echo "Draft release $tag is ready: check it and publish it from the Releases page." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Only the newest work kept

@@ -53,6 +53,11 @@ int pc5_pe_read(const char *path, Pc5PeInfo *info);
 uint32_t pc5_pe_named_libraries(const char *path);
 /* The most capable API among the imports. */
 Pc5Api pc5_api_from_imports(uint32_t imports);
+/* 1 when the program at path (a path on the disk, or relative, either slash) is an Unreal
+ * Engine game's, in a Binaries\Win64 folder, whose imports don't name Direct3D 12 but whose
+ * code does (d3d12.dll): Unreal Engine 5 loads d3d12.dll itself and draws with it, while
+ * its imports name only Direct3D 11 or DXGI. imports: the program's own. */
+int pc5_pe_unreal_d3d12(const char *path, uint32_t imports);
 /* "DirectX 11", "OpenGL", ... */
 const char *pc5_api_name(Pc5Api api);
 /* The program's icon, the largest it has, as pixels; -1 if it has none. */

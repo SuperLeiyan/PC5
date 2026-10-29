@@ -425,6 +425,14 @@ int pc5_folder_inspect(const char *path, const char *name, Pc5Folder *folder)
             folder->exes[i].pe.imports |= pc5_pe_named_libraries(file);
         }
     }
+    /* An Unreal Engine 5 game's program loads Direct3D 12 itself, its imports naming only
+     * Direct3D 11 or DXGI: it draws with Direct3D 12 (VKD3D-Proton), not Wine's own. */
+    for (int i = 0; i < folder->exe_count && i < 3; i++) {
+        char file[PC5_PATH * 2], program[PC5_PATH];
+        program_of(path, folder->exes[i].path, batch, program, sizeof(program));
+        if (pc5_format(file, sizeof(file), "%s/%s", path, program)) continue;
+        if (pc5_pe_unreal_d3d12(file, folder->exes[i].pe.imports)) folder->exes[i].pe.imports |= PC5_IMPORT_D3D12;
+    }
     if (!folder->exe_count && !folder->problem[0])
         snprintf(folder->problem, sizeof(folder->problem), "There is no Windows program in this folder.");
     else if (folder->exe_count && folder->exes[0].score <= -500 && !folder->problem[0])

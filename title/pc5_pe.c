@@ -417,6 +417,18 @@ Pc5Api pc5_api_from_imports(uint32_t imports)
     return PC5_API_GDI;
 }
 
+int pc5_pe_unreal_d3d12(const char *path, uint32_t imports)
+{
+    char lower[PC5_PATH];
+    size_t n = 0;
+
+    if ((imports & PC5_IMPORT_D3D12) || !(imports & (PC5_IMPORT_D3D11 | PC5_IMPORT_DXGI | PC5_IMPORT_D3D10))) return 0;
+    for (const char *p = path; *p && n + 1 < sizeof(lower); p++) lower[n++] = *p == '\\' ? '/' : (char)pc5_lower((unsigned char)*p);
+    lower[n] = 0;
+    if (!strstr(lower, "/binaries/win64/") && strncmp(lower, "binaries/win64/", 15)) return 0;
+    return (pc5_pe_named_libraries(path) & PC5_IMPORT_D3D12) != 0;
+}
+
 const char *pc5_api_name(Pc5Api api)
 {
     switch (api) {

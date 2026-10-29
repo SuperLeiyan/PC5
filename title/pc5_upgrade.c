@@ -601,21 +601,43 @@ static int check_top(const Release *r, const char *fresh, const char *folder, ch
     return 0;
 }
 
+/* dir (a folder of the release, "pc5/prefix") and the folders above it marked in touched:
+ * their entries changed, so they are flushed to the disk. */
+static void mark_changed(const Release *r, unsigned char *touched, const char *dir)
+{
+    char at[PC5_PATH];
+    pc5_copy(at, sizeof(at), dir);
+    while (at[0]) {
+        const char *key = at;
+        char **found = bsearch(&key, r->folders, r->folder_count, sizeof(char *), text_compare);
+        if (found) touched[found - r->folders] = 1;
+        char *slash = strrchr(at, '/');
+        if (!slash) break;
+        *slash = 0;
+    }
+}
+
 /* The release's files from fresh into folder, each over the old one, eboot.bin last; then
  * what the release's folders (not the top) no longer have goes to trash, and the folders
- * are flushed. Done again after a stop, it goes on where it was: a file already moved is
+ * whose entries changed are flushed (from the update zip a handful, not the app's hundreds). Done again after a stop, it goes on where it was: a file already moved is
  * no longer in fresh and has its size in folder. done counts the files. 0, or -1 with
  * error set. eboot_placed: eboot.bin was placed now. */
 static int place_files(const Pc5UpgradeConfig *config, const Release *r, const char *fresh, const char *folder,
                        const char *trash, atomic_uint_fast64_t *done, int *eboot_placed, char *error, size_t error_size)
 {
     char from[PC5_PATH], to[PC5_PATH], rel[PC5_PATH];
-    unsigned counter = 0, stale = 0;
+    unsigned counter = 0, stale = 0, flushed = 0;
     uint64_t placed = 0;
     struct stat st;
+    unsigned char *touched = pc5_alloc(r->folder_count + 1);
 
     *eboot_placed = 0;
-    if (check_top(r, fresh, folder, error, error_size)) return -1;
+    if (!touched) {
+        snprintf(error, error_size, "PC5 ran out of memory.");
+        return -1;
+    }
+    memset(touched, 0, r->folder_count + 1);
+    if (check_top(r, fresh, folder, error, error_size)) goto failed;
     for (int pass = 0; pass < 2; pass++)
         for (size_t i = 0; i < r->count; i++) {
             const char *name = r->names[i].name;
@@ -625,6 +647,7 @@ static int place_files(const Pc5UpgradeConfig *config, const Release *r, const c
                 rel[n - 1] = 0;
                 if (pass == 0 && strchr(rel, '/') && make_parents(folder, rel, trash, &counter)) goto failed_at;
                 if (pass == 0 && !strchr(rel, '/') && make_folders(folder, rel)) goto failed_at;
+                if (pass == 0) mark_changed(r, touched, rel);
                 continue;
             }
             /* eboot.bin on the second pass, after everything else. */
@@ -643,6 +666,7 @@ static int place_files(const Pc5UpgradeConfig *config, const Release *r, const c
                 }
                 if (slash && pc5_is_dir(to) && to_trash(to, trash, &counter)) goto failed_at;
                 if (place(from, to)) goto failed_at;
+                if (slash) mark_changed(r, touched, rel);
                 if (pass == 1) *eboot_placed = 1;
             }
             placed++;
@@ -661,24 +685,36 @@ static int place_files(const Pc5UpgradeConfig *config, const Release *r, const c
                 continue;
             for (char *c = inside; *c; c++) *c = (char)pc5_lower((unsigned char)*c);
             if (release_has_lower(r, inside)) continue;
-            if (!to_trash(path, trash, &counter)) stale++;
+            if (!to_trash(path, trash, &counter)) {
+                stale++;
+                touched[f] = 1;
+            }
         }
         closedir(dir);
     }
-    /* The moves on the disk before the journal goes. */
+    /* The moves on the disk before the journal goes: every folder whose entries changed (a
+     * file moved in or out, a folder made), and the top. A file put in a folder's place, or
+     * a folder in a file's, may have changed any: then all of them. */
     for (size_t f = 0; f < r->folder_count; f++)
-        if (!pc5_join(to, sizeof(to), folder, r->folders[f])) sync_folder(to);
+        if ((touched[f] || counter > stale) && !pc5_join(to, sizeof(to), folder, r->folders[f])) {
+            sync_folder(to);
+            flushed++;
+        }
     sync_folder(folder);
-    note(config, "PC5 update placed=%llu stale=%u in %s", (unsigned long long)placed, stale, folder);
+    pc5_free(touched);
+    note(config, "PC5 update placed=%llu stale=%u flushed=%u of %zu folders in %s", (unsigned long long)placed, stale,
+         flushed, r->folder_count, folder);
     return 0;
 too_long:
     snprintf(error, error_size, "A path in PC5's folder is too long.");
-    return -1;
+    goto failed;
 missing:
     snprintf(error, error_size, "A new file is missing: %.200s.", rel);
-    return -1;
+    goto failed;
 failed_at:
     snprintf(error, error_size, "PC5 can't put its new files in place (%.150s: %s).", rel, strerror(errno));
+failed:
+    pc5_free(touched);
     return -1;
 }
 
@@ -720,10 +756,21 @@ static int file_mark(const char *path, char *out, size_t size)
 
 /* The console's copies of the app's sce_sys, which ShadowMountPlus made once, when it
  * first registered PC5: brought up to date as ProsperoStore does. Best effort. */
+/* data written to path unless path holds it already (each write is flushed to the disk, and
+ * an update changes few of these files). 0, or -1. */
+static int write_if_changed(const char *path, const Pc5Buf *data, int *same)
+{
+    Pc5Buf old = { 0 };
+    int equal = !pc5_read_file(path, &old, 32u << 20) && old.len == data->len && !memcmp(old.data, data->data, data->len);
+    pc5_buf_free(&old);
+    *same = equal;
+    return equal ? 0 : pc5_write_file(path, data->data, data->len);
+}
+
 static void refresh_registered(const Pc5UpgradeConfig *config, const char *folder)
 {
     char source[PC5_PATH], copy[PC5_PATH], from[PC5_PATH], to[PC5_PATH];
-    int copied = 0, failed = 0;
+    int copied = 0, failed = 0, same = 0, unchanged = 0;
     DIR *dir;
     struct dirent *entry;
 
@@ -738,7 +785,8 @@ static void refresh_registered(const Pc5UpgradeConfig *config, const char *folde
             if (entry->d_name[0] == '.' || pc5_join(from, sizeof(from), source, entry->d_name) || !pc5_is_file(from) ||
                 pc5_join(to, sizeof(to), copy, entry->d_name))
                 continue;
-            if (pc5_read_file(from, &data, 32u << 20) || pc5_write_file(to, data.data, data.len)) failed++;
+            if (pc5_read_file(from, &data, 32u << 20) || write_if_changed(to, &data, &same)) failed++;
+            else if (same) unchanged++;
             else copied++;
             pc5_buf_free(&data);
         }
@@ -747,11 +795,12 @@ static void refresh_registered(const Pc5UpgradeConfig *config, const char *folde
     if (!pc5_format(to, sizeof(to), "%s/app/%s/icon0.png", config->user, PC5_TITLE_ID) && pc5_is_file(to) &&
         !pc5_format(from, sizeof(from), "%s/icon0.png", source)) {
         Pc5Buf data = { 0 };
-        if (pc5_read_file(from, &data, 32u << 20) || pc5_write_file(to, data.data, data.len)) failed++;
+        if (pc5_read_file(from, &data, 32u << 20) || write_if_changed(to, &data, &same)) failed++;
+        else if (same) unchanged++;
         else copied++;
         pc5_buf_free(&data);
     }
-    note(config, "PC5 update registration copies=%d failed=%d", copied, failed);
+    note(config, "PC5 update registration copies=%d unchanged=%d failed=%d", copied, unchanged, failed);
 }
 
 /* ---- the release's list of its files ---------------------------------------------------------- */
@@ -992,6 +1041,13 @@ static int use_update_zip(Pc5Upgrade *upgrade, const Pc5Update *update, const ch
     int result = 0;
 
     if (!update->delta_url[0]) return 0;
+    /* Only the changes since the release before: from an older PC5 the whole app, without
+     * downloading the update zip first. */
+    if (!pc5_update_small(update, PC5_VERSION)) {
+        note(config, "PC5 update: the update zip holds the changes since %s and this is %s, so the whole app is "
+                     "downloaded", update->delta_from[0] ? update->delta_from : "an unnamed release", PC5_VERSION);
+        return 0;
+    }
     if (pc5_format(installed_list, sizeof(installed_list), "%s/" MANIFEST, upgrade->folder) ||
         manifest_load(installed_list, &installed)) {
         note(config, "PC5 update: PC5's folder has no list of its files (%s), so the whole app is downloaded", MANIFEST);

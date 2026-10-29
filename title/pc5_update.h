@@ -36,6 +36,9 @@ typedef struct Pc5Update {
     char delta_url[512];
     uint64_t delta_size;
     char delta_sha256[65];
+    /* The release the update zip holds the changes since, from its label on GitHub ("from
+     * 1.9.6", from 1.9.7's releases on); "" when the label doesn't say. */
+    char delta_from[32];
 } Pc5Update;
 
 /* <0, 0, >0 as version a is older, the same, newer than b ("1.2.0", "v1.10"). */
@@ -44,11 +47,15 @@ int pc5_version_compare(const char *a, const char *b);
 void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *update);
 /* What to show in Settings: "PC5 1.1.0 is available", "You have the newest PC5". */
 void pc5_update_text(const Pc5Update *update, char *out, size_t size);
+/* 1 when the release's update zip is for current: it holds the changes since that very
+ * version (one release behind). Otherwise (more than one release behind, or a release
+ * whose label doesn't say) PC5 downloads the whole app. */
+int pc5_update_small(const Pc5Update *update, const char *current);
 
 /* What PC5 remembers between starts (root/pc5/update.txt): when it last
- * asked (it asks at most once an hour, as GitHub allows 60 questions an
- * hour), the answer, and the version it told about with the console's
- * notification, so it says so once per release. */
+ * asked (each time the player opens PC5, otherwise at most once an hour, as
+ * GitHub allows 60 questions an hour: the title restarts after every game),
+ * the answer, and the version it told about with the console's notification. */
 typedef struct Pc5UpdateMemory {
     int64_t checked;          /* seconds since 1970, 0 never */
     char told[32];

@@ -48,7 +48,7 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
     /* The app's zip and the update zip among the release's files. */
     uint32_t assets = pc5_json_get(&json, 0, "assets");
     for (uint32_t i = 0, asset; assets && (asset = pc5_json_item(&json, assets, i)); i++) {
-        char name[64], url[512], digest[80];
+        char name[64], url[512], digest[80], label[64];
         double size = pc5_json_number(&json, pc5_json_get(&json, asset, "size"), -1);
         char *to_url, *to_sha256;
         uint64_t *to_size;
@@ -61,6 +61,14 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
             to_url = update->delta_url;
             to_size = &update->delta_size;
             to_sha256 = update->delta_sha256;
+            /* Its label says which release it holds the changes since: "from 1.9.6". */
+            if (!pc5_json_text(&json, pc5_json_get(&json, asset, "label"), label, sizeof(label)) &&
+                !strncmp(label, "from ", 5)) {
+                const char *from = label + 5;
+                if (*from == 'v' || *from == 'V') from++;
+                if (*from >= '0' && *from <= '9' && strlen(from) < sizeof(update->delta_from))
+                    pc5_copy(update->delta_from, sizeof(update->delta_from), from);
+            }
         } else {
             continue;
         }
@@ -77,6 +85,12 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
 out:
     pc5_json_free(&json);
     pc5_buf_free(&body);
+}
+
+int pc5_update_small(const Pc5Update *update, const char *current)
+{
+    return update->state == PC5_UPDATE_AVAILABLE && update->delta_url[0] && update->delta_from[0] &&
+           pc5_version_compare(update->delta_from, current) == 0;
 }
 
 void pc5_update_text(const Pc5Update *update, char *out, size_t size)

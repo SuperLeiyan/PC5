@@ -523,6 +523,18 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
                 pc5_write_file(path, text, strlen(text));
         }
     }
+    /* An Unreal Engine 5 game installed before 1.9.7 as drawing with Direct3D 11 (its imports
+     * name only that or DXGI, and it loads d3d12.dll itself): Direct3D 12, kept in its notes. */
+    if ((info.api == PC5_API_D3D11 || info.api == PC5_API_D3D10) &&
+        !pc5_format(path, sizeof(path), "%s/prefixes/%s/drive_c/Games/%s/%s", root, id, info.folder, program.exe)) {
+        Pc5PeInfo pe;
+        if (!pc5_pe_read(path, &pe) && pc5_pe_unreal_d3d12(path, pe.imports & PC5_IMPORT_DRAWING)) {
+            info.api = program.api = PC5_API_D3D12;
+            if (!pc5_info_text(&info, text, sizeof(text)) &&
+                !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/info.txt", root, id))
+                pc5_write_file(path, text, strlen(text));
+        }
+    }
     /* A Java game installed before 1.8.2 as drawing with Windows itself (or what its runtime's
      * libraries import): neither its program nor the libraries beside it import anything to
      * draw with, and a Java runtime is beside it, so it draws with OpenGL (pc5_folder_api),
@@ -651,7 +663,7 @@ static void handed_program(const char *path, const char *dir, Pc5Info *program)
     if (pe.bits == 32 || pe.bits == 64) program->bits = pe.bits;
     if ((drawing = pe.imports & PC5_IMPORT_DRAWING) || (drawing = pc5_pe_named_libraries(path) & PC5_IMPORT_DRAWING) ||
         (dir[0] && (drawing = pc5_dll_imports_in(dir) & PC5_IMPORT_DRAWING)))
-        program->api = pc5_api_from_imports(drawing);
+        program->api = pc5_api_from_imports(pc5_pe_unreal_d3d12(path, drawing) ? drawing | PC5_IMPORT_D3D12 : drawing);
     else if (dir[0] && pc5_java_beside(dir))
         program->api = PC5_API_OPENGL;
 }

@@ -74,6 +74,9 @@ typedef struct Pc5UiConfig {
     /* 1: the games' backgrounds are looked for online and in the player's folders while
      * the library shows (pc5_backgrounds.h); 0: only those already kept are shown. */
     int fetch_backgrounds;
+    /* 1: the player has just opened PC5 (not its screens coming back after a game, nor a
+     * home screen tile's game): it asks GitHub for a newer PC5 now, whenever it last did. */
+    int opened;
 } Pc5UiConfig;
 
 typedef struct Pc5Ui Pc5Ui;

@@ -220,7 +220,7 @@ static void crash_shots(const char *root)
     fmt(usb, sizeof(usb), "%s/usb0", work);
     roots[0] = usb;
     fmt(template_prefix, sizeof(template_prefix), "%s/app0/pc5/prefix", work);
-    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0 };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     until(ui, "message");
     settle(ui);

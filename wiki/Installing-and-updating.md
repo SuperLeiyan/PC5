@@ -22,7 +22,7 @@ When PC5 opens and a newer release is out on GitHub, it asks: **Update now** or 
 2. When it says the new version is installed, press **✕** (**Restart PC5**). PC5 starts again as the new version.
 3. Check the version in **Settings › About PC5**.
 
-From 1.9.0, PC5 downloads only what changed since the release before, when it can: each release has, beside the whole app (`PPSA11018.zip`), an update zip (`PPSA11018-update.zip`) with only the files that differ from the release before it and the new release's list of its files. PC5 uses it when every other file of the new release is on the console as it was released (it checks each against its list, `pc5/manifest.txt`). Otherwise, for example when you skipped a version or a file of PC5's was changed, it downloads the whole app as before. The first update to 1.9.0 downloads the whole app, as PC5 1.8.8 doesn't know the update zip; from 1.9.0 to the next version on, an update is usually a small download. The size PC5 shows when it offers an update is the one it will download.
+From 1.9.0, PC5 downloads only what changed since the release before, when it can: each release has, beside the whole app (`PPSA11018.zip`), an update zip (`PPSA11018-update.zip`) with only the files that differ from the release before it and the new release's list of its files. PC5 uses it when every other file of the new release is on the console as it was released (it checks each against its list, `pc5/manifest.txt`). Otherwise, for example when you skipped a version or a file of PC5's was changed, it downloads the whole app as before. The first update to 1.9.0 downloads the whole app, as PC5 1.8.8 doesn't know the update zip; from 1.9.0 to the next version on, an update is usually a small download. From 1.9.7, PC5 tells before it downloads anything which one it will be: only what changed when you have the version before, the whole app when you are more than one version behind, with its size.
 
 PC5 1.7.0 closes instead of restarting, and the console then shows error CE-108255-1; the update is installed all the same, so just open PC5 again. From 1.8.0 on, PC5 restarts by itself.
 
@@ -56,7 +56,7 @@ PC5 can ask GitHub whether a newer release is out. Open **Settings › System**.
 
 | Row | What it does |
 | --- | --- |
-| Check when PC5 opens | **On** (the default): PC5 asks GitHub when it opens, at most once an hour. **Off**: it only asks when you choose Check now. |
+| Check when PC5 opens | **On** (the default): PC5 asks GitHub each time you open it, and shows a notification and offers to update when a newer version is out (after a game, at most once an hour). **Off**: it only asks when you choose Check now. |
 | Check now | Asks GitHub straight away and shows the answer under the row. |
 | Update now | Shows while a newer release is out: downloads it and installs it (see [Updating PC5](#updating-pc5)). |
 
