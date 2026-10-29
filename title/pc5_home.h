@@ -31,5 +31,8 @@ int pc5_home_remove(const char *root, const char *id);
 
 /* The tile's picture from a 2:3 cover (NULL for none: the tint alone). */
 int pc5_home_icon(const Pc5Image *cover, uint32_t tint, Pc5Image *icon);
+/* The same as a PNG, from the cover PC5 keeps in library_root/prefixes/<prefix>/pc5/cover.bin
+ * (the tint alone when there is none). 0, or -1 when out of memory. */
+int pc5_home_picture(const char *library_root, const char *prefix, Pc5Buf *png);
 
 #endif

@@ -611,6 +611,9 @@ EOF_SOURCES
         [[ $(head -c 80 "$dll" | tail -c 16) == "Wine builtin DLL" ]] ||
             { echo "build.sh: $dll lost Wine's builtin mark" >&2; return 1; }
     done < <(find "$app" -type f \( -name 'xaudio2_*.dll' -o -name 'xactengine*.dll' \) -print0)
+    # The tiles PC5 makes as apps of their own change the title ID in a copy of lapy.elf
+    # (title/pc5_tile.c): it must be where PC5 looks for it.
+    python3 "$here/tools/lapy-title.py" "$app/lapy.elf" PPSA99437
     stage "zipping the app"
     python3 "$here/tools/make-app.py" "$app" "$release/$TITLE.zip" --repo "$here" --pw "$PW"
     # Wine Mono's source (300 MB) is released beside the app, as it came: a file of its own.

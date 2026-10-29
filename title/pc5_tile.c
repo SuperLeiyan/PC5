@@ -1,9 +1,17 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: a home screen tile that is an app of its own (pc5_tile.h). */
 #include "pc5_tile.h"
+#include "pc5_home.h"
 #include "pc5_json.h"
+#include "third_party/psfwd/psfwd.h"
 
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 enum { STAGE_RECOVER, STAGE_FIND, STAGE_RUNTIME, STAGE_PROFILE, STAGE_READY };
 
@@ -55,6 +63,298 @@ done:
     pc5_buf_free(&text);
     return status;
 }
+
+/* ---- making a tile ------------------------------------------------------------------ */
+
+static int tile_id(const char *id)
+{
+    if (strlen(id) != 9 || memcmp(id, "PPSA", 4)) return 0;
+    for (int i = 4; i < 9; i++)
+        if (id[i] < '0' || id[i] > '9') return 0;
+    return 1;
+}
+
+int pc5_tile_lapy_patch(uint8_t *data, size_t size, const char *title_id, char *error, size_t error_size)
+{
+    static const char old[] = PC5_TITLE_ID;
+    size_t at[8], length[8];
+    int sites = 0, compares = 0, strings = 0;
+
+    _Static_assert(sizeof(old) == 10, "a title ID is nine characters");
+    if (!title_id || !tile_id(title_id)) {
+        snprintf(error, error_size, "A tile's ID is PPSA and five digits.");
+        return -1;
+    }
+    for (size_t i = 0; i + 10 <= size; i++) {
+        /* movabs $"PPSA1101", %reg, then xor $'8', %reg on the ninth character. */
+        if (data[i] == 0x48 && data[i + 1] >= 0xb8 && data[i + 1] <= 0xbf && !memcmp(data + i + 2, old, 8)) {
+            size_t imm = i + 2, j;
+            for (j = imm + 8; j + 3 < size && j < imm + 48; j++)
+                if (data[j] == 0x48 && data[j + 1] == 0x83) break;
+            if (j + 3 >= size || j >= imm + 48 || (data[j + 2] & 0xf8) != 0xf0 || data[j + 3] != (uint8_t)old[8] ||
+                sites + 2 > 8)
+                goto unknown;
+            at[sites] = imm, length[sites++] = 8;
+            at[sites] = j + 3, length[sites++] = 1;
+            compares++;
+        } else if (!memcmp(data + i, old, 9) && data[i + 9] == 0 && sites < 8) {
+            at[sites] = i, length[sites++] = 9;
+            strings++;
+        }
+    }
+    if (compares != 2 || strings != 1) goto unknown;
+    for (int s = 0; s < sites; s++) memcpy(data + at[s], title_id + (length[s] == 1 ? 8 : 0), length[s]);
+    return 0;
+unknown:
+    snprintf(error, error_size, "PC5's lapy.elf isn't the one this PC5 can make tiles from (%d compares, %d names).",
+             compares, strings);
+    return -1;
+}
+
+/* A string token's text replaced: json's token, its span in text (quotes left). */
+typedef struct Span {
+    uint32_t start, end;
+    const char *with;
+    int escape;
+} Span;
+
+static int by_start(const void *a, const void *b)
+{
+    const Span *x = a, *y = b;
+    return x->start < y->start ? -1 : x->start > y->start;
+}
+
+/* text with each span's text replaced (JSON-escaped when asked). */
+static int splice(const char *text, size_t length, Span *spans, int count, Pc5Buf *out)
+{
+    size_t from = 0;
+
+    qsort(spans, (size_t)count, sizeof(*spans), by_start);
+    *out = (Pc5Buf){ 0 };
+    for (int s = 0; s < count; s++) {
+        if (spans[s].start < from || spans[s].end > length || pc5_buf_put(out, text + from, spans[s].start - from))
+            goto fail;
+        for (const unsigned char *c = (const unsigned char *)spans[s].with; *c; c++) {
+            char escaped[8];
+            int n;
+            if (spans[s].escape && (*c == '"' || *c == '\\')) n = snprintf(escaped, sizeof(escaped), "\\%c", *c);
+            else if (spans[s].escape && *c < 0x20) n = snprintf(escaped, sizeof(escaped), "\\u%04x", *c);
+            else escaped[0] = (char)*c, n = 1;
+            if (pc5_buf_put(out, escaped, (size_t)n)) goto fail;
+        }
+        from = spans[s].end;
+    }
+    if (pc5_buf_put(out, text + from, length - from) || pc5_buf_terminate(out)) goto fail;
+    return 0;
+fail:
+    pc5_buf_free(out);
+    return -1;
+}
+
+int pc5_tile_param(const char *text, size_t length, const char *title_id, const char *name, Pc5Buf *out)
+{
+    Pc5Json json = { 0 };
+    char content[48];
+    Span spans[4];
+    uint32_t tokens[4], strings;
+    int status = -1;
+
+    *out = (Pc5Buf){ 0 };
+    if (!tile_id(title_id) || !name || !name[0] || pc5_json_parse(&json, text, length, 1024)) goto done;
+    strings = pc5_json_get(&json, 0, "localizedParameters");
+    tokens[0] = pc5_json_get(&json, 0, "titleId");
+    tokens[1] = pc5_json_get(&json, 0, "conceptId");
+    tokens[2] = pc5_json_get(&json, 0, "contentId");
+    tokens[3] = strings ? pc5_json_get(&json, pc5_json_get(&json, strings, "en-US"), "titleName") : 0;
+    /* The content ID's label is the tile's own, sixteen characters as the console wants. */
+    snprintf(content, sizeof(content), "UP0000-%s_00-PC5TILE000000000", title_id);
+    const char *with[4] = { title_id, title_id + 4, content, name };
+    for (int i = 0; i < 4; i++) {
+        if (!tokens[i] || json.tokens[tokens[i]].type != PC5_JSON_STRING) goto done;
+        spans[i] = (Span){ json.tokens[tokens[i]].start, json.tokens[tokens[i]].end, with[i], i == 3 };
+    }
+    status = splice(text, length, spans, 4, out);
+done:
+    pc5_json_free(&json);
+    return status;
+}
+
+/* ---- the tile's folder from PC5's, linked ---------------------------------------- */
+
+typedef struct Linking {
+    char from[PC5_PATH], to[PC5_PATH];
+    uint32_t linked;
+    int no_links;                /* the drive can't link (another drive, or none on it) */
+    char error[PC5_ERROR];
+} Linking;
+
+/* What of PC5's folder a tile has as its own instead (rel: the path inside it). */
+static int own(const char *rel)
+{
+    return !strcmp(rel, "sce_sys") || !strcmp(rel, "lapy.elf") || !strcmp(rel, PC5_TILE_FILE) ||
+           !strcmp(rel, "pc5/forwarder");
+}
+
+/* from/rel linked into to/rel, folders made. */
+static int link_tree(Linking *l, const char *rel)
+{
+    char from[PC5_PATH], to[PC5_PATH];
+    DIR *dir;
+    struct dirent *entry;
+    struct stat st;
+    int status = 0;
+
+    if (pc5_format(from, sizeof(from), "%s%s%s", l->from, rel[0] ? "/" : "", rel) ||
+        pc5_format(to, sizeof(to), "%s%s%s", l->to, rel[0] ? "/" : "", rel) || !(dir = opendir(from))) {
+        snprintf(l->error, sizeof(l->error), "PC5 can't read its folder, %.200s.", from);
+        return -1;
+    }
+    if (pc5_mkdirs(to)) {
+        snprintf(l->error, sizeof(l->error), "PC5 can't make %.200s: %s.", to, strerror(errno));
+        closedir(dir);
+        return -1;
+    }
+    while (!status && (entry = readdir(dir))) {
+        char inside[PC5_PATH], source[PC5_PATH], target[PC5_PATH];
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (pc5_format(inside, sizeof(inside), "%s%s%s", rel, rel[0] ? "/" : "", entry->d_name) || own(inside) ||
+            pc5_join(source, sizeof(source), from, entry->d_name) || pc5_join(target, sizeof(target), to, entry->d_name))
+            continue;
+        if (lstat(source, &st)) continue;
+        if (S_ISDIR(st.st_mode)) {
+            status = link_tree(l, inside);
+        } else if (S_ISREG(st.st_mode)) {
+            if (!link(source, target)) {
+                l->linked++;
+            } else {
+                /* Another drive, or a file system without links (exFAT): none at all. */
+                l->no_links = errno == EXDEV || errno == EPERM || errno == EOPNOTSUPP || errno == EMLINK;
+                snprintf(l->error, sizeof(l->error), "PC5 can't link %.200s into the tile: %s.", inside, strerror(errno));
+                status = -1;
+            }
+        }
+    }
+    closedir(dir);
+    return status;
+}
+
+static void delete_tree(const char *path)
+{
+    Pc5Remove remove = { 0 };
+    if (!pc5_exists(path) || pc5_tree_delete_begin(&remove, path)) return;
+    while (pc5_remove_step(&remove, 50)) {}
+    pc5_remove_end(&remove);
+}
+
+/* The tile's own files: sce_sys from PC5's with the game's name and picture, lapy.elf
+ * patched for its ID, pc5-tile.json. */
+static int own_files(const Pc5TileMake *make, const char *stage, const char *title_id, char *error, size_t size)
+{
+    char from[PC5_PATH], to[PC5_PATH], json[512];
+    Pc5Buf data = { 0 }, text = { 0 };
+    DIR *dir;
+    struct dirent *entry;
+    int status = -1;
+
+    /* sce_sys: PC5's pictures and music linked, its param.json and icon0.png the tile's. */
+    if (pc5_format(from, sizeof(from), "%s/sce_sys", make->pc5) || pc5_format(to, sizeof(to), "%s/sce_sys", stage) ||
+        pc5_mkdirs(to) || !(dir = opendir(from))) {
+        snprintf(error, size, "PC5's folder has no sce_sys.");
+        return -1;
+    }
+    while ((entry = readdir(dir))) {
+        char source[PC5_PATH], target[PC5_PATH];
+        if (entry->d_name[0] == '.' || !strcmp(entry->d_name, "param.json") || !strcmp(entry->d_name, "icon0.png") ||
+            pc5_join(source, sizeof(source), from, entry->d_name) || !pc5_is_file(source) ||
+            pc5_join(target, sizeof(target), to, entry->d_name))
+            continue;
+        (void)link(source, target);   /* pictures only: the tile goes without one it can't link */
+    }
+    closedir(dir);
+    if (pc5_format(from, sizeof(from), "%s/sce_sys/param.json", make->pc5) || pc5_read_file(from, &data, 256 * 1024) ||
+        pc5_tile_param((const char *)data.data, data.len, title_id, make->name && make->name[0] ? make->name : make->id,
+                       &text) ||
+        pc5_format(to, sizeof(to), "%s/sce_sys/param.json", stage) || pc5_write_file(to, text.data, text.len)) {
+        snprintf(error, size, "PC5 can't write the tile's param.json from its own.");
+        goto done;
+    }
+    pc5_buf_free(&data);
+    pc5_buf_free(&text);
+    if (pc5_home_picture(make->library_root, make->prefix ? make->prefix : make->id, &data) ||
+        pc5_format(to, sizeof(to), "%s/sce_sys/icon0.png", stage) || pc5_write_file(to, data.data, data.len)) {
+        snprintf(error, size, "PC5 can't make the tile's picture.");
+        goto done;
+    }
+    pc5_buf_free(&data);
+    /* lapy.elf: a copy of its own, not a link, as it is changed. */
+    if (pc5_format(from, sizeof(from), "%s/lapy.elf", make->pc5) || pc5_read_file(from, &data, 16u << 20)) {
+        snprintf(error, size, "PC5's folder has no lapy.elf.");
+        goto done;
+    }
+    if (pc5_tile_lapy_patch(data.data, data.len, title_id, error, size)) goto done;
+    if (pc5_format(to, sizeof(to), "%s/lapy.elf", stage) || pc5_write_file(to, data.data, data.len) || chmod(to, 0755)) {
+        snprintf(error, size, "PC5 can't write the tile's lapy.elf.");
+        goto done;
+    }
+    snprintf(json, sizeof(json), "{\n  \"format\": \"" PC5_TILE_FORMAT "\",\n  \"game\": \"%s\",\n  \"pc5\": \"" PC5_VERSION
+                                 "\"\n}\n", make->id);
+    if (pc5_format(to, sizeof(to), "%s/" PC5_TILE_FILE, stage) || pc5_write_file(to, json, strlen(json))) {
+        snprintf(error, size, "PC5 can't write the tile's " PC5_TILE_FILE ".");
+        goto done;
+    }
+    status = 0;
+done:
+    pc5_buf_free(&data);
+    pc5_buf_free(&text);
+    return status;
+}
+
+int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t size)
+{
+    static Linking l;
+    char stage[PC5_PATH], final[PC5_PATH];
+
+    out[0] = 0;
+    error[0] = 0;
+    if (!make->tiles || !make->pc5 || !make->library_root || !make->id || !valid_id(make->id)) {
+        snprintf(error, size, "PC5 doesn't know where to make the tile.");
+        return PC5_TILE_FAILED;
+    }
+    if (!pc5_home_find(make->tiles, make->id, out) && (pc5_mkdirs(make->tiles) || !psfwd_new_title_id(make->tiles, out))) {
+        snprintf(error, size, "PC5 can't use %s: %s.", make->tiles, strerror(errno));
+        out[0] = 0;
+        return PC5_TILE_FAILED;
+    }
+    if (pc5_format(stage, sizeof(stage), "%s/.staging-%s", make->tiles, out) ||
+        pc5_format(final, sizeof(final), "%s/%s", make->tiles, out)) {
+        snprintf(error, size, "The tiles' folder path is too long.");
+        out[0] = 0;
+        return PC5_TILE_FAILED;
+    }
+    delete_tree(stage);
+    memset(&l, 0, sizeof(l));
+    pc5_copy(l.from, sizeof(l.from), make->pc5);
+    pc5_copy(l.to, sizeof(l.to), stage);
+    if (link_tree(&l, "") || own_files(make, stage, out, error, size)) {
+        int no_links = l.no_links;
+        if (!error[0]) pc5_copy(error, size, l.error);
+        delete_tree(stage);
+        out[0] = 0;
+        return no_links ? PC5_TILE_NO_LINKS : PC5_TILE_FAILED;
+    }
+    /* The old tile goes only once the new one is whole; its files are names of PC5's, so
+     * deleting them deletes nothing of PC5. */
+    delete_tree(final);
+    if (rename(stage, final)) {
+        snprintf(error, size, "PC5 can't put the tile in place: %s.", strerror(errno));
+        delete_tree(stage);
+        out[0] = 0;
+        return PC5_TILE_FAILED;
+    }
+    return PC5_TILE_MADE;
+}
+
+/* ---- readying a tile's game ------------------------------------------------------- */
 
 void pc5_tile_prepare_begin(Pc5TilePrep *prep, const char *root, const char *app, const char *id)
 {

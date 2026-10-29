@@ -2,6 +2,7 @@
 /* PC5: a game's tile on the PS5's home screen (pc5_home.h). */
 #include "pc5_home.h"
 #include "pc5_image.h"
+#include "pc5_tile.h"
 #include "third_party/psfwd/psfwd.h"
 
 #include <dirent.h>
@@ -11,9 +12,12 @@
 
 #define TILE_TINT 0xff2a3442u   /* the screens' own background, for a game without a cover */
 
-/* 1 when the forwarder in dir starts PC5 with id (its "--rom" argument). */
+/* 1 when dir is id's tile: an app of its own for it (pc5-tile.json, pc5_tile.h), or a
+ * forwarder that starts PC5 with id (its "--rom" argument). */
 static int tile_of(const char *dir, const char *id, psfwd_info *info)
 {
+    char game[PC5_ID], error[PC5_ERROR];
+    if (pc5_tile_read(dir, game, error, sizeof(error)) == 1) return !strcmp(game, id);
     if (!psfwd_read(dir, info) || strcmp(info->target, PC5_TITLE_ID)) return 0;
     for (int i = 0; i + 1 < info->argc; i++)
         if (!strcmp(info->argv[i], "--rom") && !strcmp(info->argv[i + 1], id)) return 1;
@@ -105,13 +109,29 @@ int pc5_home_icon(const Pc5Image *cover, uint32_t tint, Pc5Image *icon)
     return 0;
 }
 
+int pc5_home_picture(const char *library_root, const char *prefix, Pc5Buf *png)
+{
+    char path[PC5_PATH];
+    Pc5Image cover = { 0 }, icon = { 0 };
+    uint32_t tint = TILE_TINT;
+    int status;
+
+    *png = (Pc5Buf){ 0 };
+    if (pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/cover.bin", library_root, prefix) ||
+        pc5_cover_load(path, &cover, &tint))
+        cover = (Pc5Image){ 0 };
+    status = pc5_home_icon(cover.px ? &cover : NULL, tint & 0xffffffu, &icon) || pc5_image_png(&icon, png) ? -1 : 0;
+    if (status) pc5_buf_free(png);
+    pc5_image_free(&cover);
+    pc5_image_free(&icon);
+    return status;
+}
+
 int pc5_home_add(const char *root, const char *template_dir, const char *library_root, const char *id,
                  const char *prefix, const char *name, char out[PC5_HOME_ID], char *error, size_t size)
 {
     char path[PC5_PATH];
-    Pc5Image cover = { 0 }, icon = { 0 };
     Pc5Buf png = { 0 };
-    uint32_t tint = TILE_TINT;
     int status = -1;
 
     out[0] = 0;
@@ -124,10 +144,7 @@ int pc5_home_add(const char *root, const char *template_dir, const char *library
         pc5_format(error, size, "PC5 can't use %s: %s.", root, strerror(errno));
         return -1;
     }
-    if (pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/cover.bin", library_root, prefix) ||
-        pc5_cover_load(path, &cover, &tint))
-        cover = (Pc5Image){ 0 };
-    if (pc5_home_icon(cover.px ? &cover : NULL, tint & 0xffffffu, &icon) || pc5_image_png(&icon, &png)) {
+    if (pc5_home_picture(library_root, prefix, &png)) {
         pc5_format(error, size, "PC5 ran out of memory making the tile's picture.");
         goto done;
     }
@@ -150,8 +167,6 @@ int pc5_home_add(const char *root, const char *template_dir, const char *library
     status = 0;
 done:
     if (status) out[0] = 0;
-    pc5_image_free(&cover);
-    pc5_image_free(&icon);
     pc5_buf_free(&png);
     return status;
 }

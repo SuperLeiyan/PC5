@@ -158,8 +158,8 @@ elfldr (`pw_lapy_elevation.c`); the SHA-256 pin is checked only at build time
 | 1 | The eboot reads its app ID at runtime from its own `param.json`. The sandbox path, the restart through the sandbox eboot and the log identity use it. (The Lapy helper finds the ID from the kernel itself, so the request needs no change.) **Done:** patch `0054`, host test `test_pw_title_id` | `native/wine64_main.c`, `native/pw_title_id.h` (header only, so `build_native.sh` is unchanged), `tests/test_pw_title_id.c`, as `patches/prospero-win/0054-…`; `tests/test.sh` runs the test | New patch |
 | 2 | Tile mode: read `pc5-tile.json`, go to game mode, prepare behind the loading screen, run Wine in the same process. **Done:** patch `0055` (`pc5_tile_mode` in `wine64_main.c`). It runs only on the tile's own start: no arguments, cycle 0 | `native/wine64_main.c`, as `patches/prospero-win/0055-…` | New patch |
 | 3 | `pc5_tile_read` and `pc5_tile_prepare_begin/step/end`: recover an interrupted remove, find the game, copy Mono, refresh the profile, remember it as last played, step by step. **Done:** `title/pc5_tile.c` and `test_tile` in `tests/test_pc5.c`. `S_LAUNCH` keeps its own copy of these steps for now, because it also shows dialogs between them; moving it onto `pc5_tile_prepare_step` is a later tidy-up | `title/pc5_tile.c`, `title/pc5_tile.h`, `tests/test_pc5.c`, `tests/test.sh` | New |
-| 4 | Making, finding and removing tiles: copy the runtime, patch Lapy, write `sce_sys` and `pc5-tile.json`, stage and rename. `tile_of` recognises both kinds | `title/pc5_home.c`, `title/pc5_home.h`, `title/pc5_ui.c` (progress screen) | Changed |
-| 5 | Lapy places at build time | `tools/lapy-title.py`, `tools/build.sh`, `tools/make-app.py` (requires `pc5/lapy-title.txt`) | New |
+| 4 | Making, finding and removing tiles. **Done:** `pc5_tile_make` makes the tile from **hard links** to the files of PC5's installed folder (found as the updater finds it), so a tile takes next to no room. Its own files are `sce_sys/param.json` and `icon0.png` (the game's name and picture), `lapy.elf` (a patched copy) and `pc5-tile.json`. It is staged as `.staging-<ID>` and renamed into place. When the drive can't link, for example PC5 on USB, PC5 makes a forwarder tile as before. `tile_of` recognises both kinds, and removing a tile deletes only its names | `title/pc5_tile.c`, `title/pc5_home.c`, `title/pc5_ui.c`, `test_tile_make` | Changed |
+| 5 | The Lapy patch. **Done, differently from planned:** PC5 finds the ID's five places in `lapy.elf` itself on the console (`pc5_tile_lapy_patch`, refusing anything else), and `tools/lapy-title.py` runs in `tools/build.sh` so a Lapy built differently fails the build. No offsets file is needed. The C code gives the same file as the one that passed test 1 (SHA-256 `42b949aa…`) | `title/pc5_tile.c`, `tools/lapy-title.py`, `tools/build.sh` | New |
 | 6 | Refresh tiles after a PC5 update | `title/pc5_tile.c`, called beside `pc5_upgrade_tidy` | New |
 | 7 | Tests: tile layout, Lapy patching (good file, wrong file, wrong bytes), finding both kinds of tile, refresh on version change, `pc5_tile_prepare` | `tests/test_pc5.c`, `tests/test.sh` (the `lapy-title.py` check) | New |
 | 8 | Console checklist and wiki | `tests/PS5-CHECKLIST.md`, `wiki/Home-screen-tiles.md`, `wiki/Files-and-folders.md`, `wiki/Troubleshooting.md` | Changed |
@@ -258,6 +258,21 @@ Expected:
   - `args … mode=game profile=<id> … exit_after=1`
   - `exit to the home screen: started from a tile`
 - **Step 4:** the log has `PC5 tile game=<id> can't start: It isn't in PC5 any more…`. PC5's screens open with "This tile's game can't start".
+
+### Test 4: a tile made by PC5 (to do)
+
+This needs a build with patches `0054` and `0055` and work items 4 and 5. **PC5 itself must be
+that build:** install it as `/data/homebrew/PPSA11018` on internal storage. Delete the
+hand-made `PPSA99437` tile first.
+
+1. In PC5, open a game's menu (△) › Appearance › Home screen tile.
+2. Expect "Added to the home screen", naming a tile ID. The log has `PC5 home tile app id=<game> from=/data/homebrew/PPSA11018 made=0 tile=PPSA99xxx`.
+3. Optionally check the links with shsrv: `stat /data/homebrew/PPSA99xxx/win/wine/lib/wine/x86_64-unix/ntdll.prx` should say `nlink: 2`.
+4. Close PC5 and wait for ShadowMountPlus to add the tile. Start it: the game starts straight away, as in test 3.
+5. In PC5, turn the tile off again. The tile's folder is deleted, and PC5 still starts and runs games.
+
+If step 2 instead logs `made=1`, the drive couldn't link. PC5 then makes a forwarder tile, as
+before, and the log says why.
 
 ## Costs and limits
 

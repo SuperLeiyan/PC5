@@ -4,6 +4,7 @@
 #include "pc5_backgrounds.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
+#include "pc5_tile.h"
 #include "pc5_image.h"
 #include "pc5_library.h"
 #include "pc5_logs.h"
@@ -2081,6 +2082,35 @@ static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
         message(ui, 1, "Taken off the home screen",
                 "The tile's folder is deleted. If the tile is still on the home screen, delete it there.", S_GAME_MENU);
         return;
+    }
+    /* An app of its own (pc5_tile.h), its files PC5's own linked, when PC5's folder is on
+     * the tiles' drive; otherwise a forwarder that starts PC5 with the game. */
+    {
+        Pc5UpgradeConfig find = { ui->platform.http, ui->app, ui->root, ui->config.drives, ui->config.user,
+                                  ui->platform.log, ui->platform.context };
+        char folder[PC5_PATH] = "", other[PC5_PATH] = "";
+        int found = ui->app[0] ? pc5_upgrade_find(&find, folder, sizeof(folder), other, sizeof(other)) : -1;
+        if (!found) {
+            Pc5TileMake make = { ui->config.tiles_root, folder, ui->root, game->id, game->prefix, game->title };
+            int made = pc5_tile_make(&make, ui->tile, error, sizeof(error));
+            say(ui, "PC5 home tile app id=%s from=%s made=%d tile=%s%s%s", game->id, folder, made, ui->tile,
+                error[0] ? " why=" : "", error);
+            if (made == PC5_TILE_MADE) {
+                snprintf(body, sizeof(body),
+                         "Its tile, %s, appears on the home screen once you close PC5 and ShadowMountPlus finds it in "
+                         "%s. It is the game's own app: it starts the game straight away, and leaving the game goes "
+                         "back to the home screen.", ui->tile, ui->config.tiles_root);
+                message(ui, 1, "Added to the home screen", body, S_GAME_MENU);
+                return;
+            }
+            if (made == PC5_TILE_FAILED) {
+                message(ui, 0, "The tile wasn't made", error, S_GAME_MENU);
+                return;
+            }
+            error[0] = 0;   /* no links on that drive: a forwarder instead */
+        } else {
+            say(ui, "PC5 home tile forwarder id=%s: PC5's folder %s", game->id, found == -2 ? "is there twice" : "not found");
+        }
     }
     if (pc5_home_add(ui->config.tiles_root, ui->config.tile_template, ui->root, game->id, game->prefix, game->title,
                      ui->tile, error, sizeof(error))) {
