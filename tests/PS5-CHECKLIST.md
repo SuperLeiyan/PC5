@@ -371,7 +371,7 @@ controller's speaker.
 
 | # | Do | Expect | Expect in the log |
 | --- | --- | --- | --- |
-| 177 | With a newer PC5 on GitHub, Check when PC5 opens on: open PC5 twice within an hour | each time: a notification "PC5 x.y.z is available", then the question | `PC5 update state=4 …`, `PC5 notification rc=0` |
+| 177 | With a newer PC5 on GitHub, Check when PC5 opens on: open PC5 twice within an hour | each time: the question, with no console notification | `PC5 update state=4 …`, no `PC5 notification` line |
 | 178 | The question from the version before | "You have …, the version before: PC5 downloads only what changed (… MB)"; Update now downloads that size only | `small=1`, `PC5 update using PPSA11018-update.zip` |
 | 179 | The question from two or more versions behind | "… more than one version behind: PC5 downloads the whole app (… MB)"; only the whole app is downloaded | `small=0`, `the whole app is downloaded`, `PC5 update using PPSA11018.zip` |
 | 180 | Update from the version before | step 3 of 3 is over in a moment | `flushed=… of … folders` (a handful), `registration copies=… unchanged=…` |

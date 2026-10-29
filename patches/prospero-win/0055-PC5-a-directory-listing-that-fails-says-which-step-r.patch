@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:00:00 +0000
+Subject: [PATCH 55/55] PC5: a directory listing that fails says which step
+ refused it (Wine patch 0938)
+
+A .NET game whose folder can't be listed reports only "invalid handle"
+(Heroes of Might and Magic: Olden Era's Story_maps, still after 0936,
+whose logging never ran). NtQueryDirectoryFile now logs an error naming
+the directory, the step (no descriptor from the server, not a directory,
+its names not read) and the status, so the game's log says where it
+fails. A listing that works logs nothing.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...ich-step-refuses-a-directory-listing.patch | 74 +++++++++++++++++++
+ 3 files changed, 76 insertions(+)
+ create mode 100644 wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 9144dda..a58b28d 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -583,6 +583,7 @@ wine/patches/0934-nsi-ps5-a-loopback-interface-without-nsiproxy.patch
+ wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+ wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+ wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
++wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index bfa37de..4b1b38b 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -141,6 +141,7 @@ before evaluating a candidate built from that cache.
+ | 0935 | `ntdll`: when the kernel doesn't apply a 0928 repair (the same fault again within a millisecond, in the same state), the faulting instruction, a plain MOV of a byte or a dword between a register and a `%fs:` operand, is done by the handler on the 32-bit TEB and the thread goes on after it; the thread's later faulting `%fs:` MOVs are done so at once, with the repair still written into each frame. falloutwHR.exe was repaired once in `GetStdHandle`, then faulted 64 times in a row in `RtlEnterCriticalSection` (`mov %fs:0x18,%eax`) and crashed. The first miss is logged with the frame's selector and base |
+ | 0936 | `ntdll`: a directory whose handle the server keeps no Unix name for (patch 0140 enters directories by that name) is entered by the Unix name of its NT name (`\??\C:\...`), as `NtCreateFile` resolves it; `NtQueryDirectoryFile` failed with `STATUS_INVALID_HANDLE` (`fchdir`'s `EBADF`), and .NET's `FileSystemEnumerator` threw "invalid handle" for a game's folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`), whose maps then never loaded. A directory still not entered is logged with which name failed and why |
+ | 0937 | `win32u`: memory a program asks `vkAllocateMemory` for as shareable (`VkExportMemoryAllocateInfo` with Win32 handle types) is an ordinary allocation when the host can't export memory: the PS5's RADV has no `VK_KHR_external_memory_fd`, so the export failed ("Unsupported handle type 0") and the allocation with it. DXVK making a shared texture for an Unreal Engine 5 game on Direct3D 12 (STRETCHER.MEN) got no memory, and the game crashed calling a null function; now it gets its memory, and a handle for it can't be had |
++| 0938 | `ntdll`: `NtQueryDirectoryFile` logs an error, with the directory's name when the server keeps one, the step and the status, when it fails before patch 0936's logging: the server gives no descriptor for the handle, it isn't a directory, or its names aren't read (the directory cache refuses the handle). A .NET game reported only "invalid handle" for its folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936). A listing that works, or only ends, logs nothing |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch b/wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
+new file mode 100644
+index 0000000..48ae19b
+--- /dev/null
++++ b/wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
+@@ -0,0 +1,74 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Thu, 29 Oct 2026 11:00:00 +0000
++Subject: [PATCH] ntdll: Log which step refuses a directory listing on PS5.
++
++NtQueryDirectoryFile can fail before patch 0936's logging is reached: the
++server gives no descriptor for the handle, the handle isn't a
++directory, or the directory's names aren't read (the directory cache
++refuses the handle). Each returned a status, often STATUS_INVALID_HANDLE,
++that a .NET game reports only as "invalid handle" for its folder (Heroes
++of Might and Magic: Olden Era, StreamingAssets\maps\Story_maps, still
++after 0936). Each of these now logs an error with the directory's name
++when the server keeps one, the step and the status. A listing that
++works, and one that only ends (no more files), logs nothing.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -2987,6 +2987,20 @@ static int enter_directory( HANDLE handle, int fd )
++ /******************************************************************************
++  *              NtQueryDirectoryFile   (NTDLL.@)
++  */
+++#ifdef __PROSPERO__
+++/* A directory a program lists that can't be: logged as an error, with its name when the server
+++ * keeps one, so a game's log says which step refused it (a .NET game's "invalid handle"). */
+++static void ps5_dir_failed( HANDLE handle, const char *why, unsigned int status )
+++{
+++    char *unix_name = NULL;
+++
+++    if (server_get_unix_name( handle, &unix_name ) && !(unix_name = unix_name_from_nt_name( handle ))) unix_name = NULL;
+++    ERR( "can't list directory %s (handle %p): %s (status %#x)\n", unix_name ? debugstr_a( unix_name ) : "?",
+++         handle, why, status );
+++    free( unix_name );
+++}
+++#endif
+++
++ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc_routine,
++                                       void *apc_context, IO_STATUS_BLOCK *io, void *buffer, ULONG length,
++                                       FILE_INFORMATION_CLASS info_class, BOOLEAN single_entry,
++@@ -3034,11 +3048,19 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
++     if (!buffer) return STATUS_ACCESS_VIOLATION;
++ 
++     if ((status = server_get_unix_fd( handle, FILE_LIST_DIRECTORY, &fd, &needs_close, &type, NULL )))
+++    {
+++#ifdef __PROSPERO__
+++        ps5_dir_failed( handle, "the server gives no descriptor for it", status );
+++#endif
++         return status;
+++    }
++ 
++     if (type != FD_TYPE_DIR)
++     {
++         if (needs_close) close( fd );
+++#ifdef __PROSPERO__
+++        ps5_dir_failed( handle, "it isn't a directory", STATUS_INVALID_PARAMETER );
+++#endif
++         return STATUS_INVALID_PARAMETER;
++     }
++ 
++@@ -3065,6 +3087,11 @@ NTSTATUS WINAPI NtQueryDirectoryFile( HANDLE handle, HANDLE event, PIO_APC_ROUTI
++             else if (status == STATUS_MORE_ENTRIES) status = STATUS_SUCCESS;
++         }
++         if (cwd == -1 || fchdir( cwd ) == -1) chdir( "/" );
+++#ifdef __PROSPERO__
+++        if (status && status != STATUS_NO_MORE_FILES && status != STATUS_NO_SUCH_FILE &&
+++            status != STATUS_BUFFER_OVERFLOW)
+++            ps5_dir_failed( handle, "its names weren't read", status );
+++#endif
++     }
++     else status = errno_to_status( errno );
++ 
++-- 
++2.43.0
++
+-- 
+2.43.0
+

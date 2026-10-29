@@ -5674,8 +5674,8 @@ static void test_upgrade_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);
     CHECK(console.restarts == 2, "and it restarts: %d", console.restarts);
     pc5_ui_destroy(ui);
-    /* Opened by the player, though it asked a moment ago: it asks again, tells with the
-     * console's notification, and the question says how much it downloads. */
+    /* Opened by the player, though it asked a moment ago: it asks again and shows its window,
+     * with no console notification saying the same. */
     {
         Pc5UpdateMemory memory;
         memset(&memory, 0, sizeof(memory));
@@ -5689,9 +5689,8 @@ static void test_upgrade_screens(const char *fonts)
     console.notifications = 0;
     ui = pc5_ui_create(&config, &platform);
     until_screen(ui, "upgrade-ask", &canvas);
-    CHECK(!strcmp(pc5_ui_screen(ui), "upgrade-ask") && console.notifications == 1 && strstr(console.told, "99.0.0") &&
-              strstr(console.told, PC5_VERSION),
-          "opened: asked again, and told: %s %d '%s'", pc5_ui_screen(ui), console.notifications, console.told);
+    CHECK(!strcmp(pc5_ui_screen(ui), "upgrade-ask") && console.notifications == 0,
+          "opened: asked again, the window only: %s %d '%s'", pc5_ui_screen(ui), console.notifications, console.told);
     pc5_ui_destroy(ui);
     /* Back after a game (not opened), within the hour: not asked again. */
     config.opened = 0;

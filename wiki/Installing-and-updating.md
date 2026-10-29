@@ -56,7 +56,7 @@ PC5 can ask GitHub whether a newer release is out. Open **Settings › System**.
 
 | Row | What it does |
 | --- | --- |
-| Check when PC5 opens | **On** (the default): PC5 asks GitHub each time you open it, and shows a notification and offers to update when a newer version is out (after a game, at most once an hour). **Off**: it only asks when you choose Check now. |
+| Check when PC5 opens | **On** (the default): PC5 asks GitHub each time you open it, and offers to update when a newer version is out (after a game, at most once an hour). **Off**: it only asks when you choose Check now. |
 | Check now | Asks GitHub straight away and shows the answer under the row. |
 | Update now | Shows while a newer release is out: downloads it and installs it (see [Updating PC5](#updating-pc5)). |
 

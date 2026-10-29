@@ -1933,7 +1933,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_CHECK_ON_OPEN:
         *label = "Check when PC5 opens";
-        pc5_copy(about, about_size, "Asks GitHub for a newer PC5 each time you open PC5, and tells you");
+        pc5_copy(about, about_size, "Asks GitHub for a newer PC5 each time you open PC5, and offers it");
         pc5_copy(value, value_size, set->check_updates ? "On" : "Off");
         break;
     case SR_CHECK_NOW:
@@ -2150,11 +2150,10 @@ static int system_row(const Pc5Ui *ui, SettingRow row)
     return 0;
 }
 
-/* Asks GitHub (blocking, one request) and tells with the console's notification: each time
- * the player opens PC5 while a newer one is out (opening), otherwise once per release, and
- * not when asked to be quiet (PC5 will offer to install it at once). 1 when the release has
- * PC5's zip. */
-static int update_check_now(Pc5Ui *ui, int quiet_if_offered, int opening)
+/* Asks GitHub (blocking, one request) and tells with the console's notification once per
+ * release, but not when asked to be quiet: PC5 offers to install it at once, its window says
+ * so (as each time the player opens PC5). 1 when the release has PC5's zip. */
+static int update_check_now(Pc5Ui *ui, int quiet_if_offered)
 {
     Pc5Update update;
     pc5_update_check(&ui->platform.http, PC5_VERSION, &update);
@@ -2164,12 +2163,7 @@ static int update_check_now(Pc5Ui *ui, int quiet_if_offered, int opening)
         update.asset_url[0] != 0, update.delta_url[0] != 0, update.delta_from[0] ? update.delta_from : "-",
         pc5_update_small(&update, PC5_VERSION));
     int offered = update.state == PC5_UPDATE_AVAILABLE && update.asset_url[0] && can_upgrade(ui);
-    if (update.state == PC5_UPDATE_AVAILABLE && opening) {
-        char text[200];
-        snprintf(text, sizeof(text), "PC5 %s is available (you have %s).", update.version, PC5_VERSION);
-        notify(ui, text);
-        pc5_copy(ui->update.told, sizeof(ui->update.told), update.version);
-    } else if (offered && quiet_if_offered) {
+    if (offered && quiet_if_offered) {
         pc5_copy(ui->update.told, sizeof(ui->update.told), update.version);
     } else if (update.state == PC5_UPDATE_AVAILABLE && strcmp(ui->update.told, update.version)) {
         char text[200];
@@ -2340,7 +2334,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_UPDATE:
         if (!ui->drawn) break;
-        if (update_check_now(ui, 1, ui->config.opened)) {
+        if (update_check_now(ui, 1)) {
             ui->button = 0;
             go(ui, S_UPGRADE_ASK);
         } else if (ui->cover_count) {
@@ -2497,7 +2491,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     }
     case S_CHECKING:
         if (!ui->drawn) break;
-        update_check_now(ui, 0, 0);
+        update_check_now(ui, 0);
         /* on Update now when there is one */
         settings_open(ui, PAGE_SYSTEM, system_row(ui, offer_update(ui) ? SR_UPDATE_NOW : SR_CHECK_NOW));
         break;
