@@ -125,6 +125,10 @@ for t in test_pw_pad_ps5 test_pw_players_ps5; do
     "$PW/build/host/$t"
 done
 echo "controller tests passed"
+# The title id read from the app's own param.json (patch 0054: a copy of the app under
+# another id, a home screen tile, finds its own sandbox).
+make -s -C "$PW" build/host/test_pw_title_id >/dev/null
+"$PW/build/host/test_pw_title_id"
 
 # The patched prospero-win still passes its own checks on the files the patch changes.
 (cd "$PW" && python3 tests/test_title_identity.py && python3 tests/test_native_contract.py &&
