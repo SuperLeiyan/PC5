@@ -3128,7 +3128,7 @@ static void test_background_screen(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0,
-                             NULL, NULL, NULL, NULL, NULL };
+                             NULL, NULL, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
@@ -4303,6 +4303,33 @@ static size_t fake_lapy(uint8_t *out, size_t size)
     return n;
 }
 
+/* The linking helper, as elfldr would run it, in this process: its request checked as the
+ * helper checks it, then PC5's folder linked. */
+static int fake_link_calls;
+static int fake_link(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply)
+{
+    struct stat st;
+    (void)context;
+    fake_link_calls++;
+    memset(reply, 0, sizeof(*reply));
+    reply->magic = PC5_LINKER_MAGIC;
+    reply->version = PC5_LINKER_VERSION;
+    reply->size = sizeof(*reply);
+    if (!pc5_linker_request_ok(request) || stat(request->from, &st) || !lstat(request->to, &st)) {
+        reply->status = PC5_LINKER_REFUSED;
+        return 0;
+    }
+    pc5_link_tree(request->from, request->to, reply);
+    return 0;
+}
+
+/* No helper to ask: elfldr not running. */
+static int no_link(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply)
+{
+    (void)context, (void)request, (void)reply;
+    return -1;
+}
+
 /* Making a game's tile as an app of its own: PC5's folder linked, its own sce_sys,
  * lapy.elf and pc5-tile.json; made again in place; taken away leaving PC5 whole. */
 static void test_tile_make(void)
@@ -4386,7 +4413,39 @@ static void test_tile_make(void)
     pc5_mkdirs(file);
     pc5_buf_free(&text);
 
-    Pc5TileMake make = { tiles, pc5, root, "neon", "neon", "Neon Drift" };
+    /* The helper's requests: only a tile's staging folder, whole absolute paths. */
+    {
+        Pc5LinkerRequest request = { PC5_LINKER_MAGIC, PC5_LINKER_VERSION, sizeof(request), "", "" };
+        snprintf(request.from, sizeof(request.from), "/data/homebrew/PPSA11018");
+        snprintf(request.to, sizeof(request.to), "/data/homebrew/.staging-PPSA99437");
+        CHECK(pc5_linker_request_ok(&request), "a tile's request");
+        snprintf(request.to, sizeof(request.to), "/data/homebrew/PPSA99437");
+        CHECK(!pc5_linker_request_ok(&request), "not into a tile itself");
+        snprintf(request.to, sizeof(request.to), "/data/homebrew/.staging-PPSA9943x");
+        CHECK(!pc5_linker_request_ok(&request), "not another name");
+        snprintf(request.to, sizeof(request.to), "/data/homebrew/../.staging-PPSA99437");
+        CHECK(!pc5_linker_request_ok(&request), "no .. in it");
+        snprintf(request.to, sizeof(request.to), "data/.staging-PPSA99437");
+        CHECK(!pc5_linker_request_ok(&request), "absolute only");
+        snprintf(request.to, sizeof(request.to), "/data/homebrew/.staging-PPSA99437");
+        request.version = 2;
+        CHECK(!pc5_linker_request_ok(&request), "this version only");
+        CHECK(pc5_linker_skips("lapy.elf") && pc5_linker_skips("sce_sys/param.json") && pc5_linker_skips("pc5/forwarder") &&
+              pc5_linker_skips("pc5/forwarder/eboot.bin") && !pc5_linker_skips("sce_sys/pic0.dds") &&
+              !pc5_linker_skips("eboot.bin") && !pc5_linker_skips("pc5/forwarders"), "what a tile has of its own");
+    }
+
+    /* No helper, or no elfldr: nothing made, a forwarder instead. */
+    {
+        Pc5TileMake none = { tiles, pc5, root, "neon", "neon", "Neon Drift", NULL, NULL };
+        CHECK(pc5_tile_make(&none, id, error, sizeof(error)) == PC5_TILE_NO_LINKS && !id[0], "no helper: %s", error);
+        none.link = no_link;
+        CHECK(pc5_tile_make(&none, id, error, sizeof(error)) == PC5_TILE_NO_LINKS && !id[0] && strstr(error, "elfldr"),
+              "no elfldr: %s", error);
+        CHECK(!pc5_home_find(tiles, "neon", again), "and no tile");
+    }
+
+    Pc5TileMake make = { tiles, pc5, root, "neon", "neon", "Neon Drift", fake_link, NULL };
     CHECK(pc5_tile_make(&make, id, error, sizeof(error)) == PC5_TILE_MADE && strlen(id) == 9 && !strncmp(id, "PPSA99", 6),
           "made: %s %s", id, error);
     path(file, sizeof(file), "%s/%s/win/wine/lib/wine/x86_64-unix/ntdll.prx", tiles, id);
@@ -4437,10 +4496,12 @@ static void test_tile_make(void)
     path(file, sizeof(file), "%s/lapy.elf", pc5);
     path(other, sizeof(other), "%s/lapy.elf.kept", pc5);
     rename(file, other);
-    Pc5TileMake second = { tiles, pc5, root, "plain", "plain", "Plain" };
+    Pc5TileMake second = { tiles, pc5, root, "plain", "plain", "Plain", fake_link, NULL };
     CHECK(pc5_tile_make(&second, again, error, sizeof(error)) == PC5_TILE_FAILED && !again[0] && strstr(error, "lapy.elf"),
           "no helper: %s", error);
     CHECK(!pc5_home_find(tiles, "plain", again), "no tile for it");
+    CHECK(count_entries(tiles, ".staging-") == 0, "nothing staged left after it");
+    path(file, sizeof(file), "%s/lapy.elf", pc5);
     rename(other, file);
 
     /* Taken away: the tile's names go, PC5's files stay. */
@@ -4956,7 +5017,7 @@ static void test_tile_start(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
-                             NULL, NULL, NULL };
+                             NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
@@ -5138,7 +5199,7 @@ static void test_screens(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
-                             fake_sound, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
+                             fake_sound, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text, NULL };
     {
         /* The sounds to choose from: the app's, and one of the player's. */
         char from[PC5_PATH], to[PC5_PATH];
@@ -5750,7 +5811,7 @@ static void test_report(const char *fonts)
     FakeConsole console = { 0 };
     FakeNet net = { 0 };
     Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify, fake_time, 0, NULL, NULL,
-                             NULL, NULL, NULL };
+                             NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
     Pc5Library library;
@@ -5813,7 +5874,7 @@ static void test_upgrade_screens(const char *fonts)
     FakeConsole console = { 0 };
     static FakeNet net;
     Pc5Platform platform = { &console, { &net, fake_get, fake_download, fake_get_authorized }, fake_clock, fake_play, NULL, fake_notify,
-                             fake_time, 0, fake_restart, NULL, NULL, NULL, NULL };
+                             fake_time, 0, fake_restart, NULL, NULL, NULL, NULL, NULL };
     const char *roots[] = { usb, NULL };
     char app[PC5_PATH], drive[PC5_PATH], folder[PC5_PATH], file[PC5_PATH], zip[PC5_PATH], digest[65];
     static char json[2048];

@@ -170,7 +170,7 @@ def main() -> int:
                    "pc5/prefix/drive_c/windows/system32/d3d11.dll",
                    "win/wine/lib/wine/x86_64-unix/ntdll.prx", "win/wine/lib/wine/x86_64-unix/libvulkan.prx",
                    "win/mesa-zink/x86_64-windows/opengl32.dll", "win/mesa-zink/i386-windows/opengl32.dll",
-                   "pc5/forwarder/eboot.bin", "pc5/forwarder/sce_module/libc.prx",
+                   "pc5/forwarder/eboot.bin", "pc5/forwarder/sce_module/libc.prx", "pc5/linker.elf",
                    "LICENSES/ps5-forwarder-format/LICENSE", "LICENSES/qrcodegen/LICENSE", "pc5/dxvk.txt", "LICENSES/dxvk/LICENSE",
                    "pc5/mono.list", "pc5/mono-version.txt", "pc5/prefix-dotnet.reg",
                    "pc5/mono/mono-2.0/bin/libmono-2.0-x86_64.dll", "pc5/mono/mono-2.0/bin/libmono-2.0-x86.dll",

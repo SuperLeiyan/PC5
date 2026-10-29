@@ -179,64 +179,7 @@ done:
     return status;
 }
 
-/* ---- the tile's folder from PC5's, linked ---------------------------------------- */
-
-typedef struct Linking {
-    char from[PC5_PATH], to[PC5_PATH];
-    uint32_t linked;
-    int no_links;                /* the drive can't link (another drive, or none on it) */
-    char error[PC5_ERROR];
-} Linking;
-
-/* What of PC5's folder a tile has as its own instead (rel: the path inside it). */
-static int own(const char *rel)
-{
-    return !strcmp(rel, "sce_sys") || !strcmp(rel, "lapy.elf") || !strcmp(rel, PC5_TILE_FILE) ||
-           !strcmp(rel, "pc5/forwarder");
-}
-
-/* from/rel linked into to/rel, folders made. */
-static int link_tree(Linking *l, const char *rel)
-{
-    char from[PC5_PATH], to[PC5_PATH];
-    DIR *dir;
-    struct dirent *entry;
-    struct stat st;
-    int status = 0;
-
-    if (pc5_format(from, sizeof(from), "%s%s%s", l->from, rel[0] ? "/" : "", rel) ||
-        pc5_format(to, sizeof(to), "%s%s%s", l->to, rel[0] ? "/" : "", rel) || !(dir = opendir(from))) {
-        snprintf(l->error, sizeof(l->error), "PC5 can't read its folder, %.200s.", from);
-        return -1;
-    }
-    if (pc5_mkdirs(to)) {
-        snprintf(l->error, sizeof(l->error), "PC5 can't make %.200s: %s.", to, strerror(errno));
-        closedir(dir);
-        return -1;
-    }
-    while (!status && (entry = readdir(dir))) {
-        char inside[PC5_PATH], source[PC5_PATH], target[PC5_PATH];
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-        if (pc5_format(inside, sizeof(inside), "%s%s%s", rel, rel[0] ? "/" : "", entry->d_name) || own(inside) ||
-            pc5_join(source, sizeof(source), from, entry->d_name) || pc5_join(target, sizeof(target), to, entry->d_name))
-            continue;
-        if (lstat(source, &st)) continue;
-        if (S_ISDIR(st.st_mode)) {
-            status = link_tree(l, inside);
-        } else if (S_ISREG(st.st_mode)) {
-            if (!link(source, target)) {
-                l->linked++;
-            } else {
-                /* Another drive, or a file system without links (exFAT): none at all. */
-                l->no_links = errno == EXDEV || errno == EPERM || errno == EOPNOTSUPP || errno == EMLINK;
-                snprintf(l->error, sizeof(l->error), "PC5 can't link %.200s into the tile: %s.", inside, strerror(errno));
-                status = -1;
-            }
-        }
-    }
-    closedir(dir);
-    return status;
-}
+/* ---- the tile's folder from PC5's, linked by the helper ------------------------- */
 
 static void delete_tree(const char *path)
 {
@@ -252,25 +195,14 @@ static int own_files(const Pc5TileMake *make, const char *stage, const char *tit
 {
     char from[PC5_PATH], to[PC5_PATH], json[512];
     Pc5Buf data = { 0 }, text = { 0 };
-    DIR *dir;
-    struct dirent *entry;
     int status = -1;
 
-    /* sce_sys: PC5's pictures and music linked, its param.json and icon0.png the tile's. */
-    if (pc5_format(from, sizeof(from), "%s/sce_sys", make->pc5) || pc5_format(to, sizeof(to), "%s/sce_sys", stage) ||
-        pc5_mkdirs(to) || !(dir = opendir(from))) {
-        snprintf(error, size, "PC5's folder has no sce_sys.");
+    /* sce_sys: the helper linked PC5's pictures and music; its param.json and icon0.png are
+     * the tile's own. */
+    if (pc5_format(to, sizeof(to), "%s/sce_sys", stage) || pc5_mkdirs(to)) {
+        snprintf(error, size, "PC5 can't make the tile's sce_sys.");
         return -1;
     }
-    while ((entry = readdir(dir))) {
-        char source[PC5_PATH], target[PC5_PATH];
-        if (entry->d_name[0] == '.' || !strcmp(entry->d_name, "param.json") || !strcmp(entry->d_name, "icon0.png") ||
-            pc5_join(source, sizeof(source), from, entry->d_name) || !pc5_is_file(source) ||
-            pc5_join(target, sizeof(target), to, entry->d_name))
-            continue;
-        (void)link(source, target);   /* pictures only: the tile goes without one it can't link */
-    }
-    closedir(dir);
     if (pc5_format(from, sizeof(from), "%s/sce_sys/param.json", make->pc5) || pc5_read_file(from, &data, 256 * 1024) ||
         pc5_tile_param((const char *)data.data, data.len, title_id, make->name && make->name[0] ? make->name : make->id,
                        &text) ||
@@ -311,7 +243,8 @@ done:
 
 int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t size)
 {
-    static Linking l;
+    static Pc5LinkerRequest request;
+    static Pc5LinkerReply reply;
     char stage[PC5_PATH], final[PC5_PATH];
 
     out[0] = 0;
@@ -319,6 +252,10 @@ int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t siz
     if (!make->tiles || !make->pc5 || !make->library_root || !make->id || !valid_id(make->id)) {
         snprintf(error, size, "PC5 doesn't know where to make the tile.");
         return PC5_TILE_FAILED;
+    }
+    if (!make->link) {
+        snprintf(error, size, "This PC5 has no linking helper.");
+        return PC5_TILE_NO_LINKS;
     }
     if (!pc5_home_find(make->tiles, make->id, out) && (pc5_mkdirs(make->tiles) || !psfwd_new_title_id(make->tiles, out))) {
         snprintf(error, size, "PC5 can't use %s: %s.", make->tiles, strerror(errno));
@@ -332,15 +269,39 @@ int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t siz
         return PC5_TILE_FAILED;
     }
     delete_tree(stage);
-    memset(&l, 0, sizeof(l));
-    pc5_copy(l.from, sizeof(l.from), make->pc5);
-    pc5_copy(l.to, sizeof(l.to), stage);
-    if (link_tree(&l, "") || own_files(make, stage, out, error, size)) {
-        int no_links = l.no_links;
-        if (!error[0]) pc5_copy(error, size, l.error);
+    /* PC5's files linked into the staging folder by the helper, which a title can't do. */
+    memset(&request, 0, sizeof(request));
+    memset(&reply, 0, sizeof(reply));
+    request = (Pc5LinkerRequest){ PC5_LINKER_MAGIC, PC5_LINKER_VERSION, sizeof(request), "", "" };
+    pc5_copy(request.from, sizeof(request.from), make->pc5);
+    pc5_copy(request.to, sizeof(request.to), stage);
+    if (!pc5_linker_request_ok(&request)) {
+        snprintf(error, size, "PC5's folder path can't be linked from.");
+        out[0] = 0;
+        return PC5_TILE_FAILED;
+    }
+    if (make->link(make->context, &request, &reply) || reply.magic != PC5_LINKER_MAGIC ||
+        reply.version != PC5_LINKER_VERSION || reply.size != sizeof(reply)) {
+        snprintf(error, size, "PC5's linking helper didn't answer (is elfldr running?).");
         delete_tree(stage);
         out[0] = 0;
-        return no_links ? PC5_TILE_NO_LINKS : PC5_TILE_FAILED;
+        return PC5_TILE_NO_LINKS;
+    }
+    reply.where[sizeof(reply.where) - 1] = 0;
+    if (reply.status != PC5_LINKER_LINKED) {
+        snprintf(error, size, "%s at %.120s: %s.",
+                 reply.status == PC5_LINKER_NO_LINKS ? "The drive can't link PC5's files" :
+                 reply.status == PC5_LINKER_REFUSED ? "PC5's linking helper refused the request" :
+                                                      "PC5's linking helper stopped",
+                 reply.where[0] ? reply.where : "-", strerror(reply.error));
+        delete_tree(stage);
+        out[0] = 0;
+        return reply.status == PC5_LINKER_NO_LINKS ? PC5_TILE_NO_LINKS : PC5_TILE_FAILED;
+    }
+    if (own_files(make, stage, out, error, size)) {
+        delete_tree(stage);
+        out[0] = 0;
+        return PC5_TILE_FAILED;
     }
     /* The old tile goes only once the new one is whole; its files are names of PC5's, so
      * deleting them deletes nothing of PC5. */

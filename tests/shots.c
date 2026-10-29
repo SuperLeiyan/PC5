@@ -178,7 +178,7 @@ static Pc5Ui *open_ui(const char *root, int network)
     fmt(file, sizeof(file), "%s/eboot.bin", tile_template);
     pc5_write_file(file, "eboot", 5);
     platform = (Pc5Platform){ NULL, { NULL, network ? sample_net : offline, NULL, NULL }, fake_clock, fake_play, NULL, NULL, NULL, 0, NULL,
-                              NULL, keyboard_open, keyboard_state, keyboard_close };
+                              NULL, keyboard_open, keyboard_state, keyboard_close, NULL };
     config = (Pc5UiConfig){ root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     until(ui, "library");
@@ -202,7 +202,7 @@ static void crash_shots(const char *root)
     char file[PC5_PATH], text[2048];
     Pc5Library library;
     Pc5Platform platform = { NULL, { NULL, offline, NULL, NULL }, fake_clock, fake_play, NULL, NULL, shot_time, 0, NULL, NULL,
-                             NULL, NULL, NULL };
+                             NULL, NULL, NULL, NULL };
 
     make_library(root, 3, 1);
     pc5_library_load(root, &library);

@@ -2091,7 +2091,8 @@ static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
         char folder[PC5_PATH] = "", other[PC5_PATH] = "";
         int found = ui->app[0] ? pc5_upgrade_find(&find, folder, sizeof(folder), other, sizeof(other)) : -1;
         if (!found) {
-            Pc5TileMake make = { ui->config.tiles_root, folder, ui->root, game->id, game->prefix, game->title };
+            Pc5TileMake make = { ui->config.tiles_root, folder, ui->root, game->id, game->prefix, game->title,
+                                 ui->platform.link, ui->platform.context };
             int made = pc5_tile_make(&make, ui->tile, error, sizeof(error));
             say(ui, "PC5 home tile app id=%s from=%s made=%d tile=%s%s%s", game->id, folder, made, ui->tile,
                 error[0] ? " why=" : "", error);

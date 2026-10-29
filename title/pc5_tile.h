@@ -17,6 +17,7 @@
 #include "pc5.h"
 #include "pc5_game.h"
 #include "pc5_library.h"
+#include "pc5_linker.h"
 
 #define PC5_TILE_FILE "pc5-tile.json"
 #define PC5_TILE_FORMAT "pc5-tile/1"
@@ -57,18 +58,22 @@ typedef struct Pc5TileMake {
     const char *pc5;             /* PC5's installed folder (pc5_upgrade_find), on the tiles' drive */
     const char *library_root;    /* /data/prospero-win */
     const char *id, *prefix, *name;   /* the game's */
+    /* The linking helper (pc5_linker.h; a title can't link), as the platform's link. */
+    int (*link)(void *context, const Pc5LinkerRequest *request, Pc5LinkerReply *reply);
+    void *context;
 } Pc5TileMake;
 
 enum { PC5_TILE_MADE = 0, PC5_TILE_FAILED = -1, PC5_TILE_NO_LINKS = 1 };
 
 /* Makes the game's tile under tiles: a folder named after its title ID (the
  * game's old tile's, or a new one) holding PC5's app as hard links to the files
- * of PC5's folder, so it takes next to no room, except its own sce_sys (the
- * game's name and picture), its lapy.elf (patched for its ID) and pc5-tile.json.
- * Made beside as .staging-<ID> and renamed into place. PC5_TILE_MADE with the
- * ID in out; PC5_TILE_NO_LINKS when the drive can't link PC5's files (PC5 on
- * another drive): nothing is left, a forwarder tile can be made instead;
- * PC5_TILE_FAILED with a reason in error. */
+ * of PC5's folder, made by the linking helper, so it takes next to no room; its
+ * own are its sce_sys param.json and icon0.png (the game's name and picture), its
+ * lapy.elf (patched for its ID) and pc5-tile.json. Made beside as .staging-<ID>
+ * and renamed into place. PC5_TILE_MADE with the ID in out; PC5_TILE_NO_LINKS when
+ * PC5's files can't be linked there (PC5 on another drive, no helper, no elfldr):
+ * nothing is left, and a forwarder tile can be made instead; PC5_TILE_FAILED with a
+ * reason in error. */
 int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t size);
 
 /* ---- readying a tile's game ------------------------------------------------------- */
