@@ -45,6 +45,25 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
         strncmp(update->url, "https://github.com/", 19))
         pc5_copy(update->url, sizeof(update->url), PC5_RELEASES_PAGE);
     update->state = pc5_version_compare(update->version, current) > 0 ? PC5_UPDATE_AVAILABLE : PC5_UPDATE_CURRENT;
+    {
+        /* The release the update zip holds the changes since, in a line of the notes GitHub
+         * doesn't show (from 1.9.8's releases): "<!-- pc5-update-from: 1.9.7 -->". */
+        static char notes[64 * 1024];
+        static const char mark[] = "<!-- pc5-update-from: ";
+        const char *at;
+        if (!pc5_json_text(&json, pc5_json_get(&json, 0, "body"), notes, sizeof(notes)) && (at = strstr(notes, mark))) {
+            char from[32];
+            size_t n = 0;
+            at += sizeof(mark) - 1;
+            if (*at == 'v' || *at == 'V') at++;
+            while (n + 1 < sizeof(from) && ((at[n] >= '0' && at[n] <= '9') || at[n] == '.')) {
+                from[n] = at[n];
+                n++;
+            }
+            from[n] = 0;
+            if (n && !strncmp(at + n, " -->", 4)) pc5_copy(update->delta_from, sizeof(update->delta_from), from);
+        }
+    }
     /* The app's zip and the update zip among the release's files. */
     uint32_t assets = pc5_json_get(&json, 0, "assets");
     for (uint32_t i = 0, asset; assets && (asset = pc5_json_item(&json, assets, i)); i++) {
@@ -61,8 +80,9 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
             to_url = update->delta_url;
             to_size = &update->delta_size;
             to_sha256 = update->delta_sha256;
-            /* Its label says which release it holds the changes since: "from 1.9.6". */
-            if (!pc5_json_text(&json, pc5_json_get(&json, asset, "label"), label, sizeof(label)) &&
+            /* Its label said which release it holds the changes since on 1.9.7's release ("from
+             * 1.9.6"); the notes say it from 1.9.8's on. */
+            if (!update->delta_from[0] && !pc5_json_text(&json, pc5_json_get(&json, asset, "label"), label, sizeof(label)) &&
                 !strncmp(label, "from ", 5)) {
                 const char *from = label + 5;
                 if (*from == 'v' || *from == 'V') from++;

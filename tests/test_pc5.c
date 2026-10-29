@@ -2124,13 +2124,15 @@ static void test_update(void)
 
 /* A release's JSON with its zip and, when update_size isn't 0, its update zip at update_url:
  * a digest "" leaves it out. */
-/* The update zip's label on GitHub: the release it holds the changes since (NULL: none). */
-static const char *update_label = "from " PC5_VERSION;
+/* The release the update zip holds the changes since, as the notes say it (from 1.9.8's
+ * releases), and as its label said it (1.9.7's release); NULL: neither says. */
+static const char *update_from = PC5_VERSION;
+static const char *update_label = NULL;
 
 static void release_json_with(char *out, size_t size, const char *tag, uint64_t zip_size, const char *digest,
                               uint64_t update_size, const char *update_digest, const char *update_url)
 {
-    char extra[120] = "", update[1024] = "", update_extra[200] = "";
+    char extra[120] = "", update[1024] = "", update_extra[200] = "", body[200] = "";
     if (digest && digest[0]) snprintf(extra, sizeof(extra), ",\"digest\":\"sha256:%s\"", digest);
     if (update_digest && update_digest[0])
         snprintf(update_extra, sizeof(update_extra), ",\"digest\":\"sha256:%s\"", update_digest);
@@ -2138,15 +2140,17 @@ static void release_json_with(char *out, size_t size, const char *tag, uint64_t 
         size_t n = strlen(update_extra);
         snprintf(update_extra + n, sizeof(update_extra) - n, ",\"label\":\"%s\"", update_label);
     }
+    if (update_size && update_from)
+        snprintf(body, sizeof(body), ",\"body\":\"Notes.\\n\\n<!-- pc5-update-from: %s -->\\n\"", update_from);
     if (update_size)
         snprintf(update, sizeof(update), ",{\"name\":\"PPSA11018-update.zip\",\"size\":%llu%s,\"browser_download_url\":\"%s\"}",
                  (unsigned long long)update_size, update_extra, update_url);
     snprintf(out, size,
-             "{\"tag_name\":\"%s\",\"name\":\"PC5\",\"html_url\":\"https://github.com/bornaradusin/PC5/releases/tag/%s\","
+             "{\"tag_name\":\"%s\",\"name\":\"PC5\",\"html_url\":\"https://github.com/bornaradusin/PC5/releases/tag/%s\"%s,"
              "\"assets\":[{\"name\":\"SHA256SUMS\",\"size\":10,\"browser_download_url\":\"https://github.com/x/y\"},"
              "{\"name\":\"PPSA11018.zip\",\"size\":%llu,\"uploader\":{\"login\":\"x\"}%s,"
              "\"browser_download_url\":\"" TEST_ZIP_URL "\"}%s]}",
-             tag, tag, (unsigned long long)zip_size, extra, update);
+             tag, tag, body, (unsigned long long)zip_size, extra, update);
 }
 
 /* A release's JSON with its zip: digest "" leaves it out. */
@@ -2329,20 +2333,26 @@ static void test_upgrade(void)
         release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
         pc5_update_check(&config.http, PC5_VERSION, &update);
         CHECK(!strcmp(update.delta_url, TEST_UPDATE_URL) && !update.delta_sha256[0], "one without a digest has none");
-        /* Its label names the release it holds the changes since: only for that one. */
+        /* The notes name the release it holds the changes since: only for that one. */
         CHECK(!strcmp(update.delta_from, PC5_VERSION) && pc5_update_small(&update, PC5_VERSION) &&
               !pc5_update_small(&update, "1.0.0"), "made from this PC5: %s", update.delta_from);
-        update_label = "from v1.0.0";
+        update_from = "v1.0.0";
         release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
         pc5_update_check(&config.http, PC5_VERSION, &update);
         CHECK(!strcmp(update.delta_from, "1.0.0") && !pc5_update_small(&update, PC5_VERSION) &&
               pc5_update_small(&update, "1.0.0"), "made from another: %s", update.delta_from);
-        update_label = "Only what changed";
+        /* 1.9.7's release said it with the update zip's label instead. */
+        update_from = NULL;
+        update_label = "from 1.0.0";
         release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
         pc5_update_check(&config.http, PC5_VERSION, &update);
-        CHECK(!update.delta_from[0] && !pc5_update_small(&update, PC5_VERSION), "a label that doesn't say: %s",
-              update.delta_from);
-        update_label = "from " PC5_VERSION;
+        CHECK(!strcmp(update.delta_from, "1.0.0"), "a label as 1.9.7's release has it: %s", update.delta_from);
+        update_label = "PPSA11018-update.zip";
+        release_json_with(other, sizeof(other), "v99.0.0", (uint64_t)st.st_size, digest, 1234, "", TEST_UPDATE_URL);
+        pc5_update_check(&config.http, PC5_VERSION, &update);
+        CHECK(!update.delta_from[0] && !pc5_update_small(&update, PC5_VERSION), "neither says: %s", update.delta_from);
+        update_label = NULL;
+        update_from = PC5_VERSION;
         net.release = json;
     }
 
@@ -2860,7 +2870,7 @@ static void test_upgrade_delta(void)
     /* More than one release behind (the update zip holds the changes since another): the
      * whole app at once, the update zip not downloaded. */
     make_installed(app, folder);
-    update_label = "from 1.0.0";
+    update_from = "1.0.0";
     release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest,
                       (uint64_t)small_st.st_size, small_digest, TEST_UPDATE_URL);
     net.zip_downloads = net.update_downloads = 0;
@@ -2871,7 +2881,7 @@ static void test_upgrade_delta(void)
               net.zip_downloads == 1 && net.update_downloads == 0 && strstr(delta_log, "the changes since 1.0.0"),
           "more than one release behind: the whole app only: %d %s (%d %d) %s", atomic_load(&upgrade.step), upgrade.error,
           net.update_downloads, net.zip_downloads, delta_log);
-    update_label = "from " PC5_VERSION;
+    update_from = PC5_VERSION;
     release_json_with(json, sizeof(json), "v99.0.0", (uint64_t)full_st.st_size, full_digest,
                       (uint64_t)small_st.st_size, small_digest, TEST_UPDATE_URL);
 

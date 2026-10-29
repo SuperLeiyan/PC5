@@ -36,8 +36,9 @@ typedef struct Pc5Update {
     char delta_url[512];
     uint64_t delta_size;
     char delta_sha256[65];
-    /* The release the update zip holds the changes since, from its label on GitHub ("from
-     * 1.9.6", from 1.9.7's releases on); "" when the label doesn't say. */
+    /* The release the update zip holds the changes since: from the release's notes, a line
+     * GitHub doesn't show ("<!-- pc5-update-from: 1.9.7 -->", from 1.9.8's releases), or the
+     * update zip's label ("from 1.9.6", 1.9.7's release); "" when neither says. */
     char delta_from[32];
 } Pc5Update;
 
