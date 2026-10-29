@@ -22,6 +22,7 @@
 #include "pc5_source.h"
 #include "pc5_ui.h"
 #include "pc5_sound.h"
+#include "pc5_tile.h"
 #include "pc5_update.h"
 #include "pc5_upgrade.h"
 #include "pc5_zip.h"
@@ -4132,6 +4133,147 @@ static void test_home(void)
           strstr(error, "pc5/forwarder") && !id[0], "no tile program: %s", error);
 }
 
+/* A PC5 game in root as an install leaves it, without its profile when profile is 0. */
+static void make_tile_game(const char *root, const char *id, const char *title, const char *program, int profile)
+{
+    Pc5Info info = { "", "", "", 64, PC5_API_D3D11, 5, 1, "" };
+    char file[PC5_PATH], from[PC5_PATH], text[2048], error[PC5_ERROR];
+
+    pc5_copy(info.title, sizeof(info.title), title);
+    pc5_copy(info.folder, sizeof(info.folder), title);
+    snprintf(info.exe, sizeof(info.exe), "%s.exe", id);
+    path(file, sizeof(file), "%s/profiles", root);
+    pc5_mkdirs(file);
+    path(file, sizeof(file), "%s/prefixes/%s/system.reg", root, id);
+    write_text(file, "WINE REGISTRY Version 2\n");
+    path(file, sizeof(file), "%s/prefixes/%s/user.reg", root, id);
+    write_text(file, "WINE REGISTRY Version 2\n");
+    pc5_info_text(&info, text, sizeof(text));
+    path(file, sizeof(file), "%s/prefixes/%s/pc5/info.txt", root, id);
+    write_text(file, text);
+    path(from, sizeof(from), "%s/%s", programs, program);
+    path(file, sizeof(file), "%s/prefixes/%s/drive_c/Games/%s/%s.exe", root, id, title, id);
+    copy_file(from, file);
+    if (profile) CHECK(!pc5_profile_refresh(root, id, error, sizeof(error)), "%s's profile: %s", id, error);
+}
+
+/* A tile's game readied without PC5's screens: its tile file read, what a stopped
+ * install left finished, the game found, .NET copied, its profile written again. */
+static void test_tile(void)
+{
+    char app[PC5_PATH], root[PC5_PATH], file[PC5_PATH], game[PC5_ID], error[PC5_ERROR];
+    Pc5TilePrep *prep = pc5_alloc(sizeof(*prep));
+    Pc5Buf text = { 0 };
+    int step, steps;
+
+    path(app, sizeof(app), "%s/tile-app", work);
+    path(root, sizeof(root), "%s/tile-root", work);
+    pc5_mkdirs(app);
+
+    /* The tile file. */
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == 0 && !game[0], "PC5 itself: not a tile");
+    path(file, sizeof(file), "%s/pc5-tile.json", app);
+    write_text(file, "{\n  \"format\": \"pc5-tile/1\",\n  \"game\": \"tilegame\",\n  \"pc5\": \"1.9.6\"\n}\n");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == 1 && !strcmp(game, "tilegame"), "a tile: %s", game);
+    write_text(file, "{\"format\": \"pc5-tile/2\", \"game\": \"tilegame\"}");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == -1 && !game[0] && strstr(error, "doesn't know"),
+          "another format: %s", error);
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": \"../tilegame\"}");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == -1 && !game[0], "not a profile id: %s", error);
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": \"TileGame\"}");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == -1, "upper case isn't an id");
+    write_text(file, "{\"format\": \"pc5-tile/1\", \"game\": 7}");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == -1, "a number isn't an id");
+    write_text(file, "{\"format\": \"pc5-tile/1\"}");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == -1 && strstr(error, "which game"), "no game: %s", error);
+    write_text(file, "not json");
+    CHECK(pc5_tile_read(app, game, error, sizeof(error)) == -1 && strstr(error, "can't be read"), "not JSON: %s", error);
+
+    /* A game whose install stopped before its profile was written, and a stopped install's
+     * staging folder: both finished before the game starts. */
+    make_tile_game(root, "tilegame", "Tile Game", "game64.exe", 0);
+    path(file, sizeof(file), "%s/prefixes/.installing-other/drive_c/big.pak", root);
+    write_text(file, "half a game");
+    pc5_tile_prepare_begin(prep, root, app, "tilegame");
+    for (steps = 0; !(step = pc5_tile_prepare_step(prep, 5)) && steps < 1000; steps++) {}
+    CHECK(step == 1, "readied: %d %s", step, prep->error);
+    CHECK(!strcmp(prep->title, "Tile Game") && prep->found && prep->pc5 && !prep->copying, "its name: %s", prep->title);
+    CHECK(pc5_tile_prepare_step(prep, 5) == 1, "ready stays ready");
+    pc5_tile_prepare_end(prep);
+    path(file, sizeof(file), "%s/profiles/tilegame.profile", root);
+    CHECK(!pc5_read_file(file, &text, 64 * 1024) && !pc5_buf_terminate(&text) &&
+          strstr((char *)text.data, "id = tilegame") && strstr((char *)text.data, "TileGame.exe") == NULL &&
+          strstr((char *)text.data, "tilegame.exe"), "its profile written: %s", text.len ? (char *)text.data : "");
+    pc5_buf_free(&text);
+    path(file, sizeof(file), "%s/prefixes/.installing-other", root);
+    CHECK(!pc5_exists(file), "the stopped install cleared");
+    path(file, sizeof(file), "%s/pc5/last.txt", root);
+    CHECK(!pc5_read_file(file, &text, 256) && text.len == 8 && !memcmp(text.data, "tilegame", 8), "the last game played");
+    pc5_buf_free(&text);
+
+    /* Its controls changed in PC5 since: the profile follows at the tile's next start. */
+    {
+        Pc5Controls controls;
+        pc5_controls_load(root, "tilegame", &controls);
+        controls.mode = PC5_PAD_KEYBOARD;
+        CHECK(!pc5_controls_save(root, "tilegame", &controls), "controls saved");
+        pc5_tile_prepare_begin(prep, root, app, "tilegame");
+        while (!(step = pc5_tile_prepare_step(prep, 5))) {}
+        pc5_tile_prepare_end(prep);
+        path(file, sizeof(file), "%s/profiles/tilegame.profile", root);
+        CHECK(step == 1 && !pc5_read_file(file, &text, 64 * 1024) && !pc5_buf_terminate(&text) &&
+              strstr((char *)text.data, "mode = keyboard"), "the new controller mode: %s",
+              text.len ? (char *)text.data : "");
+        pc5_buf_free(&text);
+    }
+
+    /* Its game uninstalled: the reason PC5's screens give. */
+    pc5_tile_prepare_begin(prep, root, app, "gone");
+    while (!(step = pc5_tile_prepare_step(prep, 5))) {}
+    CHECK(step == -1 && strstr(prep->error, "isn't in PC5 any more") && !strcmp(prep->title, "gone") && !prep->found,
+          "a game no longer there: %s", prep->error);
+    CHECK(pc5_tile_prepare_step(prep, 5) == -1, "and stays so");
+    pc5_tile_prepare_end(prep);
+    /* Its Windows folder gone. */
+    make_tile_game(root, "broken", "Broken", "game64.exe", 1);
+    path(file, sizeof(file), "%s/prefixes/broken/system.reg", root);
+    unlink(file);
+    pc5_tile_prepare_begin(prep, root, app, "broken");
+    while (!(step = pc5_tile_prepare_step(prep, 5))) {}
+    CHECK(step == -1 && strstr(prep->error, "Windows folder is missing") && !strcmp(prep->title, "Broken"),
+          "a game that can't start: %s", prep->error);
+    pc5_tile_prepare_end(prep);
+
+    /* A .NET game started the first time: Wine Mono's runtime copied from the tile's app. */
+    make_tile_game(root, "dotgame", "Dot Game", "dotnet.exe", 1);
+    path(file, sizeof(file), "%s/pc5/mono-version.txt", app);
+    write_text(file, "11.3.0\n");
+    path(file, sizeof(file), "%s/pc5/mono.list", app);
+    write_text(file, "mono-2.0/\nmono-2.0/bin/\nmono-2.0/bin/libmono-2.0-x86_64.dll\n");
+    path(file, sizeof(file), "%s/pc5/mono/mono-2.0/bin/libmono-2.0-x86_64.dll", app);
+    write_text(file, "libmono");
+    pc5_tile_prepare_begin(prep, root, app, "dotgame");
+    for (steps = 0; !(step = pc5_tile_prepare_step(prep, 1)) && steps < 1000; steps++) {}
+    pc5_tile_prepare_end(prep);
+    path(file, sizeof(file), "%s/pc5/mono-11.3.0/.complete", root);
+    CHECK(step == 1 && pc5_is_file(file), "its runtime copied: %d %s", step, prep->error);
+    /* The app's runtime incomplete: why, before Wine is started. */
+    path(file, sizeof(file), "%s/pc5/mono-11.3.0", root);
+    {
+        Pc5Remove remove = { 0 };
+        pc5_tree_delete_begin(&remove, file);
+        while (pc5_remove_step(&remove, 5)) {}
+        pc5_remove_end(&remove);
+    }
+    path(file, sizeof(file), "%s/pc5/mono/mono-2.0/bin/libmono-2.0-x86_64.dll", app);
+    unlink(file);
+    pc5_tile_prepare_begin(prep, root, app, "dotgame");
+    while (!(step = pc5_tile_prepare_step(prep, 5))) {}
+    CHECK(step == -1 && strstr(prep->error, ".NET runtime"), "a runtime file missing: %s", prep->error);
+    pc5_tile_prepare_end(prep);
+    pc5_free(prep);
+}
+
 /* The player's own covers: a cover.jpg/.png at the top of a game's folder,
  * offered before anything online; one in a folder of pictures by name. */
 static void test_own_covers(void)
@@ -5617,6 +5759,7 @@ int main(int argc, char **argv)
     test_cover_fill();
     test_prefix_media();
     test_home();
+    test_tile();
     test_own_covers();
     test_prefix_system();
     test_prefix_dxvk();
