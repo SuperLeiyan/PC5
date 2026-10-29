@@ -52,6 +52,9 @@ typedef struct Pc5CoverHint {
     uint32_t off;               /* PC5_PICTURES_* not to ask */
     /* SteamGridDB's key (pc5_api_key), or "": SteamGridDB is left out. Never logged. */
     char steamgriddb_key[96];
+    /* Square pictures for the game's tile instead: Steam to know the game, then SteamGridDB's
+     * square grids, nothing else (no other source has square art). */
+    int icons;
 } Pc5CoverHint;
 
 enum { PC5_COVER_CHOICES = 12 };
@@ -61,6 +64,7 @@ typedef struct Pc5CoverChoice {
     char title[128];            /* the game's name there */
     char url[PC5_PATH];         /* its cover picture: https://..., or the player's file */
     char background[PC5_PATH];  /* the game's wide background picture there (https://...), or "" */
+    char icon[PC5_PATH];        /* a square picture for its tile there (https://...), or "" */
     uint32_t steam_appid;       /* Steam: the app, for its asset list */
     int score;
 } Pc5CoverChoice;
@@ -102,11 +106,15 @@ int pc5_cover_fetch(const Pc5CoverChoice *choice, const Pc5Http *http, Pc5Image 
 int pc5_background_fetch(const char *url, uint32_t steam_appid, const Pc5Http *http, Pc5Image *background);
 /* The player's own background, from its file. */
 int pc5_background_read(const char *path, Pc5Image *background);
+/* A choice's square picture (its icon), fetched and made a tile picture (pc5_icon_compose). */
+int pc5_icon_fetch(const Pc5CoverChoice *choice, const Pc5Http *http, Pc5Image *icon);
 /* Deletes what nothing uses in a game's pc5 folder dir: the pictures as downloaded that PC5
- * 1.9.2 and earlier kept (cover-original.jpg or .png), and a cover or background whose saving
- * was cut short (cover.bin.part, background.bin.part). Only while nothing saves them. */
+ * 1.9.2 and earlier kept (cover-original.jpg or .png), and a cover, background or tile picture
+ * whose saving was cut short (cover.bin.part, background.bin.part, icon.bin.part). Only while
+ * nothing saves them. */
 void pc5_cover_tidy(const char *dir);
-/* Deletes all of a game's pictures in its pc5 folder dir: its cover, its background, the notes
+/* Deletes all of a game's pictures in its pc5 folder dir: its cover, its background, its tile
+ * picture (icon.bin), the notes
  * on where they came from (background.txt, background-none.txt, background-tries.txt) and what
  * pc5_cover_tidy deletes. The player's own pictures, kept elsewhere, stay. For a game's saves
  * kept when it is uninstalled. */

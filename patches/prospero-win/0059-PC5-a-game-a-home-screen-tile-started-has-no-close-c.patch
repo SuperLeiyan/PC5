@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SuperLeiyan <SuperLeiyan@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 14:00:00 +0000
+Subject: [PATCH 59/59] PC5: a game a home screen tile started has no close
+ combo
+
+Touchpad and Options held for two seconds closed the game and went back to
+PC5's screens; started from a tile (exit_after), it closed to the home
+screen. A tile is an app of its own, closed as any app is, from the game's
+own menu or from the home screen, so in a game a tile started the combo
+does nothing. Every other game keeps it.
+---
+ native/wine64_main.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index 034bdb1..aeca653 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -2027,8 +2027,10 @@ int main(int argc, char **argv)
+         if (pad_status == PW_OK && (pad.core.pressed_edges & PAD_CREATE) &&
+             !(pad.core.previous_buttons & PAD_OPTIONS))
+             PS5LOG_LOG("PW_WINE64 marker by=player tick=%llu", (unsigned long long)tick);
+-        combo_ticks = pad_status == PW_OK && (pad.core.previous_buttons & PAD_CLOSE) == PAD_CLOSE ?
+-                      combo_ticks + 1 : 0;
++        /* A game a home screen tile started is closed as any app is, from its own menu or the
++         * home screen: the combo is the screens' way back, and a tile has none. */
++        combo_ticks = pad_status == PW_OK && !launch.exit_after &&
++                      (pad.core.previous_buttons & PAD_CLOSE) == PAD_CLOSE ? combo_ticks + 1 : 0;
+         if (!close_requested &&
+             (combo_ticks >= PW_WINE64_CLOSE_HOLD_TICKS ||
+              (PW_WINE64_SECONDS && now - started >= (uint64_t)PW_WINE64_SECONDS * 1000000000u))) {
+-- 
+2.43.0
+
