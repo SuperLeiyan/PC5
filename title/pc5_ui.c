@@ -2,6 +2,7 @@
 /* PC5: the launcher's screens (pc5_ui.h). */
 #include "pc5_ui.h"
 #include "pc5_backgrounds.h"
+#include "pc5_files.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
 #include "pc5_image.h"
@@ -16,6 +17,7 @@
 #include "pc5_upgrade.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -45,7 +47,8 @@ typedef enum Screen {
     S_PROGRAMS, S_INSTALL, S_STOP, S_UNINSTALL_LIST, S_UNINSTALL_CONFIRM, S_REMOVING, S_MESSAGE, S_LAUNCH,
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
-    S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE
+    S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE, S_FILES, S_FILES_MENU,
+    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -54,7 +57,9 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "update", "checking", "game-menu", "game-reading", "queue-read", "queue",
                                             "buttons", "keys", "report", "upgrade-ask", "upgrading", "game-update-ask",
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
-                                            "compatibility", "graphics-api", "report-check", "report-update" };
+                                            "compatibility", "graphics-api", "report-check", "report-update", "files",
+                                            "files-menu", "files-typing", "files-conflict", "files-delete",
+                                            "files-working" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;
@@ -82,6 +87,7 @@ typedef enum SettingRow {
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_OVERLAY_SIZE, SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
+    SR_FILES,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
@@ -91,7 +97,7 @@ static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", 
                                                         "Game maintenance" };
 /* Where each page's row is on the first page (Back goes there); System's rows move with its
  * startup sound (system_row). */
-enum { ROW_MAINTENANCE = 0, ROW_GAMES = 1, ROW_OVERLAY = 2, ROW_SYSTEM = 3, ROW_ABOUT = 4 };
+enum { ROW_MAINTENANCE = 0, ROW_GAMES = 1, ROW_OVERLAY = 2, ROW_FILES = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5 };
 /* Game maintenance's rows. */
 enum { ROW_INSTALL = 0, ROW_UNINSTALL = 1, ROW_COMPATIBILITY = 2 };
 
@@ -135,6 +141,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_MAINTENANCE;
         rows[n++] = SR_GAMES;
         rows[n++] = SR_OVERLAY;
+        rows[n++] = SR_FILES;
         rows[n++] = SR_SYSTEM;
         rows[n++] = SR_ABOUT;
     }
@@ -147,7 +154,7 @@ typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
     GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_CPU_SHARING,
     GR_COVER, GR_BACKGROUND, GR_HOME,
-    GR_PROGRAM, GR_UPDATE, GR_UNINSTALL
+    GR_PROGRAM, GR_FILES, GR_UPDATE, GR_UNINSTALL
 } GameRow;
 enum { GAME_ROWS = 6, GAME_PAGES = 4, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3 };
 static const char *const game_page_titles[GAME_PAGES] = { "", "Graphics", "Appearance", "Manage" };
@@ -156,7 +163,7 @@ static const GameRow game_page_rows[GAME_PAGES] = { GR_PLAY, GR_GRAPHICS, GR_APP
 /* What a game is, for its menu's rows. */
 enum { GAME_32BIT = 1, GAME_VULKAN = 2, GAME_PC5 = 4, GAME_API = 8 };
 
-/* kind: GAME_32BIT for Memory, GAME_VULKAN for Resolution, GAME_PC5 (PC5 installed it) for Update,
+/* kind: GAME_32BIT for Memory, GAME_VULKAN for Resolution, GAME_PC5 (PC5 installed it) for Game files and Update,
  * GAME_API (it draws with DirectDraw or Direct3D) for Graphics API. */
 static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow rows[GAME_ROWS])
 {
@@ -177,6 +184,7 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         break;
     case GP_MANAGE:
         rows[n++] = GR_PROGRAM;
+        if (kind & GAME_PC5) rows[n++] = GR_FILES;
         if (kind & GAME_PC5) rows[n++] = GR_UPDATE;
         rows[n++] = GR_UNINSTALL;
         break;
@@ -245,6 +253,21 @@ typedef struct BgJob {
     uint32_t *out;                 /* W x H, made there */
     int ok;
 } BgJob;
+
+/* The file manager's start: a place to open (Settings › File manager). */
+enum { FILES_PLACES = 16 };
+typedef struct FilesPlace {
+    char name[64], path[PC5_PATH];
+    int read_only;
+} FilesPlace;
+
+typedef char FilesPath[PC5_PATH];
+/* Items chosen: their paths, and the same as a list for pc5_files.h. */
+typedef struct FilesSel {
+    FilesPath *paths;
+    const char **list;
+    int count;
+} FilesSel;
 
 typedef struct Cover {
     Pc5Picture picture;
@@ -376,6 +399,26 @@ struct Pc5Ui {
     uint32_t pick_tint;
     char pick_query[PC5_NAME];     /* the name typed to search for, or "": the game's own names */
 
+    /* The file manager (pc5_files.h): a game's own folder, from its menu (files_game), or the
+     * console's places, from Settings. */
+    int files_game;                /* 1: the folder of the game in launch_id, and nothing above it */
+    char files_top[PC5_PATH];      /* the game's folder, or the place opened ("" at the places) */
+    char files_path[PC5_PATH];     /* the folder shown, "" for the places */
+    FilesPlace files_place[FILES_PLACES];
+    int files_place_count;
+    Pc5FileList files;
+    uint8_t *files_ticked;         /* one per item, 1 ticked */
+    int files_at, files_list_top;  /* the row chosen, and the first one shown */
+    FilesSel clip;                 /* Copy or Cut: what Paste takes */
+    int clip_cut;
+    char clip_from[PC5_PATH];      /* the folder it came from */
+    Pc5FilesJob files_job;
+    int files_busy;                /* files_job is begun */
+    int files_changed;             /* something was changed: the library is read again on leaving */
+    int files_typing;              /* S_FILES_TYPING: 0 Rename, 1 New folder */
+    int files_conflicts;           /* S_FILES_CONFLICT: the names Paste finds there */
+    Pc5FilesSize files_size;       /* S_FILES_DELETE: what it deletes */
+
     uint8_t *falloff;              /* the glow's shape, 0-255 per pixel */
     uint32_t *backdrop;            /* the background without the glow */
     uint32_t *composed;            /* with the glow, for composed_glow */
@@ -436,7 +479,8 @@ static void go(Pc5Ui *ui, Screen screen)
                  screen == S_REVIEW || screen == S_PROGRAMS || screen == S_INSTALL || screen == S_STOP ||
                  screen == S_QUEUE_READ || screen == S_QUEUE || screen == S_CHECKING || screen == S_UPGRADE_ASK ||
                  screen == S_UPGRADING || screen == S_GAME_UPDATE_ASK || screen == S_SAVES_ASK || screen == S_REPORT ||
-                 screen == S_PICTURE_SEARCH || screen == S_PICTURE || screen == S_PICTURE_TYPING);
+                 screen == S_PICTURE_SEARCH || screen == S_PICTURE || screen == S_PICTURE_TYPING ||
+                 screen == S_FILES_WORKING);
     ui->drawn = 0;
     ui->dirty = 1;
     say(ui, "PC5 screen=%s", screen_names[screen]);
@@ -733,6 +777,11 @@ void pc5_ui_destroy(Pc5Ui *ui)
     pc5_free(ui->pick);
     if (ui->installing) pc5_install_end(&ui->install);
     pc5_remove_end(&ui->remove);
+    if (ui->files_busy) pc5_files_end(&ui->files_job);
+    pc5_files_list_free(&ui->files);
+    pc5_free(ui->files_ticked);
+    pc5_free(ui->clip.paths);
+    pc5_free(ui->clip.list);
     pc5_fonts_free(&ui->fonts);
     pc5_free(ui->saves);
     pc5_free(ui->falloff);
@@ -1853,6 +1902,11 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
                                                    : "Sessions that went wrong, and each game's newest, for 7 days");
         pc5_copy(value, value_size, set->keep_logs ? "On" : "Off");
         break;
+    case SR_FILES:
+        *label = "File manager";
+        pc5_copy(about, about_size, "Copy, move, rename and delete files on the console and its drives");
+        pc5_copy(value, value_size, "\xe2\x80\xba");
+        break;
     case SR_ABOUT:
         *label = "About PC5";
         pc5_copy(about, about_size, "Version, free space and credits");
@@ -1959,7 +2013,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
     {
         char how[200];
         update_how(ui, how, sizeof(how));
-        snprintf(about, about_size, "%s, installs it and restarts PC5", how);
+        snprintf(about, about_size, "%.160s, installs it and restarts PC5", how);
     }
         break;
     default:
@@ -2120,6 +2174,9 @@ static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
              "straight away, and leaving the game goes back to the home screen.", ui->tile, ui->config.tiles_root);
     message(ui, 1, "Added to the home screen", body, S_GAME_MENU);
 }
+
+static void files_open(Pc5Ui *ui, int game);
+static void files_update(Pc5Ui *ui, uint32_t k);
 
 static void settings_open(Pc5Ui *ui, int page, int row)
 {
@@ -2287,6 +2344,530 @@ static int letter_of(const char *title)
 {
     int c = pc5_lower((unsigned char)title[0]);
     return c >= 'a' && c <= 'z' ? c : '#';
+}
+
+/* ---- the file manager (pc5_files.h) ---------------------------------------------------------- */
+
+/* Where it may write: Pc5UiConfig's drives (pc5_upgrade_drives when it gives none). */
+static const char *const *files_drives(const Pc5Ui *ui)
+{
+    return ui->config.drives ? ui->config.drives : pc5_upgrade_drives;
+}
+
+/* a/b, without a second slash after "/". */
+static int files_join(char *out, size_t size, const char *a, const char *b)
+{
+    size_t n = strlen(a);
+    return n && a[n - 1] == '/' ? pc5_format(out, size, "%s%s", a, b) : pc5_join(out, size, a, b);
+}
+
+/* PC5 may change things in dir: in the game's folder (Game files), or on one of the drives and
+ * not in PC5's own app (File manager); no part of it below there a link, which could lead
+ * anywhere. */
+static int files_writable(const Pc5Ui *ui, const char *dir)
+{
+    const char *base = NULL;
+    char part[PC5_PATH];
+    if (!dir[0]) return 0;
+    if (ui->files_game) {
+        if (pc5_files_within(ui->files_top, dir)) base = ui->files_top;
+    } else {
+        if (ui->app[0] && pc5_files_within(ui->app, dir)) return 0;
+        for (const char *const *d = files_drives(ui); *d && !base; d++)
+            if (pc5_files_within(*d, dir)) base = *d;
+    }
+    if (!base) return 0;
+    pc5_copy(part, sizeof(part), dir);
+    for (size_t i = strlen(base);; i++) {
+        char at = part[i];
+        if (at == '/' || !at) {
+            struct stat st;
+            part[i] = 0;
+            if (lstat(part, &st) || S_ISLNK(st.st_mode)) return 0;
+            part[i] = at;
+        }
+        if (!at) break;
+    }
+    return 1;
+}
+
+/* An item that is never deleted, cut or renamed: a drive itself, prospero-win's folder, PC5's
+ * app, or a folder holding either. */
+static int files_protected(const Pc5Ui *ui, const char *item)
+{
+    if (pc5_files_within(item, ui->root) || (ui->app[0] && pc5_files_within(item, ui->app))) return 1;
+    for (const char *const *d = files_drives(ui); *d; d++)
+        if (pc5_files_within(item, *d)) return 1;
+    return 0;
+}
+
+static void sel_free(FilesSel *sel)
+{
+    pc5_free(sel->paths);
+    pc5_free(sel->list);
+    memset(sel, 0, sizeof(*sel));
+}
+
+static int sel_make(FilesSel *sel, int count)
+{
+    memset(sel, 0, sizeof(*sel));
+    if (count <= 0) return -1;
+    sel->paths = pc5_alloc(sizeof(*sel->paths) * (size_t)count);
+    sel->list = pc5_alloc(sizeof(*sel->list) * (size_t)count);
+    if (!sel->paths || !sel->list) { sel_free(sel); return -1; }
+    return 0;
+}
+
+static int files_ticks(const Pc5Ui *ui)
+{
+    int n = 0;
+    if (ui->files_ticked)
+        for (int i = 0; i < ui->files.count; i++) n += ui->files_ticked[i];
+    return n;
+}
+
+/* The items an action is for: those ticked, or else the one chosen. */
+static int files_targets(const Pc5Ui *ui, FilesSel *sel)
+{
+    int ticks = files_ticks(ui), count = ticks ? ticks : ui->files.count > 0;
+    if (!ui->files_path[0] || sel_make(sel, count)) return -1;
+    for (int i = 0; i < ui->files.count; i++) {
+        if (ticks ? !ui->files_ticked[i] : i != ui->files_at) continue;
+        if (files_join(sel->paths[sel->count], PC5_PATH, ui->files_path, ui->files.items[i].name)) {
+            sel_free(sel);
+            return -1;
+        }
+        sel->list[sel->count] = sel->paths[sel->count];
+        sel->count++;
+    }
+    return sel->count ? 0 : (sel_free(sel), -1);
+}
+
+static int files_count(const Pc5Ui *ui)
+{
+    return ui->files_path[0] ? ui->files.count : ui->files_place_count;
+}
+
+/* The places to start from: the drives there are, PC5's app and the whole console (those two
+ * read-only). */
+static void files_places(Pc5Ui *ui)
+{
+    int n = 0;
+    for (const char *const *d = files_drives(ui); *d && n < FILES_PLACES - 2; d++) {
+        if (!pc5_is_dir(*d)) continue;
+        FilesPlace *place = &ui->files_place[n++];
+        const char *slash = strrchr(*d, '/'), *name = slash && slash[1] ? slash + 1 : *d;
+        if (!strncmp(name, "usb", 3) && name[3] >= '0' && name[3] <= '9')
+            snprintf(place->name, sizeof(place->name), "USB drive %d", atoi(name + 3) + 1);
+        else if (!strncmp(name, "ext", 3) && name[3] >= '0' && name[3] <= '9')
+            snprintf(place->name, sizeof(place->name), "Extended storage %d", atoi(name + 3) + 1);
+        else if (!strcmp(*d, "/data"))
+            pc5_copy(place->name, sizeof(place->name), "Console storage");
+        else
+            pc5_copy(place->name, sizeof(place->name), name);
+        pc5_copy(place->path, sizeof(place->path), *d);
+        place->read_only = 0;
+    }
+    if (ui->app[0] && pc5_is_dir(ui->app)) {
+        FilesPlace *place = &ui->files_place[n++];
+        pc5_copy(place->name, sizeof(place->name), "PC5's app");
+        pc5_copy(place->path, sizeof(place->path), ui->app);
+        place->read_only = 1;
+    }
+    FilesPlace *place = &ui->files_place[n++];
+    pc5_copy(place->name, sizeof(place->name), "Whole console");
+    pc5_copy(place->path, sizeof(place->path), "/");
+    place->read_only = 1;
+    ui->files_place_count = n;
+}
+
+/* Reads the folder shown again, the row on select ("" or NULL: the first). */
+static void files_load(Pc5Ui *ui, const char *select)
+{
+    char keep[PC5_FILES_NAME] = "";
+    if (select) pc5_copy(keep, sizeof(keep), select);
+    pc5_files_list_free(&ui->files);
+    pc5_free(ui->files_ticked);
+    ui->files_ticked = NULL;
+    ui->files_at = ui->files_list_top = 0;
+    if (!ui->files_path[0]) return;
+    if (pc5_files_list(ui->files_path, &ui->files))
+        say(ui, "PC5 files can't list %s: %s", ui->files_path, strerror(ui->files.error));
+    if (ui->files.count) ui->files_ticked = pc5_alloc((size_t)ui->files.count);
+    for (int i = 0; keep[0] && i < ui->files.count; i++)
+        if (!strcmp(ui->files.items[i].name, keep)) ui->files_at = i;
+}
+
+static void files_open(Pc5Ui *ui, int game)
+{
+    ui->files_game = game;
+    ui->files_top[0] = ui->files_path[0] = 0;
+    ui->files_changed = 0;
+    if (game) {
+        if (pc5_game_folder(ui->root, ui->launch_id, ui->files_top, sizeof(ui->files_top)) || !pc5_is_dir(ui->files_top)) {
+            ui->files_top[0] = 0;
+            message(ui, 0, "PC5 can't find the game's folder", "Its files may be missing: uninstall it and install it again.",
+                    S_GAME_MENU);
+            return;
+        }
+        pc5_copy(ui->files_path, sizeof(ui->files_path), ui->files_top);
+    } else {
+        files_places(ui);
+    }
+    say(ui, "PC5 files open game=%d path=%s", game, ui->files_path[0] ? ui->files_path : "places");
+    files_load(ui, NULL);
+    go(ui, S_FILES);
+}
+
+static void files_close(Pc5Ui *ui)
+{
+    pc5_files_list_free(&ui->files);
+    pc5_free(ui->files_ticked);
+    ui->files_ticked = NULL;
+    ui->files_path[0] = 0;
+    say(ui, "PC5 files close changed=%d", ui->files_changed);
+    if (ui->files_changed) library_reload(ui, NULL);
+    if (ui->files_game) {
+        game_menu_at(ui, GR_FILES);
+        go(ui, S_GAME_MENU);
+    } else {
+        settings_open(ui, 0, ROW_FILES);
+    }
+}
+
+/* Back: the folder above, the places from a place's top, out from the game's folder. */
+static void files_up(Pc5Ui *ui)
+{
+    char name[PC5_FILES_NAME];
+    if (!ui->files_path[0] || (ui->files_game && !strcmp(ui->files_path, ui->files_top))) {
+        files_close(ui);
+        return;
+    }
+    if (!strcmp(ui->files_path, ui->files_top)) {
+        int at = 0;
+        for (int i = 0; i < ui->files_place_count; i++)
+            if (!strcmp(ui->files_place[i].path, ui->files_top)) at = i;
+        ui->files_path[0] = ui->files_top[0] = 0;
+        files_places(ui);
+        files_load(ui, NULL);
+        ui->files_at = at < ui->files_place_count ? at : 0;
+        ui->dirty = 1;
+        return;
+    }
+    char *slash = strrchr(ui->files_path, '/');
+    if (!slash) { files_close(ui); return; }
+    pc5_copy(name, sizeof(name), slash + 1);
+    if (slash == ui->files_path) slash[1] = 0;
+    else *slash = 0;
+    files_load(ui, name);
+    ui->dirty = 1;
+}
+
+static void files_menu_open(Pc5Ui *ui);
+
+/* ✕: a place or a folder opens; a file shows what can be done with it. */
+static void files_enter(Pc5Ui *ui)
+{
+    char next[PC5_PATH];
+    if (!ui->files_path[0]) {
+        if (ui->files_at >= ui->files_place_count) return;
+        pc5_copy(ui->files_top, sizeof(ui->files_top), ui->files_place[ui->files_at].path);
+        pc5_copy(ui->files_path, sizeof(ui->files_path), ui->files_top);
+        files_load(ui, NULL);
+        ui->dirty = 1;
+        return;
+    }
+    if (ui->files_at >= ui->files.count) return;
+    const Pc5FileItem *item = &ui->files.items[ui->files_at];
+    if (!item->dir) {
+        files_menu_open(ui);
+        return;
+    }
+    if (files_join(next, sizeof(next), ui->files_path, item->name)) {
+        message(ui, 0, "PC5 can't open this folder", "Its path is too long.", S_FILES);
+        return;
+    }
+    pc5_copy(ui->files_path, sizeof(ui->files_path), next);
+    files_load(ui, NULL);
+    ui->dirty = 1;
+}
+
+/* What △ offers, as the folder and the items chosen allow. */
+typedef enum FilesAction { FA_COPY, FA_CUT, FA_PASTE, FA_RENAME, FA_NEW_FOLDER, FA_DELETE, FA_TICK_ALL } FilesAction;
+enum { FILES_ACTIONS = 7 };
+
+static int files_actions(const Pc5Ui *ui, FilesAction rows[FILES_ACTIONS])
+{
+    FilesSel sel;
+    int n = 0, targets = 0, locked = 0, write;
+    if (!ui->files_path[0]) return 0;
+    write = files_writable(ui, ui->files_path);
+    if (!files_targets(ui, &sel)) {
+        targets = sel.count;
+        for (int i = 0; i < sel.count; i++) locked |= files_protected(ui, sel.list[i]);
+        sel_free(&sel);
+    }
+    if (targets) rows[n++] = FA_COPY;
+    if (targets && write && !locked) rows[n++] = FA_CUT;
+    if (ui->clip.count && write) rows[n++] = FA_PASTE;
+    if (targets == 1 && write && !locked) rows[n++] = FA_RENAME;
+    if (write) rows[n++] = FA_NEW_FOLDER;
+    if (targets && write && !locked) rows[n++] = FA_DELETE;
+    if (ui->files.count) rows[n++] = FA_TICK_ALL;
+    return n;
+}
+
+static void files_menu_open(Pc5Ui *ui)
+{
+    FilesAction rows[FILES_ACTIONS];
+    if (!files_actions(ui, rows)) return;
+    ui->menu = 0;
+    go(ui, S_FILES_MENU);
+}
+
+static const char *const files_op_names[] = { "copy", "move", "delete" };
+
+static void files_start(Pc5Ui *ui, Pc5FilesOp op, const FilesSel *sel, const char *dest, Pc5FilesConflict conflict)
+{
+    if (ui->files_busy) pc5_files_end(&ui->files_job);
+    int rc = pc5_files_begin(&ui->files_job, op, sel->list, sel->count, dest, conflict);
+    ui->files_busy = 1;
+    say(ui, "PC5 files %s count=%d into=%s conflict=%d items=%u bytes=%llu rc=%d", files_op_names[op], sel->count,
+        dest ? dest : "-", (int)conflict, (unsigned)ui->files_job.total_items, (unsigned long long)ui->files_job.total_bytes, rc);
+    if (rc) {
+        char title[120], body[PC5_ERROR + 40];
+        snprintf(title, sizeof(title), op == PC5_FILES_DELETE ? "Nothing was deleted" : op == PC5_FILES_MOVE ? "Nothing was moved"
+                                                                                                              : "Nothing was copied");
+        pc5_copy(body, sizeof(body), ui->files_job.error);
+        say(ui, "PC5 problem files: %s", body);
+        pc5_files_end(&ui->files_job);
+        ui->files_busy = 0;
+        message(ui, 0, title, body, S_FILES);
+        return;
+    }
+    go(ui, S_FILES_WORKING);
+}
+
+static void files_paste(Pc5Ui *ui)
+{
+    ui->files_conflicts = pc5_files_conflicts(ui->clip.list, ui->clip.count, ui->files_path, !ui->clip_cut);
+    if (ui->files_conflicts) {
+        ui->button = 0;   /* Skip first */
+        go(ui, S_FILES_CONFLICT);
+        return;
+    }
+    files_start(ui, ui->clip_cut ? PC5_FILES_MOVE : PC5_FILES_COPY, &ui->clip, ui->files_path, PC5_FILES_REPLACE);
+}
+
+/* The work finished: the folder read again, and a word when it didn't all happen. */
+static void files_finish(Pc5Ui *ui)
+{
+    Pc5FilesJob *job = &ui->files_job;
+    char title[160], body[PC5_ERROR + 200], keep[PC5_FILES_NAME] = "";
+    Pc5FilesState state = job->state;
+    Pc5FilesOp op = job->op;
+    uint32_t done = job->done_items, skipped = job->skipped;
+
+    if (ui->files_at < ui->files.count) pc5_copy(keep, sizeof(keep), ui->files.items[ui->files_at].name);
+    ui->files_changed = 1;
+    say(ui, "PC5 files done %s state=%d items=%u/%u bytes=%llu skipped=%u%s%s", files_op_names[op], (int)state,
+        (unsigned)done, (unsigned)job->total_items, (unsigned long long)job->done_bytes, (unsigned)skipped,
+        job->error[0] ? " error=" : "", job->error);
+    pc5_copy(body, sizeof(body), job->error);
+    pc5_files_end(job);
+    ui->files_busy = 0;
+    if (state == PC5_FILES_DONE && op == PC5_FILES_MOVE) {
+        sel_free(&ui->clip);   /* they are here now */
+        ui->clip_cut = 0;
+    }
+    files_load(ui, keep);
+    if (state == PC5_FILES_DONE) {
+        if (!done && skipped) message(ui, 1, "Nothing was pasted", "Those items are here already, and were left as they were.", S_FILES);
+        else go(ui, S_FILES);
+    } else if (state == PC5_FILES_STOPPED) {
+        message(ui, 1, "Stopped",
+                op == PC5_FILES_DELETE ? "What was deleted so far is gone; the rest is still here."
+                : op == PC5_FILES_MOVE ? "What was moved so far is here. Nothing was deleted from where it came from."
+                                       : "What was copied so far is here; the file being copied when it stopped was deleted.",
+                S_FILES);
+    } else {
+        snprintf(title, sizeof(title), op == PC5_FILES_DELETE ? "Not everything was deleted"
+                                       : op == PC5_FILES_MOVE ? "Not everything was moved" : "Not everything was copied");
+        say(ui, "PC5 problem files: %s", body);
+        message(ui, 0, title, body, S_FILES);
+    }
+}
+
+/* A name typed for Rename or New folder. */
+static void files_named(Pc5Ui *ui, const char *name)
+{
+    char why[200], target[PC5_PATH], from[PC5_PATH], body[PC5_PATH + 80];
+    if (pc5_files_name_ok(name, why, sizeof(why))) {
+        message(ui, 0, "That name can't be used", why, S_FILES);
+        return;
+    }
+    if (files_join(target, sizeof(target), ui->files_path, name)) {
+        message(ui, 0, "That name can't be used", "The path would be too long.", S_FILES);
+        return;
+    }
+    if (ui->files_typing == 0) {
+        if (ui->files_at >= ui->files.count) { go(ui, S_FILES); return; }
+        const char *old = ui->files.items[ui->files_at].name;
+        if (!strcmp(old, name) || files_join(from, sizeof(from), ui->files_path, old)) { go(ui, S_FILES); return; }
+        /* Only its case changed: on exFAT the new name is the old one. */
+        if (pc5_casecmp(old, name) && pc5_exists(target)) {
+            snprintf(body, sizeof(body), "This folder has %.200s already.", name);
+            message(ui, 0, "That name is taken", body, S_FILES);
+            return;
+        }
+        if (rename(from, target)) {
+            snprintf(body, sizeof(body), "%s.", strerror(errno));
+            say(ui, "PC5 problem files rename %s: %s", from, body);
+            message(ui, 0, "PC5 can't rename it", body, S_FILES);
+            return;
+        }
+        say(ui, "PC5 files renamed %s to %s", from, name);
+    } else {
+        if (pc5_exists(target)) {
+            snprintf(body, sizeof(body), "This folder has %.200s already.", name);
+            message(ui, 0, "That name is taken", body, S_FILES);
+            return;
+        }
+        if (mkdir(target, 0777)) {
+            snprintf(body, sizeof(body), "%s.", strerror(errno));
+            say(ui, "PC5 problem files new folder %s: %s", target, body);
+            message(ui, 0, "PC5 can't make the folder", body, S_FILES);
+            return;
+        }
+        (void)chmod(target, 0777);
+        say(ui, "PC5 files new folder %s", target);
+    }
+    ui->files_changed = 1;
+    files_load(ui, name);
+    go(ui, S_FILES);
+}
+
+static void files_act(Pc5Ui *ui, FilesAction action)
+{
+    FilesSel sel;
+    switch (action) {
+    case FA_COPY:
+    case FA_CUT:
+        if (files_targets(ui, &sel)) { go(ui, S_FILES); break; }
+        sel_free(&ui->clip);
+        ui->clip = sel;
+        ui->clip_cut = action == FA_CUT;
+        pc5_copy(ui->clip_from, sizeof(ui->clip_from), ui->files_path);
+        if (ui->files_ticked) memset(ui->files_ticked, 0, (size_t)ui->files.count);
+        say(ui, "PC5 files %s count=%d from=%s", action == FA_CUT ? "cut" : "copied", ui->clip.count, ui->files_path);
+        go(ui, S_FILES);
+        break;
+    case FA_PASTE:
+        files_paste(ui);
+        break;
+    case FA_RENAME:
+    case FA_NEW_FOLDER: {
+        int rc = -1;
+        ui->files_typing = action == FA_NEW_FOLDER;
+        if (ui->platform.keyboard_open)
+            rc = ui->platform.keyboard_open(ui->platform.context, action == FA_RENAME ? "Rename" : "New folder",
+                                            action == FA_RENAME && ui->files_at < ui->files.count
+                                                ? ui->files.items[ui->files_at].name : "New folder");
+        say(ui, "PC5 keyboard open rc=%d", rc);
+        if (rc >= 0) go(ui, S_FILES_TYPING);
+        else message(ui, 0, "The keyboard didn't open", "The console's on-screen keyboard can't be used just now.", S_FILES);
+        break;
+    }
+    case FA_DELETE:
+        if (files_targets(ui, &sel)) { go(ui, S_FILES); break; }
+        pc5_files_measure(sel.list, sel.count, &ui->files_size, 1500);
+        sel_free(&sel);
+        ui->button = 0;   /* Cancel first */
+        go(ui, S_FILES_DELETE);
+        break;
+    case FA_TICK_ALL: {
+        int all = files_ticks(ui) == ui->files.count;
+        if (ui->files_ticked) memset(ui->files_ticked, !all, (size_t)ui->files.count);
+        go(ui, S_FILES);
+        break;
+    }
+    }
+}
+
+static void files_update(Pc5Ui *ui, uint32_t k)
+{
+    const uint32_t accept = PC5_KEY_ACCEPT, back = PC5_KEY_BACK;
+    switch (ui->screen) {
+    case S_FILES: {
+        int count = files_count(ui), before = ui->files_at;
+        list_move(&ui->files_at, count, k);
+        if ((k & PC5_KEY_L1) && count) ui->files_at = ui->files_at > 8 ? ui->files_at - 8 : 0;
+        if ((k & PC5_KEY_R1) && count) ui->files_at = ui->files_at + 8 < count ? ui->files_at + 8 : count - 1;
+        if (ui->files_at != before) ui->dirty = 1;
+        if (k & back) files_up(ui);
+        else if ((k & accept) && count) files_enter(ui);
+        else if ((k & PC5_KEY_SQUARE) && ui->files_path[0] && ui->files_ticked && ui->files_at < ui->files.count) {
+            ui->files_ticked[ui->files_at] = !ui->files_ticked[ui->files_at];
+            ui->dirty = 1;
+        } else if (k & PC5_KEY_TRIANGLE) {
+            files_menu_open(ui);
+        }
+        break;
+    }
+    case S_FILES_MENU: {
+        FilesAction rows[FILES_ACTIONS];
+        int count = files_actions(ui, rows);
+        if (!count) { go(ui, S_FILES); break; }
+        if (ui->menu >= count) ui->menu = count - 1;
+        if (list_move(&ui->menu, count, k)) ui->dirty = 1;
+        if (k & (back | PC5_KEY_TRIANGLE)) go(ui, S_FILES);
+        else if (k & accept) files_act(ui, rows[ui->menu]);
+        break;
+    }
+    case S_FILES_TYPING: {
+        int state = ui->platform.keyboard_state ? ui->platform.keyboard_state(ui->platform.context) : -1;
+        if (state == 1) break;   /* still up */
+        char typed[PC5_FILES_NAME + 64] = "";
+        int rc = ui->platform.keyboard_close ? ui->platform.keyboard_close(ui->platform.context, typed, sizeof(typed)) : -1;
+        char *start = typed;
+        while (*start == ' ' || *start == '\t') start++;
+        for (size_t n = strlen(start); n && (start[n - 1] == ' ' || start[n - 1] == '\t'); n--) start[n - 1] = 0;
+        say(ui, "PC5 keyboard closed rc=%d typed=%zu", rc, strlen(start));
+        if (rc == 1 && start[0]) files_named(ui, start);
+        else go(ui, S_FILES);   /* cancelled: as it was */
+        break;
+    }
+    case S_FILES_CONFLICT:
+        /* Skip, Keep both, Replace */
+        if ((k & PC5_KEY_LEFT) && ui->button > 0) { ui->button--; ui->dirty = 1; }
+        if ((k & PC5_KEY_RIGHT) && ui->button < 2) { ui->button++; ui->dirty = 1; }
+        if (k & back) go(ui, S_FILES);
+        else if ((k & accept) && ui->now - ui->entered > 300)
+            files_start(ui, ui->clip_cut ? PC5_FILES_MOVE : PC5_FILES_COPY, &ui->clip, ui->files_path,
+                        ui->button == 0 ? PC5_FILES_SKIP : ui->button == 1 ? PC5_FILES_KEEP_BOTH : PC5_FILES_REPLACE);
+        break;
+    case S_FILES_DELETE:
+        if (k & (PC5_KEY_LEFT | PC5_KEY_RIGHT)) { ui->button = !ui->button; ui->dirty = 1; }
+        if (k & back) go(ui, S_FILES);
+        else if ((k & accept) && ui->now - ui->entered > 400) {
+            FilesSel sel;
+            if (!ui->button || files_targets(ui, &sel)) { go(ui, S_FILES); break; }
+            files_start(ui, PC5_FILES_DELETE, &sel, NULL, PC5_FILES_REPLACE);
+            sel_free(&sel);
+        }
+        break;
+    case S_FILES_WORKING:
+        if (!ui->files_busy) { go(ui, S_FILES); break; }
+        if ((k & back) && !ui->files_job.stop) {
+            say(ui, "PC5 files stop");
+            pc5_files_stop(&ui->files_job);
+        }
+        if (pc5_files_step(&ui->files_job, 14)) { ui->dirty = 1; break; }
+        files_finish(ui);
+        break;
+    default:
+        break;
+    }
 }
 
 int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
@@ -2504,6 +3085,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             case SR_GAMES: settings_open(ui, PAGE_GAMES, 0); break;
             case SR_OVERLAY: settings_open(ui, PAGE_OVERLAY, 0); break;
             case SR_SYSTEM: settings_open(ui, PAGE_SYSTEM, 0); break;
+            case SR_FILES: files_open(ui, 0); break;
             case SR_PICTURES: settings_open(ui, PAGE_PICTURES, 0); break;
             case SR_ABOUT: go(ui, S_ABOUT); break;
             case SR_CHECK_NOW: go(ui, S_CHECKING); break;
@@ -2807,6 +3389,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 if (!game->pc5) message(ui, 0, "PC5 didn't install this game",
                                         "Its program is set in its prospero-win profile.", S_GAME_MENU);
                 else go(ui, S_GAME_READING);
+            } else if (row == GR_FILES) {
+                files_open(ui, 1);
             } else if (row == GR_UPDATE) {
                 ui->update_for = 1;
                 go(ui, S_SCAN);
@@ -3116,6 +3700,14 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_REPORT:
         if (k & (accept | back)) go(ui, S_MESSAGE);
         break;
+    case S_FILES:
+    case S_FILES_MENU:
+    case S_FILES_TYPING:
+    case S_FILES_CONFLICT:
+    case S_FILES_DELETE:
+    case S_FILES_WORKING:
+        files_update(ui, k);
+        break;
     case S_REPORT_CHECK:
         if (!ui->drawn) break;
         update_check_now(ui, 2);
@@ -3128,14 +3720,15 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         }
         break;
     case S_REPORT_UPDATE:
-        /* Update now (when PC5 can update itself here) or Back, and Report anyway. */
+        /* Update now, and Report anyway. Update now updates PC5 here; where it can't (this release
+         * has no zip PC5 can install), it opens Settings › System, whose Check now asks again. */
         if (k & (PC5_KEY_LEFT | PC5_KEY_RIGHT)) { ui->button = !ui->button; ui->dirty = 1; }
         if (k & back) go(ui, S_MESSAGE);
         else if ((k & accept) && ui->now - ui->entered > 300) {
-            say(ui, "PC5 report update choice=%s", ui->button ? "report" : offer_update(ui) ? "update" : "back");
+            say(ui, "PC5 report update choice=%s", ui->button ? "report" : offer_update(ui) ? "update" : "system");
             if (ui->button) report_open(ui);
             else if (offer_update(ui)) upgrade_begin(ui, S_MESSAGE);
-            else go(ui, S_MESSAGE);
+            else settings_open(ui, PAGE_SYSTEM, system_row(ui, SR_CHECK_NOW));
         }
         break;
     case S_LAUNCH:
@@ -3816,6 +4409,11 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         *value = "";
         break;
     }
+    case GR_FILES:
+        *label = "Game files";
+        *text = "Its folder: copy, move, rename and delete its files";
+        *value = more;
+        break;
     case GR_UPDATE:
         *label = "Update";
         *text = "A newer copy from USB; its saves and settings stay";
@@ -4623,6 +5221,190 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
     hints(ui, c, (int)px, (int)(y + h - 48), list, n);
 }
 
+/* ---- the file manager's screens ------------------------------------------------------------ */
+
+static void files_row(Pc5Ui *ui, Pc5Canvas *c, int i, float x, float y, float w, int chosen)
+{
+    char size[32];
+    (void)chosen;
+    if (!ui->files_path[0]) {
+        const FilesPlace *place = &ui->files_place[i];
+        char where[PC5_PATH + 32];
+        snprintf(where, sizeof(where), "%.900s%s", place->path, place->read_only ? " \xc2\xb7 read-only" : "");
+        pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x, (int)y + 40, C_TEXT, place->name, (int)w, 0);
+        pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)x, (int)y + 74, C_DIM, where, (int)w, 0);
+        return;
+    }
+    const Pc5FileItem *item = &ui->files.items[i];
+    tick_box(c, x, y + 20, ui->files_ticked && ui->files_ticked[i]);
+    /* a folder: a folder's shape; a file: a page's */
+    if (item->dir) {
+        pc5_round_rect(c, x + 52, y + 24, 16, 8, 3, C_DIM);
+        pc5_round_rect(c, x + 52, y + 28, 34, 24, 4, C_DIM);
+    } else {
+        pc5_round_frame(c, x + 57, y + 20, 24, 32, 4, 2, C_DIM);
+    }
+    pc5_size_text(item->size, size, sizeof(size));
+    pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x + 106, (int)y + 46, C_TEXT, item->name, (int)w - 106 - 200, 0);
+    pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)(x + w), (int)y + 46, C_DIM, item->dir ? "Folder" : size, 0, 2);
+}
+
+/* The folder (or the places), as a list. */
+static void files_list_screen(Pc5Ui *ui, Pc5Canvas *c)
+{
+    char title[PC5_PATH + 200], empty[PC5_ERROR] = "";
+    int keep = ui->menu, ticks = files_ticks(ui);
+    const char *name = "Game files";
+    if (ui->files_game) {
+        int index = pc5_library_find(&ui->library, ui->launch_id);
+        if (index >= 0) name = ui->library.games[index].title;
+    }
+    if (!ui->files_path[0]) {
+        pc5_copy(title, sizeof(title), "File manager");
+    } else if (ui->files_game) {
+        size_t n = strlen(ui->files_top);
+        if (!strncmp(ui->files_path, ui->files_top, n) && ui->files_path[n] == '/')
+            snprintf(title, sizeof(title), "%s \xe2\x80\xba %s", name, ui->files_path + n + 1);
+        else
+            snprintf(title, sizeof(title), "%s", name);
+    } else {
+        snprintf(title, sizeof(title), "%s", ui->files_path);
+    }
+    if (ui->files_path[0] && !files_writable(ui, ui->files_path)) pc5_format(title + strlen(title), sizeof(title) - strlen(title), " \xc2\xb7 read-only");
+    if (ticks) pc5_format(title + strlen(title), sizeof(title) - strlen(title), " \xc2\xb7 %d ticked", ticks);
+    if (ui->files.error) snprintf(empty, sizeof(empty), "%s.", strerror(ui->files.error));
+    else if (files_writable(ui, ui->files_path)) pc5_copy(empty, sizeof(empty), "\xe2\x96\xb3 Paste or New folder puts something in it.");
+
+    int folder = ui->files_path[0] && ui->files_at < ui->files.count && ui->files.items[ui->files_at].dir;
+    Hint places[] = { { accept_glyph(ui), "Open" }, { back_glyph(ui), "Back" } };
+    /* On a file ✕ shows its actions too, as △ does: said once. */
+    Hint list[] = { { accept_glyph(ui), "Open" }, { G_SQUARE, "Tick" }, { G_TRIANGLE, "Actions" }, { back_glyph(ui), "Back" } };
+    ui->menu = ui->files_at;
+    ui->list_top = ui->files_list_top;
+    list_panel(ui, c, title, files_count(ui), files_row, ui->files.error ? "PC5 can't open this folder" : "This folder is empty",
+               empty, ui->files_path[0] ? list + !folder : places, ui->files_path[0] ? 4 - !folder : 2, ui->files_path[0] ? 80 : 104);
+    ui->files_list_top = ui->list_top;
+    ui->menu = keep;
+}
+
+static void files_action_text(const Pc5Ui *ui, FilesAction action, const char **label, char *about, size_t size, char *value,
+                              size_t value_size)
+{
+    value[0] = about[0] = 0;
+    switch (action) {
+    case FA_COPY: *label = "Copy"; pc5_copy(about, size, "Then Paste puts a copy in another folder"); break;
+    case FA_CUT: *label = "Cut"; pc5_copy(about, size, "Then Paste moves it to another folder"); break;
+    case FA_PASTE: {
+        const char *slash = strrchr(ui->clip_from, '/');
+        *label = "Paste";
+        snprintf(about, size, "%s %d item%s from %.120s", ui->clip_cut ? "Moves" : "Copies", ui->clip.count,
+                 ui->clip.count == 1 ? "" : "s", slash && slash[1] ? slash + 1 : ui->clip_from);
+        snprintf(value, value_size, "%d", ui->clip.count);
+        break;
+    }
+    case FA_RENAME: *label = "Rename"; pc5_copy(about, size, "Type its new name"); break;
+    case FA_NEW_FOLDER: *label = "New folder"; pc5_copy(about, size, "An empty folder in this one"); break;
+    case FA_DELETE: *label = "Delete"; pc5_copy(about, size, "Deleted for good: there is no undo"); break;
+    case FA_TICK_ALL:
+        *label = files_ticks(ui) == ui->files.count ? "Untick all" : "Tick all";
+        pc5_copy(about, size, "Every item in this folder");
+        break;
+    }
+}
+
+static void files_menu_screen(Pc5Ui *ui, Pc5Canvas *c)
+{
+    FilesAction rows[FILES_ACTIONS];
+    int count = files_actions(ui, rows), ticks = files_ticks(ui);
+    char title[PC5_FILES_NAME + 32], about[200], value[32];
+    const char *label = "";
+    float extra;
+    if (ticks) snprintf(title, sizeof(title), "%d items", ticks);
+    else if (ui->files_at < ui->files.count) pc5_copy(title, sizeof(title), ui->files.items[ui->files_at].name);
+    else pc5_copy(title, sizeof(title), "This folder");
+    float x = drawer(ui, c, title);
+    pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)x + 64, 182, C_DIM,
+             files_writable(ui, ui->files_path) ? ui->files_path : "Read-only: PC5 changes nothing here", 760 - 128, 0);
+    if (ui->menu < count) files_action_text(ui, rows[ui->menu], &label, about, sizeof(about), value, sizeof(value));
+    else about[0] = 0;
+    float pitch = rows_pitch(ui, 226, count, about, &extra);
+    for (int i = 0; i < count; i++) {
+        files_action_text(ui, rows[i], &label, about, sizeof(about), value, sizeof(value));
+        drawer_row(ui, c, x, 226 + pitch * i + (i > ui->menu ? extra : 0), pitch + (i == ui->menu ? extra : 0), i == ui->menu,
+                   label, about, value);
+    }
+    Hint list[] = { { accept_glyph(ui), "Choose" }, { back_glyph(ui), "Back" } };
+    hints(ui, c, (int)x + 64, 1012, list, 2);
+}
+
+/* Copying, moving or deleting: how far, and Back to stop. */
+static void files_working_screen(Pc5Ui *ui, Pc5Canvas *c)
+{
+    const Pc5FilesJob *job = &ui->files_job;
+    float w = 1100, h = 420, x = (W - w) / 2, y = (H - h) / 2;
+    char title[200], line[PC5_FILES_NAME + 64], have[32], all[32];
+    int items = job->total_items ? (int)job->total_items : 1;
+    dim(c, 150);
+    panel(c, x, y, w, h);
+    snprintf(title, sizeof(title), "%s", job->stop ? "Stopping"
+                                    : job->op == PC5_FILES_DELETE ? "Deleting"
+                                    : job->op == PC5_FILES_MOVE ? "Moving" : "Copying");
+    pc5_text(c, &ui->fonts, PC5_FACE_HEAD, (int)x + 64, (int)y + 116, C_TEXT, title, (int)w - 128, 0);
+    pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x + 64, (int)y + 186, C_TEXT, job->current[0] ? job->current : "Getting ready",
+             (int)w - 128, 0);
+    double fraction = job->total_bytes ? (double)job->done_bytes / (double)job->total_bytes : (double)job->done_items / items;
+    progress_bar(c, x + 64, y + 236, w - 128, fraction, pc5_mix(C_ACCENT, C_TEXT, 60));
+    if (job->total_bytes) {
+        pc5_size_text(job->done_bytes, have, sizeof(have));
+        pc5_size_text(job->total_bytes, all, sizeof(all));
+        snprintf(line, sizeof(line), "%s of %s", have, all);
+    } else {
+        snprintf(line, sizeof(line), "%u of %u", (unsigned)job->done_items, (unsigned)job->total_items);
+    }
+    pc5_text(c, &ui->fonts, PC5_FACE_BODY, (int)x + 64, (int)y + 306, C_DIM, line, (int)w - 128, 0);
+    if (!job->stop) {
+        Hint list[] = { { back_glyph(ui), "Stop" } };
+        hints(ui, c, (int)x + 64, (int)(y + h - 44), list, 1);
+    }
+}
+
+static void files_draw(Pc5Ui *ui, Pc5Canvas *c)
+{
+    char title[PC5_FILES_NAME + 64], body[400], size[32];
+    files_list_screen(ui, c);
+    switch (ui->screen) {
+    case S_FILES_MENU: files_menu_screen(ui, c); break;
+    case S_FILES_CONFLICT: {
+        const char *one = ui->clip.count ? strrchr(ui->clip.list[0], '/') : NULL;
+        if (ui->clip.count == 1) snprintf(title, sizeof(title), "This folder has %.200s already", one ? one + 1 : "it");
+        else snprintf(title, sizeof(title), "This folder has %d of the %d items already", ui->files_conflicts, ui->clip.count);
+        confirm3_dialog(ui, c, title,
+                        "Skip leaves those as they are. Keep both gives the new ones a name like \xe2\x80\x9cname (2)\xe2\x80\x9d. "
+                        "Replace overwrites files and puts folders' contents together.",
+                        "Skip", "Keep both", "Replace", NULL);
+        break;
+    }
+    case S_FILES_DELETE: {
+        int ticks = files_ticks(ui);
+        if (ticks > 1) snprintf(title, sizeof(title), "Delete %d items?", ticks);
+        else if (ticks == 1 || ui->files_at < ui->files.count) {
+            int at = ui->files_at;
+            for (int i = 0; ticks && i < ui->files.count; i++)
+                if (ui->files_ticked[i]) at = i;
+            snprintf(title, sizeof(title), "Delete %.200s?", at < ui->files.count ? ui->files.items[at].name : "it");
+        } else pc5_copy(title, sizeof(title), "Delete?");
+        pc5_size_text(ui->files_size.bytes, size, sizeof(size));
+        snprintf(body, sizeof(body), "%s%u file%s and %u folder%s, %s. They're deleted for good: there is no backup and no undo.",
+                 ui->files_size.partial ? "At least " : "", (unsigned)ui->files_size.files, ui->files_size.files == 1 ? "" : "s",
+                 (unsigned)ui->files_size.folders, ui->files_size.folders == 1 ? "" : "s", size);
+        confirm_dialog(ui, c, title, body, "Cancel", "Delete", 1, NULL);
+        break;
+    }
+    case S_FILES_WORKING: files_working_screen(ui, c); break;
+    default: break;
+    }
+}
+
 void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
 {
     char line[300];
@@ -4816,20 +5598,24 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         break;
     case S_MESSAGE: message_dialog(ui, c); break;
     case S_REPORT: library_screen(ui, c); report_screen(ui, c); break;
+    case S_FILES:
+    case S_FILES_MENU:
+    case S_FILES_TYPING:
+    case S_FILES_CONFLICT:
+    case S_FILES_DELETE:
+    case S_FILES_WORKING:
+        files_draw(ui, c);
+        break;
     case S_REPORT_CHECK: message_dialog(ui, c); busy_dialog(ui, c, "Checking for a newer PC5", "A newer one may have fixed it", 0); break;
     case S_REPORT_UPDATE: {
         char title[120], body[500], how[200];
         snprintf(title, sizeof(title), "Update to PC5 %s first?", ui->update.last.version);
-        if (offer_update(ui)) {
-            update_how(ui, how, sizeof(how));
-            snprintf(body, sizeof(body), "This problem may already be fixed in it. Update, try the game again, and report it "
-                     "if it still happens. %s.", how);
-        } else {
-            snprintf(body, sizeof(body), "You have %s. This problem may already be fixed in the newer one: install it from "
-                     "ProsperoStore or GitHub, try the game again, and report it if it still happens.", PC5_VERSION);
-        }
+        if (offer_update(ui)) update_how(ui, how, sizeof(how));
+        else snprintf(how, sizeof(how), "You have %s", PC5_VERSION);
+        snprintf(body, sizeof(body), "This problem may already be fixed in it. Update with Update now (PC5's own updater) "
+                 "or from ProsperoStore, try the game again, and report it if it still happens. %s.", how);
         message_dialog(ui, c);
-        confirm_dialog(ui, c, title, body, offer_update(ui) ? "Update now" : "Back", "Report anyway", 0, NULL);
+        confirm_dialog(ui, c, title, body, "Update now", "Report anyway", 0, NULL);
         break;
     }
     case S_LAUNCH: {

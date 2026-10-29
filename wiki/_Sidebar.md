@@ -11,6 +11,7 @@
 - [Covers](Covers)
 - [Home screen tiles](Home-screen-tiles)
 - [Launch options](Launch-options)
+- [File manager](File-manager)
 
 **Reference**
 - [Files and folders](Files-and-folders)

@@ -397,3 +397,20 @@ controller's speaker.
 | 190 | Report anyway | the QR code, as before | `PC5 report update choice=report`, `PC5 report log=` |
 | 191 | Update now | PC5 updates and restarts | `PC5 report update choice=update`, `PC5 update start` |
 | 192 | The newest PC5, or offline: △ | the QR code straight away | `newer=0` |
+
+## File manager (next)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 193 | Settings › File manager | Console storage, each USB and Extended storage drive plugged in, PC5's app, Whole console | `PC5 files open game=0 path=places` |
+| 194 | A game PC5 installed: △ › Manage › Game files | its folder; ○ from there goes back to its menu, never above it | `PC5 files open game=1 path=/data/prospero-win/prefixes/…/drive_c/Games/…` |
+| 195 | On a USB drive: tick two items (□), △ › Copy; on Console storage, △ › Paste | a bar while it copies; both there, same sizes | `PC5 files copy count=2`, `PC5 files done copy state=1` |
+| 196 | Paste again there | asks: Skip / Keep both / Replace; Keep both makes "name (2)" | `conflict=1` |
+| 197 | A big file (a few GB): Paste, then ○ part way | "Stopped"; no file of that name, no `.pc5part` left | `PC5 files stop`, `state=3` |
+| 198 | Cut a folder on Console storage, Paste in another folder there | moved at once | `PC5 files done move state=1` |
+| 199 | Cut a file on a USB drive, Paste on Console storage | copied, then gone from the USB drive | `PC5 files done move state=1` |
+| 200 | Rename a file; New folder; a name with `:` | renamed; made; "That name can't be used" | `PC5 files renamed`, `PC5 files new folder` |
+| 201 | Delete a folder | asks with its files, folders and size; Cancel first; Delete deletes it | `PC5 files done delete state=1` |
+| 202 | Whole console, or PC5's app: △ | only Copy and Tick all | — |
+| 203 | Console storage: the prospero-win folder: △ | no Cut, Rename or Delete for it | — |
+| 204 | Delete a mod from a game's folder, back to the library | the game still starts | `PC5 files close changed=1`, `PC5 library games=` |

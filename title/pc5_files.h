@@ -42,8 +42,14 @@ int pc5_files_name_ok(const char *name, char *why, size_t size);
 /* name, or "name (2).ext", "name (3).ext"... the first that dir doesn't have, into out. */
 int pc5_files_free_name(const char *dir, const char *name, char *out, size_t size);
 
-/* How many of sources' names dest has already (what a paste asks about). */
-int pc5_files_conflicts(const char *const *sources, int count, const char *dest);
+/* How many of sources' names dest has already (what a paste asks about): an item there itself
+ * counts only when with_self is set (a copy beside itself; a move of it there is nothing to do). */
+int pc5_files_conflicts(const char *const *sources, int count, const char *dest, int with_self);
+
+/* What a delete would take: files and folders in all (the items themselves too), their bytes;
+ * partial when it stopped after about budget_ms, the counts then a part. */
+typedef struct Pc5FilesSize { uint32_t files, folders; uint64_t bytes; int partial; } Pc5FilesSize;
+void pc5_files_measure(const char *const *paths, int count, Pc5FilesSize *size, int budget_ms);
 
 typedef enum Pc5FilesOp { PC5_FILES_COPY, PC5_FILES_MOVE, PC5_FILES_DELETE } Pc5FilesOp;
 /* What a paste does with a name dest has already: Replace (a file overwritten, a folder's

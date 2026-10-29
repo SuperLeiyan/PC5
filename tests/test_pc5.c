@@ -1803,9 +1803,12 @@ static int fake_keyboard_state_text(void *context) { (void)context; return 2; }
  * the key itself (never). */
 #define TEST_WRONG_KEY "not-the-key-but-secret"
 static int key_refused_lines, key_shown_lines;
+static int files_cut_lines;
+
 static void fake_log(void *context, const char *line)
 {
     (void)context;
+    files_cut_lines += !strncmp(line, "PC5 files cut ", 14);
     key_refused_lines += strstr(line, "SteamGridDB refused the key") != NULL;
     key_shown_lines += strstr(line, TEST_WRONG_KEY) != NULL || strstr(line, TEST_GRIDDB_KEY) != NULL;
 }
@@ -4983,7 +4986,8 @@ static void test_screens(const char *fonts)
         CHECK(!strcmp(pc5_ui_screen(ui), "game-menu"), "its menu: %s", pc5_ui_screen(ui));
         for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Manage, the last row */
         press(ui, PC5_KEY_ACCEPT, &canvas);
-        press(ui, PC5_KEY_DOWN, &canvas);        /* Update, after Change program */
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);        /* Update, after Change program and Game files */
         save_shot(&canvas, "game-menu-update");
         press(ui, PC5_KEY_ACCEPT, &canvas);
         until_screen(ui, "sources", &canvas);
@@ -5148,7 +5152,8 @@ static void test_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on In games");
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
-    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System, after Overlay and File manager */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Startup sound: cheap chinese speaker, the first, -> Chime */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Chime, the last one, -> Off */
     {
@@ -5180,6 +5185,7 @@ static void test_screens(const char *fonts)
     /* Off again, then rumble: only its own strength shows; then Startup sound again. */
     press(ui, PC5_KEY_UP, &canvas);
     press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* In games */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);        /* Adaptive triggers */
@@ -5191,6 +5197,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_RIGHT, &canvas);       /* trigger rumble: 100 % -> 25 % */
     press(ui, PC5_KEY_LEFT, &canvas);        /* and back */
     press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
@@ -5220,6 +5227,7 @@ static void test_screens(const char *fonts)
     /* Overlay: its lines, each on its own, and the corner. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page");
+    press(ui, PC5_KEY_UP, &canvas);          /* File manager */
     press(ui, PC5_KEY_UP, &canvas);          /* Overlay */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Show FPS: on */
@@ -5243,6 +5251,7 @@ static void test_screens(const char *fonts)
     /* System's Check now finds a newer PC5 and says so once, with the console's notification. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on Overlay");
+    press(ui, PC5_KEY_DOWN, &canvas);        /* File manager */
     press(ui, PC5_KEY_DOWN, &canvas);        /* System */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Check now, past the startup sound's volume */
@@ -5263,13 +5272,13 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
     rows_uncut(ui, &canvas, "Settings", 0);
-    for (int row = 0; row < 4; row++) {     /* Game maintenance, In games, Overlay, and System last */
-        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "System" };
+    for (int row = 0; row < 5; row++) {     /* Game maintenance, In games, Overlay, File manager's places, and System last */
+        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "File manager", "System" };
         for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, &canvas);
         for (int i = 0; i < row; i++) press(ui, PC5_KEY_DOWN, &canvas);
         press(ui, PC5_KEY_ACCEPT, &canvas);
-        rows_uncut(ui, &canvas, pages[row], row > 0);
-        if (row < 3) press(ui, PC5_KEY_BACK, &canvas);
+        rows_uncut(ui, &canvas, pages[row], row > 0 && row != 3);
+        if (row < 4) press(ui, PC5_KEY_BACK, &canvas);
     }
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
@@ -5558,7 +5567,8 @@ static void test_report(const char *fonts)
         pc5_ui_destroy(ui);
     }
     {
-        /* A newer PC5 is out (asked a minute ago): Triangle offers it first; Report anyway reports. */
+        /* A newer PC5 is out (asked a minute ago): Triangle offers it first; Report anyway reports, Update now
+         * (PC5 can't update itself in this test) opens Settings › System. */
         Pc5UpdateMemory memory;
         memset(&memory, 0, sizeof(memory));
         memory.checked = fake_time(NULL, NULL) - 60;
@@ -5581,14 +5591,16 @@ static void test_report(const char *fonts)
         press(ui, PC5_KEY_BACK, &canvas);
         CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Back: the message: %s", pc5_ui_screen(ui));
         press(ui, PC5_KEY_TRIANGLE, &canvas);
-        frames(ui, 0, 0, 25, &canvas);
-        press(ui, PC5_KEY_ACCEPT, &canvas);
-        CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Back (PC5 can't update itself here): the message: %s", pc5_ui_screen(ui));
-        press(ui, PC5_KEY_TRIANGLE, &canvas);
         press(ui, PC5_KEY_RIGHT, &canvas);
         frames(ui, 0, 0, 25, &canvas);
         press(ui, PC5_KEY_ACCEPT, &canvas);
         CHECK(!strcmp(pc5_ui_screen(ui), "report"), "Report anyway: Report on GitHub: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_BACK, &canvas);
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        frames(ui, 0, 0, 25, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "Update now, where PC5 can't update itself: Settings › System: %s",
+              pc5_ui_screen(ui));
         pc5_ui_destroy(ui);
     }
     pc5_update_save(root, &before);
@@ -5671,7 +5683,7 @@ static void test_upgrade_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "library") && !net.downloads, "Later: %s", pc5_ui_screen(ui));
 
     press(ui, PC5_KEY_OPTIONS, &canvas);
-    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
     for (int i = 0; i < 6; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Update now, the seventh row */
     pc5_ui_draw(ui, &canvas);
@@ -5825,7 +5837,7 @@ static void test_files(void)
         path(data, sizeof(data), "%s/data", a);
         path(readme, sizeof(readme), "%s/readme.txt", a);
         const char *sources[] = { data, readme };
-        CHECK(pc5_files_conflicts(sources, 2, b) == 0, "nothing in b yet");
+        CHECK(pc5_files_conflicts(sources, 2, b, 1) == 0, "nothing in b yet");
         CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "copied: %s", job.error);
         CHECK(job.total_bytes == 9 && job.done_bytes == 9 && job.done_items == job.total_items && job.total_items == 5,
               "progress counted (%llu/%llu bytes, %u/%u items)", (unsigned long long)job.done_bytes,
@@ -5838,7 +5850,9 @@ static void test_files(void)
         CHECK(read_is(readme, "hello") && pc5_is_dir(data), "the sources stay");
         path(file, sizeof(file), "%s/readme.txt.pc5part", b);
         CHECK(!pc5_exists(file), "no .pc5part left");
-        CHECK(pc5_files_conflicts(sources, 2, b) == 2, "both names are in b now");
+        CHECK(pc5_files_conflicts(sources, 2, b, 1) == 2, "both names are in b now");
+        CHECK(pc5_files_conflicts(sources, 2, a, 1) == 2 && pc5_files_conflicts(sources, 2, a, 0) == 0,
+              "in their own folder: names taken for a copy, nothing for a move");
 
         /* Skip: nothing changes */
         path(file, sizeof(file), "%s/readme.txt", b); write_text(file, "mine");
@@ -5978,6 +5992,257 @@ static void test_files(void)
     }
 }
 
+/* The file manager's screens: Settings › File manager's places, a folder, ticking, Copy and
+ * Paste (with a name taken: Keep both), Rename, New folder, Delete, Cut and Paste, a read-only
+ * place, Stop; and a game's own folder from its menu. */
+static void files_wait(Pc5Ui *ui, Pc5Canvas *canvas)
+{
+    frames(ui, 0, 0, 30, canvas);   /* past the dialogs' early-press guard */
+}
+
+static void until_not(Pc5Ui *ui, const char *name, Pc5Canvas *canvas)
+{
+    for (int i = 0; i < 20000 && !strcmp(pc5_ui_screen(ui), name); i++) frames(ui, 0, 0, 1, canvas);
+}
+
+static void test_files_screens(const char *fonts)
+{
+    FakeConsole console = { 0 };
+    FakeNet net = { 0 };
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
+                             NULL, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
+    const char *roots[] = { usb, NULL };
+    char usb0[PC5_PATH], ext0[PC5_PATH], file[PC5_PATH];
+    path(usb0, sizeof(usb0), "%s/fm/usb0", work);
+    path(ext0, sizeof(ext0), "%s/fm/ext0", work);
+    path(file, sizeof(file), "rm -rf '%s/fm'", work);
+    run(file);
+    path(file, sizeof(file), "%s/Mods/a.txt", usb0); write_text(file, "mod");
+    path(file, sizeof(file), "%s/readme.txt", usb0); write_text(file, "hello");
+    pc5_mkdirs(ext0);
+    const char *drives[] = { usb0, ext0, NULL };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, drives, NULL, NULL, 0, 0 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
+    {
+        /* asked a minute ago: no update question as it opens */
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        memory.checked = fake_time(NULL, NULL) - 60;
+        memory.last.state = PC5_UPDATE_CURRENT;
+        pc5_update_save(root, &memory);
+    }
+    Pc5Ui *ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "library", &canvas);
+    for (int i = 0; i < 5 && strcmp(pc5_ui_screen(ui), "library"); i++) { press(ui, PC5_KEY_ACCEPT, &canvas); until_screen(ui, "library", &canvas); }
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "the library: %s", pc5_ui_screen(ui));
+
+    press(ui, PC5_KEY_OPTIONS, &canvas);
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "settings-file-manager");
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* File manager, between Overlay and System */
+    CHECK(!strcmp(pc5_ui_screen(ui), "files"), "Settings › File manager: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-places");
+    CHECK(!cuts_after(ui, 0, &canvas), "the places: no text cut short");
+
+    /* USB drive 1: Mods and readme.txt, both ticked and copied */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_SQUARE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_SQUARE, &canvas);
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-folder");
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files-menu"), "Triangle: what can be done: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-menu");
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Copy */
+    CHECK(!strcmp(pc5_ui_screen(ui), "files"), "copied: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_BACK, &canvas);        /* the places */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Extended storage 1, empty */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Paste, its first row */
+    until_not(ui, "files-working", &canvas);
+    path(file, sizeof(file), "%s/Mods/a.txt", ext0);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files") && read_is(file, "mod"), "pasted: %s", pc5_ui_screen(ui));
+    path(file, sizeof(file), "%s/readme.txt", ext0);
+    CHECK(read_is(file, "hello"), "both");
+
+    /* Paste again: the names are taken; Keep both */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 2; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Copy, Cut, Paste */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files-conflict"), "the names are taken: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-conflict");
+    press(ui, PC5_KEY_RIGHT, &canvas);       /* Keep both */
+    files_wait(ui, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_not(ui, "files-working", &canvas);
+    path(file, sizeof(file), "%s/readme (2).txt", ext0);
+    CHECK(read_is(file, "hello"), "Keep both: readme (2).txt");
+    path(file, sizeof(file), "%s/Mods (2)/a.txt", ext0);
+    CHECK(read_is(file, "mod"), "and Mods (2)");
+
+    /* Rename readme.txt, the last row (Mods, Mods (2), readme (2).txt, readme.txt) */
+    for (int i = 0; i < 6; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Copy, Cut, Paste, Rename */
+    console.typed = "notes.txt";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    path(file, sizeof(file), "%s/notes.txt", ext0);
+    CHECK(!strcmp(console.keyboard_title, "Rename") && !strcmp(console.keyboard_start, "readme.txt") && read_is(file, "hello"),
+          "renamed: %s %s", console.keyboard_title, console.keyboard_start);
+    path(file, sizeof(file), "%s/readme.txt", ext0);
+    CHECK(!pc5_exists(file) && !strcmp(pc5_ui_screen(ui), "files"), "the old name is gone: %s", pc5_ui_screen(ui));
+
+    /* New folder, then a name exFAT refuses */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* ... Rename, New folder */
+    console.typed = "Saves";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    path(file, sizeof(file), "%s/Saves", ext0);
+    CHECK(!strcmp(console.keyboard_title, "New folder") && pc5_is_dir(file), "a new folder: %s", console.keyboard_title);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    console.typed = "a:b";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "message"), "a name with ':' refused: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files"), "back to the folder: %s", pc5_ui_screen(ui));
+    console.typed = NULL;
+
+    /* Delete Mods (2): Cancel first, then Delete (Mods, Mods (2), Saves, notes.txt, readme (2).txt) */
+    for (int i = 0; i < 10; i++) press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* ... New folder, Delete */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files-delete"), "Delete asks: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-delete");
+    files_wait(ui, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Cancel */
+    path(file, sizeof(file), "%s/Mods (2)", ext0);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files") && pc5_is_dir(file), "Cancel keeps it");
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_RIGHT, &canvas);
+    files_wait(ui, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_not(ui, "files-working", &canvas);
+    CHECK(!pc5_exists(file) && !strcmp(pc5_ui_screen(ui), "files"), "deleted: %s", pc5_ui_screen(ui));
+
+    /* Cut notes.txt (Mods, Saves, notes.txt, readme (2).txt) and paste it on USB drive 1 */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Cut */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* USB drive 1 */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Copy, Cut, Paste */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_not(ui, "files-working", &canvas);
+    path(file, sizeof(file), "%s/notes.txt", usb0);
+    CHECK(read_is(file, "hello"), "moved here");
+    path(file, sizeof(file), "%s/notes.txt", ext0);
+    CHECK(!pc5_exists(file), "and gone from there");
+
+    /* Stop, part way through a big copy: nothing half copied is left */
+    {
+        char big[PC5_PATH];
+        path(big, sizeof(big), "%s/big.bin", usb0);
+        uint8_t *bytes = pc5_alloc(256u << 20);
+        if (bytes) pc5_write_file(big, bytes, 256u << 20);
+        pc5_free(bytes);
+        press(ui, PC5_KEY_BACK, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);  /* USB drive 1 again: big.bin is the first file */
+        for (int i = 0; i < 10; i++) press(ui, PC5_KEY_UP, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);    /* Mods, big.bin */
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);  /* Copy */
+        press(ui, PC5_KEY_BACK, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);  /* Extended storage 1 */
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);    /* Copy, Cut, Paste */
+        frames(ui, 0, PC5_KEY_ACCEPT, 1, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "files-working"), "copying: %s", pc5_ui_screen(ui));
+        frames(ui, 0, 0, 2, &canvas);
+        pc5_ui_draw(ui, &canvas);
+        save_shot(&canvas, "files-working");
+        frames(ui, 0, PC5_KEY_BACK, 1, &canvas);
+        until_not(ui, "files-working", &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Stopped: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        path(file, sizeof(file), "%s/big.bin", ext0);
+        CHECK(!pc5_exists(file), "no half file");
+        path(file, sizeof(file), "%s/big.bin.pc5part", ext0);
+        CHECK(!pc5_exists(file), "and no .pc5part");
+        unlink(big);
+    }
+
+    /* The whole console is read-only: Triangle has Copy and Tick all only */
+    press(ui, PC5_KEY_BACK, &canvas);
+    for (int i = 0; i < 10; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Whole console, the last */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-read-only");
+    int cuts = files_cut_lines;
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* the second row: Tick all */
+    CHECK(!strcmp(pc5_ui_screen(ui), "files") && files_cut_lines == cuts && cuts == 1,
+          "read-only: the second row is Tick all, not Cut: %s %d %d", pc5_ui_screen(ui), cuts, files_cut_lines);
+    for (int i = 0; i < 2; i++) press(ui, PC5_KEY_BACK, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "Back to Settings: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_BACK, &canvas);
+
+    /* A game's own folder, from its menu: Manage › Game files; Back from its top leaves it */
+    {
+        Pc5Library library;
+        int g = -1;
+        pc5_library_load(root, &library);
+        for (int i = 0; i < library.count && g < 0; i++)
+            if (library.games[i].pc5) g = i;
+        CHECK(g >= 0, "a game PC5 installed");
+        if (g >= 0) {
+            char folder[PC5_PATH];
+            pc5_game_folder(root, library.games[g].id, folder, sizeof(folder));
+            path(file, sizeof(file), "%s/mod.ini", folder);
+            write_text(file, "x");
+            for (int i = 0; i < 10; i++) press(ui, PC5_KEY_LEFT, &canvas);
+            for (int i = 0; i < g; i++) press(ui, PC5_KEY_RIGHT, &canvas);
+            press(ui, PC5_KEY_TRIANGLE, &canvas);
+            for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Manage, the last row */
+            press(ui, PC5_KEY_ACCEPT, &canvas);
+            press(ui, PC5_KEY_DOWN, &canvas);    /* Game files, after Change program */
+            press(ui, PC5_KEY_ACCEPT, &canvas);
+            CHECK(!strcmp(pc5_ui_screen(ui), "files"), "Game files: %s", pc5_ui_screen(ui));
+            pc5_ui_draw(ui, &canvas);
+            save_shot(&canvas, "files-game");
+            /* delete mod.ini: it is in the list */
+            for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);
+            press(ui, PC5_KEY_BACK, &canvas);
+            CHECK(!strcmp(pc5_ui_screen(ui), "game-menu"), "Back from its folder: its menu: %s", pc5_ui_screen(ui));
+            unlink(file);
+        }
+    }
+    pc5_ui_destroy(ui);
+    pc5_free(canvas.px);
+}
+
 int main(int argc, char **argv)
 {
     char fonts[PC5_PATH];
@@ -6027,6 +6292,7 @@ int main(int argc, char **argv)
     test_report(fonts);
     test_upgrade_screens(fonts);
     test_background_screen(fonts);
+    test_files_screens(fonts);
     printf("test_pc5: %d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

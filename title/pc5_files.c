@@ -136,15 +136,47 @@ static const char *base_name(const char *path)
     return slash && slash[1] ? slash + 1 : path;
 }
 
-int pc5_files_conflicts(const char *const *sources, int count, const char *dest)
+int pc5_files_conflicts(const char *const *sources, int count, const char *dest, int with_self)
 {
     int n = 0;
     for (int i = 0; i < count; i++) {
         char target[PC5_PATH];
-        struct stat st;
-        if (!pc5_join(target, sizeof(target), dest, base_name(sources[i])) && !lstat(target, &st)) n++;
+        struct stat st, self;
+        if (pc5_join(target, sizeof(target), dest, base_name(sources[i])) || lstat(target, &st)) continue;
+        if (!with_self && !lstat(sources[i], &self) && self.st_dev == st.st_dev && self.st_ino == st.st_ino) continue;
+        n++;
     }
     return n;
+}
+
+static void measure(const char *path, Pc5FilesSize *size, uint64_t until, int depth)
+{
+    struct stat st;
+    if (size->partial || lstat(path, &st)) return;
+    if (!S_ISDIR(st.st_mode)) {
+        size->files++;
+        size->bytes += (uint64_t)st.st_size;
+        return;
+    }
+    size->folders++;
+    if (depth > DEPTH || pc5_now_ms() >= until) { size->partial = 1; return; }
+    DIR *dir = opendir(path);
+    struct dirent *entry;
+    if (!dir) return;
+    while ((entry = readdir(dir)) && !size->partial) {
+        char child[PC5_PATH];
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..") || pc5_join(child, sizeof(child), path, entry->d_name))
+            continue;
+        measure(child, size, until, depth + 1);
+    }
+    closedir(dir);
+}
+
+void pc5_files_measure(const char *const *paths, int count, Pc5FilesSize *size, int budget_ms)
+{
+    uint64_t until = pc5_now_ms() + (uint64_t)(budget_ms > 0 ? budget_ms : 1);
+    memset(size, 0, sizeof(*size));
+    for (int i = 0; i < count; i++) measure(paths[i], size, until, 0);
 }
 
 /* ---- the work ---------------------------------------------------------------------------- */
