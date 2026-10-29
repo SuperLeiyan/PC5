@@ -47,23 +47,21 @@ the game and restarts itself into it.
 
 1. **Pick a free ID** in `PPSA99200`–`PPSA99899`, for example `PPSA99437` (`psfwd_new_title_id`, unchanged).
 2. **Find PC5's installed folder** on the console's disks (`/data/homebrew/PPSA11018`, or a USB drive), as the updater does (`pc5_upgrade_find`). Refuse with a clear message if there are two copies.
-3. **Copy it into `/data/homebrew/.staging-PPSA99437/`.** The staging name means ShadowMountPlus never sees a half-made tile.
-   - The copy runs file by file, with a progress screen. It is about 1.1 GB: Wine 437 MB, the Windows template 363 MB, Mono 219 MB, Mesa Zink 41 MB.
-   - Skip `pc5/forwarder/`, `pc5/sounds/` and anything else only PC5's screens use.
-   - Mark `eboot.bin` and every `.prx` file executable (755), or the console refuses them.
+3. **Copy what the console starts into `/data/homebrew/.staging-PPSA99437/`:** `eboot.bin`, `sce_module/libc.prx` and `lapy.elf`, a few MB. The tile loads Wine and PC5's other files from PC5's installed folder, which `pc5-tile.json` names as `runtime` (work item 4; the full copy first planned was about 1.1 GB). The staging name means ShadowMountPlus never sees a half-made tile.
+   - Mark `eboot.bin` and `libc.prx` executable (755), or the console refuses them.
 4. **Patch the copy of `lapy.elf`** to `PPSA99437`. See "The Lapy patch".
 5. **Write the tile's identity:**
    - `sce_sys/param.json`: PC5's own, with `titleId: PPSA99437`, `conceptId: 99437`, `contentId: UP0000-PPSA99437_00-PC5TILE000000000` and `titleName` set to the game's name.
-   - `sce_sys/icon0.png`: from the game's cover (`pc5_home_icon`, unchanged).
-   - `pic0.dds` and `pic1.dds`: from the game's background, when it has one. Otherwise PC5's own.
-   - `pc5-tile.json`: `{"format": "pc5-tile/1", "game": "<game id>", "pc5": "1.9.6"}`.
+   - `sce_sys/icon0.png`: the game's tile picture, or one made from its cover (`pc5_home_picture`).
+   - `sce_sys/pic0.png`, `pic0.dds` and `pic1.dds`: from the game's background, when it has one. Otherwise PC5's own (work item 12).
+   - `pc5-tile.json`: `{"format": "pc5-tile/1", "game": "<game id>", "pc5": "<version>", "runtime": "/data/homebrew/PPSA11018"}`.
 6. **Publish it** by renaming the staging folder to `/data/homebrew/PPSA99437/`.
 7. **Tell the player** to quit PC5 so that ShadowMountPlus registers the tile, as now.
 
 ### Starting the game from the tile
 
 1. The console starts app `PPSA99437`, with the tile's folder as its `/app0`.
-2. **The eboot learns its own ID** from `/app0/sce_sys/param.json`, before `/data` is granted, while `/app0` is still visible. If that file can't be read, it uses the built-in `PPSA11018`. Every path built from the ID uses this value, including the sandbox runtime path `/mnt/sandbox/<ID>_00N/app0` (`find_sandbox_app0`). The log says which: `PW_WINE64 title id=PPSA99437 from=param.json built=PPSA11018`. *(prospero-win patch `0054`, done.)*
+2. **The eboot learns its own ID** from `/app0/sce_sys/param.json`, before `/data` is granted, while `/app0` is still visible. If that file can't be read, it uses the built-in `PPSA11018`. Every path built from the ID uses this value, including the sandbox runtime path `/mnt/sandbox/<ID>_00N/app0` (`find_sandbox_app0`). The log says which: `PW_WINE64 title id=PPSA99437 from=param.json built=PPSA11018`. *(prospero-win patch `0056`, done.)*
 3. **One Lapy run.** The eboot sends `/app0/lapy.elf`, the tile's patched copy, to elfldr on 9021. The helper checks the app ID (`PPSA99437`) and the process ID, grants `/data` and exits. *(Unchanged code.)*
 4. **It opens `/data/prospero-win`**, finds its runtime and loads the game list. *(Unchanged.)*
 5. **Tile mode.** `/app0/pc5-tile.json` exists, so the eboot:
@@ -86,7 +84,7 @@ If the game is missing, or preparing it fails, the tile opens PC5's screens with
 When the game quits, `exit_after` sends the title to `close_title_to_home` (patch `0053`).
 That function ends the title by its own app id, so it works for any ID unchanged.
 
-A tile has no touchpad + Options combo (patch `0057`): it is closed like any other app, from
+A tile has no touchpad + Options combo (patch `0059`): it is closed like any other app, from
 the PS button's menu or by quitting the game. Quitting it from the home screen ends the whole
 process at once, so the game gets no chance to save first. Games started from PC5's own screens
 keep the combo, which sends the game Alt+F4.
@@ -160,15 +158,15 @@ elfldr (`pw_lapy_elevation.c`); the SHA-256 pin is checked only at build time
 
 | # | What | Where | New or changed |
 |---|---|---|---|
-| 1 | The eboot reads its app ID at runtime from its own `param.json`. The sandbox path, the restart through the sandbox eboot and the log identity use it. (The Lapy helper finds the ID from the kernel itself, so the request needs no change.) **Done:** patch `0054`, host test `test_pw_title_id` | `native/wine64_main.c`, `native/pw_title_id.h` (header only, so `build_native.sh` is unchanged), `tests/test_pw_title_id.c`, as `patches/prospero-win/0054-…`; `tests/test.sh` runs the test | New patch |
-| 2 | Tile mode: read `pc5-tile.json`, go to game mode, prepare behind the loading screen, run Wine in the same process. **Done:** patch `0055` (`pc5_tile_mode` in `wine64_main.c`). It runs only on the tile's own start: no arguments, cycle 0 | `native/wine64_main.c`, as `patches/prospero-win/0055-…` | New patch |
+| 1 | The eboot reads its app ID at runtime from its own `param.json`. The sandbox path, the restart through the sandbox eboot and the log identity use it. (The Lapy helper finds the ID from the kernel itself, so the request needs no change.) **Done:** patch `0056`, host test `test_pw_title_id` | `native/wine64_main.c`, `native/pw_title_id.h` (header only, so `build_native.sh` is unchanged), `tests/test_pw_title_id.c`, as `patches/prospero-win/0056-…`; `tests/test.sh` runs the test | New patch |
+| 2 | Tile mode: read `pc5-tile.json`, go to game mode, prepare behind the loading screen, run Wine in the same process. **Done:** patch `0057` (`pc5_tile_mode` in `wine64_main.c`). It runs only on the tile's own start: no arguments, cycle 0 | `native/wine64_main.c`, as `patches/prospero-win/0057-…` | New patch |
 | 3 | `pc5_tile_read` and `pc5_tile_prepare_begin/step/end`: recover an interrupted remove, find the game, copy Mono, refresh the profile, remember it as last played, step by step. **Done:** `title/pc5_tile.c` and `test_tile` in `tests/test_pc5.c`. `S_LAUNCH` keeps its own copy of these steps for now, because it also shows dialogs between them; moving it onto `pc5_tile_prepare_step` is a later tidy-up | `title/pc5_tile.c`, `title/pc5_tile.h`, `tests/test_pc5.c`, `tests/test.sh` | New |
-| 4 | Making, finding and removing tiles. **Done, as a tile that runs from PC5's folder:** hard links turned out impossible (a title has no `link()`, and on the console a payload's `link()` on `/data` makes nothing: shsrv's `ln` printed no error and made no file). So `pc5_tile_make` copies only what the console starts, a few MB: `eboot.bin`, `sce_module/libc.prx`, a patched `lapy.elf`, `sce_sys/param.json` and `icon0.png`. Its `pc5-tile.json` names PC5's installed folder as `runtime`. Patch `0056` makes the eboot load Wine and PC5's files from there. The tile is staged as `.staging-<ID>` and renamed into place; `tile_of` recognises both kinds | `title/pc5_tile.c`, `title/pc5_home.c`, `title/pc5_ui.c`, `patches/prospero-win/0056-…`, `test_tile_make` | Changed |
+| 4 | Making, finding and removing tiles. **Done, as a tile that runs from PC5's folder:** hard links turned out impossible (a title has no `link()`, and on the console a payload's `link()` on `/data` makes nothing: shsrv's `ln` printed no error and made no file). So `pc5_tile_make` copies only what the console starts, a few MB: `eboot.bin`, `sce_module/libc.prx`, a patched `lapy.elf`, `sce_sys/param.json` and `icon0.png`. Its `pc5-tile.json` names PC5's installed folder as `runtime`. Patch `0058` makes the eboot load Wine and PC5's files from there. The tile is staged as `.staging-<ID>` and renamed into place; `tile_of` recognises both kinds | `title/pc5_tile.c`, `title/pc5_home.c`, `title/pc5_ui.c`, `patches/prospero-win/0058-…`, `test_tile_make` | Changed |
 | 5 | The Lapy patch. **Done, differently from planned:** PC5 finds the ID's five places in `lapy.elf` itself on the console (`pc5_tile_lapy_patch`, refusing anything else), and `tools/lapy-title.py` runs in `tools/build.sh` so a Lapy built differently fails the build. No offsets file is needed. The C code gives the same file as the one that passed test 1 (SHA-256 `42b949aa…`) | `title/pc5_tile.c`, `tools/lapy-title.py`, `tools/build.sh` | New |
 | 6 | Refresh tiles after a PC5 update. **Done:** as PC5 opens, `pc5_tile_refresh` gives every tile that runs from PC5's folder this PC5's `eboot.bin`, `libc.prx` and a re-patched `lapy.elf` whenever its program differs, or when PC5's folder moved. A tile's program and its runtime must match | `title/pc5_tile.c`, `title/pc5_ui.c` (`S_START`) | New |
 | 7 | Tests: tile layout, Lapy patching (good file, wrong file, wrong bytes), finding both kinds of tile, refresh on version change, `pc5_tile_prepare` | `tests/test_pc5.c`, `tests/test.sh` (the `lapy-title.py` check) | New |
 | 8 | Console checklist and wiki | `tests/PS5-CHECKLIST.md`, `wiki/Home-screen-tiles.md`, `wiki/Files-and-folders.md`, `wiki/Troubleshooting.md` | Changed |
-| 10 | No close combo in a tile. **Done:** patch `0057` counts touchpad + Options only when `exit_after` isn't set, so a game a tile started is closed like any app | `native/wine64_main.c`, as `patches/prospero-win/0057-…` | New patch |
+| 10 | No close combo in a tile. **Done:** patch `0059` counts touchpad + Options only when `exit_after` isn't set, so a game a tile started is closed like any app | `native/wine64_main.c`, as `patches/prospero-win/0059-…` | New patch |
 | 11 | A square tile picture: △ › Appearance › Tile picture. **Done:** the search asks Steam (to know the game), then only SteamGridDB's square grids (`dimensions=512x512,1024x1024`), so it needs the player's SteamGridDB key. The pick is kept as `prefixes/<p>/pc5/icon.bin` (512×512); "Made from its cover" deletes it. `pc5_home_picture` prefers it | `title/pc5_cover.c`, `title/pc5_image.c`, `title/pc5_home.c`, `title/pc5_ui.c`, `test_icon_search` | New |
 | 12 | Tile art from the game's pictures. **Done:** `pc5_tile_art` writes the tile's `icon0.png`, and from the game's background `pic0.png` (1920×1080) and `pic0.dds`/`pic1.dds` (3840×2160, BC7); with no background, PC5's own. It also writes the console's registered copies (`/user/appmeta/<ID>`, `/user/app/<ID>`). It runs when a tile is made, after any picture is saved, and in `pc5_tile_refresh` when a picture is newer than the tile's icon. The BC7 encoder moved from `tools/make-dds.c` into `title/pc5_dds.c` (the tool's output is byte-identical) | `title/pc5_tile.c`, `title/pc5_dds.c`, `tools/make-dds.c`, `test_tile_make`, `test_dds` | New |
 | 9 | Remove forwarder tiles once the new ones are proven: `pc5/forwarder/`, psfwd's launcher use, `src_forwarder` (keep psfwd's ID and `param.json` helpers, or replace them) | Several | Later |
@@ -187,12 +185,12 @@ to that ID.
    - `conceptId` to `99437`;
    - `contentId` to `UP0000-PPSA99437_00-PC5TILE000000000`;
    - `titleName` to `PC5 tile test`.
-3. Replace the copy's `lapy.elf` with `test-artifacts/lapy-PPSA99437.elf`. It was made from the 1.9.6 release's `lapy.elf` by `patch-lapy-title.py`, both in this folder (source SHA-256 `50342e63…`, patched `42b949aa…`).
+3. Replace the copy's `lapy.elf` with one patched to `PPSA99437` by hand, from the 1.9.6 release's `lapy.elf` (source SHA-256 `50342e63…`, patched `42b949aa…`). PC5 now makes this file itself when it makes a tile (`pc5_tile_lapy_patch`), byte for byte the same.
 4. Check that `eboot.bin` and the `.prx` files are still 755 after the upload.
 5. Go to the home screen and wait for ShadowMountPlus to register the tile, then start it.
 6. Copy `/data/prospero-win/logs/` off the console.
 
-**Results** (`test-artifacts/session-7.log`):
+**Results** (the tile's session log):
 
 | Question | Result | Log |
 |---|---|---|
@@ -205,9 +203,9 @@ The unpatched helper grants only `PPSA11018`, so it would have refused the tile.
 
 Both unknowns are answered. The design needs neither Lapy's resident service nor an upstream Lapy change.
 
-### Test 2: the same tile with patch 0054 (passed, 2026-10-29)
+### Test 2: the same tile with patch 0056 (passed, 2026-10-29)
 
-This test needs a PC5 build with patch `0054`: `tools/build.sh`, or Actions › Build. The patch
+This test needs a PC5 build with patch `0056`: `tools/build.sh`, or Actions › Build. The patch
 changes only prospero-win's `native/`, `tests/`, `Makefile` and allowlist, not its `tools/` or
 `wine/`. The Wine pieces therefore keep their keys, and only `title`, `package` and `app` rebuild.
 
@@ -225,10 +223,10 @@ Until tile mode exists, the tile shows the whole of PC5. Don't run an update or 
 from inside the tile during this test. The updater looks for PC5's own `PPSA11018` folder, and
 updating it from a copy is untested.
 
-**Results.** The build was Actions run 40846923000, at `e14034f`. The logs are in `test-artifacts/`:
-- `session-0.log`: the tile opening.
-- `log-2026-10-29_20-40_warriors-orochi-3-ude.zip`: PC5's kept log of the game session, with the game's own `LOG.txt`.
-- `session-3.log`: the tile after the game closed.
+**Results.** The build was based on PC5 1.9.6. The logs read were:
+- `session-0`: the tile opening.
+- the game log: PC5's kept log of the game session, with the game's own `LOG.txt`.
+- `session-3`: the tile after the game closed.
 
 | Expected | Result | Log |
 |---|---|---|
@@ -247,7 +245,7 @@ proven on the console. Tile mode (work items 2 and 3) is now written; test 3 che
 
 ### Test 3: tile mode (passed, 2026-10-29)
 
-This needs a build with patches `0054` and `0055`.
+This needs a build with patches `0056` and `0057`.
 
 1. Make the tile as in test 2 from the new build, with the patched `lapy.elf` and the edited `param.json`.
 2. Add `/data/homebrew/PPSA99437/pc5-tile.json`, naming a game id from `/data/prospero-win/profiles/` (the file name without `.profile`):
@@ -269,7 +267,7 @@ Expected:
 
 ### Test 4: a tile made by PC5 (passed, 2026-10-29)
 
-This needs a build with patches `0054`–`0056`. **PC5 itself must be that build:** install it as
+This needs a build with patches `0056`–`0058`. **PC5 itself must be that build:** install it as
 `/data/homebrew/PPSA11018`. Delete the hand-made `PPSA99437` tile first.
 
 1. In PC5, open a game's menu (△) › Appearance › Home screen tile.
@@ -283,11 +281,11 @@ This needs a build with patches `0054`–`0056`. **PC5 itself must be that build
 5. In PC5, turn the tile off again. The tile's folder is deleted, and PC5 still starts and runs games.
 
 **Result:** the tile was made by PC5, started its game straight away from PC5's folder, and
-behaved as expected (build at `4f48637`, Actions run 40874885332).
+behaved as expected (build based on PC5 1.9.6).
 
 ### Test 5: tile picture, tile art and no close combo (to do)
 
-This needs a build with patches `0054`–`0057` and the tile picture work, installed as
+This needs a build with patches `0056`–`0059` and the tile picture work, installed as
 `/data/homebrew/PPSA11018`. SteamGridDB's key must be in `api_keys.txt` (Covers on the wiki).
 
 1. In PC5, open a game that has a background. △ › Appearance › Tile picture. Expect only square pictures from SteamGridDB, and "Made from its cover" last. Pick one.
@@ -302,16 +300,14 @@ This needs a build with patches `0054`–`0057` and the tile picture work, insta
 
 PC5's build refused an eboot that calls `link()`, because a title doesn't get it. A one-shot
 payload sent through elfldr ran and replied, but its `link()` failed with "No such file or
-directory" (`test-artifacts/session-4.log`). shsrv's `ln` on `/data/homebrew` printed no error
+directory". shsrv's `ln` on `/data/homebrew` printed no error
 and made no file, and the file's link count stayed 1. Every file on `/data` shows as
 `rwxrwxrwx` with a 64 KiB block size, which looks like exFAT, a filesystem without links. Hard
 links aren't an option on this console.
 
 ## Costs and limits
 
-- **Disk:** about 1.1 GB per tile at first, on top of the game.
-  - The Windows template is used only to repair a prefix, and Mono only by .NET games; dropping them brings a tile to about 0.5 GB.
-  - Hard links on `/data` could bring it near zero. Both are later work, after the test.
+- **Disk:** a few MB per tile (its eboot, `libc.prx`, `lapy.elf` and `sce_sys/`), since a tile runs Wine and PC5's files from PC5's installed folder.
 - **elfldr is still needed**, because Lapy is loaded through it. The forwarder's launcher payload no longer is.
 - **ShadowMountPlus registers new tiles** only after the player quits PC5, as now.
 - **A tile runs the PC5 version it was last refreshed with.** A tile whose game breaks under a new PC5 could later be pinned, but not in the first version.
