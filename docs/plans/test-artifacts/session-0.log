@@ -1,0 +1,19 @@
+PW_REPORT/1 build=f151439bca5be52598d99fe5ef18092109ec23d5 profile=launcher cycle=0 pid=178 time=1793268420
+REC seq=1 t=16463.065618941 PW_WINE64 title id=PPSA99437 from=param.json built=PPSA11018
+REC seq=2 t=16463.069319819 PW_WINE64 hid preload libSceKeyboard id=0x106 status=0 handle=208
+REC seq=3 t=16463.072997443 PW_WINE64 hid preload libSceMouse id=0xa9 status=0 handle=209
+REC seq=4 t=16464.663767219 PW_WINE64 data_mount data_before=1 elevated_before=0 helper_completed=1 helper_errno=0 data_after=1 elevated_after=1 waited_ms=0 settled_ms=1000 root=/data/prospero-win
+REC seq=5 t=16464.663950123 PW_WINE64 library status=ok listed_by=1 scan_errno=0 entries=2 games=2 root=/data/prospero-win
+REC seq=6 t=16464.676855886 PW_WINE64 args argc=1 mode=launcher profile=- cycle=0 refused=0 tile=- exit_after=0
+REC seq=7 t=16464.676952349 PC5 start version=1.9.6 root=/data/prospero-win app=/mnt/sandbox/PPSA99437_000/app0 cycle=0 time_format=1 zone=570 summer=1 enter=1 locale=en_GB.UTF-8
+REC seq=8 t=16464.676987149 PC5 system firmware=13.00 firmware_version=0x13590001 reported=13.59 data_free=422.2GB version=1.9.6
+REC seq=9 t=16464.688682113 keyboard module=0xd0 init=0 open=0x1430700 user=309542613
+REC seq=10 t=16464.688761496 mouse module=0xd1 init=0 open=0x440700 merged=1 user=309542613
+REC seq=11 t=16464.688818027 PC5 devices pad=ok keyboard=ok
+REC seq=12 t=16464.688842564 PC5 system firmware=13.00 firmware_version=0x13590001 reported=13.59 data_free=422.2GB version=1.9.6
+REC seq=13 t=16464.688850903 PC5 controller reset light=0 triggers=0
+REC seq=14 t=16464.700416608 mouse record 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+REC seq=15 t=16464.720783785 PW_WINE64 the line before came 1 more times
+REC seq=16 t=16464.720786110 PC5 library games=2 leftovers=0
+REC seq=17 t=16464.738706349 PC5 screen=library
+REC seq=18 t=16464.770277514 mouse record 00000000000000000000000000000000000000000000000000000000000000000000000000000000
