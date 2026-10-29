@@ -896,7 +896,9 @@ static Pc5InstallPhase install_folder(const char *name, int cancel_after_copy_st
     do {
         phase = pc5_install_step(&install, 1);
         steps++;
-        if (cancel_after_copy_steps && phase == PC5_INSTALL_COPY && --cancel_after_copy_steps == 0) pc5_install_cancel(&install);
+        /* Copying and checking, a step after another: on a fast machine all of it may take only a step or two. */
+        if (cancel_after_copy_steps && (phase == PC5_INSTALL_COPY || phase == PC5_INSTALL_VERIFY) && --cancel_after_copy_steps == 0)
+            pc5_install_cancel(&install);
         /* The copy of level1.pak spoilt once it is whole and before it is read back. A step is
          * a millisecond's work and the files come in the order the drive lists them, so the
          * first step of checking may already have read it back: it is spoilt while the files
@@ -1343,7 +1345,7 @@ static void test_install(void)
     CHECK(install_folder("NeonDrift", 0, 0, id, sizeof(id)) == PC5_INSTALL_DONE && !strcmp(id, "neondrift-2"), "second: %s", id);
 
     /* Cancelled: nothing stays. */
-    CHECK(install_folder("NeonDrift", 3, 0, id, sizeof(id)) == PC5_INSTALL_CANCELLED, "cancel");
+    CHECK(install_folder("NeonDrift", 1, 0, id, sizeof(id)) == PC5_INSTALL_CANCELLED, "cancel");
     path(file, sizeof(file), "%s/profiles/%s.profile", root, id);
     CHECK(!pc5_exists(file), "no profile after cancel");
     CHECK(count_entries(prefixes, ".installing-") == 0, "no staging after cancel");
