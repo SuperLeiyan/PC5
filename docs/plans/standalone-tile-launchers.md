@@ -62,7 +62,7 @@ the game and restarts itself into it.
 ### Starting the game from the tile
 
 1. The console starts app `PPSA99437`, with the tile's folder as its `/app0`.
-2. **The eboot learns its own ID** from `/app0/sce_sys/param.json`. It falls back to `sceKernelGetAppInfo(getpid())` and then to the built-in `PPSA11018`. Every path built from the ID uses this value, including the sandbox runtime path `/mnt/sandbox/<ID>_00N/app0` (`find_sandbox_app0`). *(New prospero-win patch.)*
+2. **The eboot learns its own ID** from `/app0/sce_sys/param.json`, before `/data` is granted, while `/app0` is still visible. If that file can't be read, it uses the built-in `PPSA11018`. Every path built from the ID uses this value, including the sandbox runtime path `/mnt/sandbox/<ID>_00N/app0` (`find_sandbox_app0`). The log says which: `PW_WINE64 title id=PPSA99437 from=param.json built=PPSA11018`. *(prospero-win patch `0054`, done.)*
 3. **One Lapy run.** The eboot sends `/app0/lapy.elf`, the tile's patched copy, to elfldr on 9021. The helper checks the app ID (`PPSA99437`) and the process ID, grants `/data` and exits. *(Unchanged code.)*
 4. **It opens `/data/prospero-win`**, finds its runtime and loads the game list. *(Unchanged.)*
 5. **Tile mode.** `/app0/pc5-tile.json` exists, so the eboot:
@@ -155,7 +155,7 @@ elfldr (`pw_lapy_elevation.c`); the SHA-256 pin is checked only at build time
 
 | # | What | Where | New or changed |
 |---|---|---|---|
-| 1 | The eboot reads its app ID at runtime. Every path and the Lapy request use it | `native/wine64_main.c`, as a new patch in `patches/prospero-win/` | New patch |
+| 1 | The eboot reads its app ID at runtime from its own `param.json`. The sandbox path, the restart through the sandbox eboot and the log identity use it. (The Lapy helper finds the ID from the kernel itself, so the request needs no change.) **Done:** patch `0054`, host test `test_pw_title_id` | `native/wine64_main.c`, `native/pw_title_id.h` (header only, so `build_native.sh` is unchanged), `tests/test_pw_title_id.c`, as `patches/prospero-win/0054-…`; `tests/test.sh` runs the test | New patch |
 | 2 | Tile mode: read `pc5-tile.json`, go to game mode, prepare behind the loading screen, run Wine in the same process | The same patch, plus `title/pc5_tile.c` | New |
 | 3 | `pc5_tile_prepare(root, app, id)`: recover an interrupted remove, find the game, copy Mono, refresh the profile, remember it as last played. `S_LAUNCH` calls it too, so both paths stay the same | `title/pc5_tile.c`, `title/pc5_ui.c` | Moved out of `S_LAUNCH` |
 | 4 | Making, finding and removing tiles: copy the runtime, patch Lapy, write `sce_sys` and `pc5-tile.json`, stage and rename. `tile_of` recognises both kinds | `title/pc5_home.c`, `title/pc5_home.h`, `title/pc5_ui.c` (progress screen) | Changed |
@@ -165,11 +165,13 @@ elfldr (`pw_lapy_elevation.c`); the SHA-256 pin is checked only at build time
 | 8 | Console checklist and wiki | `tests/PS5-CHECKLIST.md`, `wiki/Home-screen-tiles.md`, `wiki/Files-and-folders.md`, `wiki/Troubleshooting.md` | Changed |
 | 9 | Remove forwarder tiles once the new ones are proven: `pc5/forwarder/`, psfwd's launcher use, `src_forwarder` (keep psfwd's ID and `param.json` helpers, or replace them) | Several | Later |
 
-## Console test before the work
+## Console tests
 
-This is one hand-made tile, no new code. It checks the two things nobody has published a
-result for: a patched `lapy.elf` granting `/data` to another ID, and PC5's eboot starting
-under another ID.
+### Test 1: a hand-made tile with PC5 1.9.6 (passed, 2026-10-29)
+
+This was one hand-made tile with no new code. It checked the two things nobody had published
+a result for: PC5's eboot starting under another ID, and a patched `lapy.elf` granting `/data`
+to that ID.
 
 1. Over FTP, copy `/data/homebrew/PPSA11018/` to `/data/homebrew/PPSA99437/`.
 2. In the copy's `sce_sys/param.json`, set:
@@ -177,22 +179,43 @@ under another ID.
    - `conceptId` to `99437`;
    - `contentId` to `UP0000-PPSA99437_00-PC5TILE000000000`;
    - `titleName` to `PC5 tile test`.
-3. Replace the copy's `lapy.elf` with one patched to `PPSA99437` (a script in this branch will make it).
+3. Replace the copy's `lapy.elf` with `test-artifacts/lapy-PPSA99437.elf`. It was made from the 1.9.6 release's `lapy.elf` by `patch-lapy-title.py`, both in this folder (source SHA-256 `50342e63…`, patched `42b949aa…`).
 4. Check that `eboot.bin` and the `.prx` files are still 755 after the upload.
 5. Go to the home screen and wait for ShadowMountPlus to register the tile, then start it.
 6. Copy `/data/prospero-win/logs/` off the console.
 
-Expected without work item 1:
-- The tile starts, so the console accepts PC5's eboot under another ID.
-- Lapy grants `/data`, so the patch works.
-- The eboot then can't find Wine under `/mnt/sandbox/PPSA11018_000/app0` and goes back to Home.
+**Results** (`test-artifacts/session-7.log`):
 
-If Lapy refuses, the log has a target mismatch, and the design needs Lapy's resident service
-or an upstream Lapy change instead.
+| Question | Result | Log |
+|---|---|---|
+| Does the console start PC5's eboot under another ID? | **Yes.** The tile started and opened the video, the controller, the keyboard and the mouse | `seq=9 launcher video=ok pad=ok hid=ok frame=1 apps=2` |
+| Does the patched `lapy.elf` grant `/data` to `PPSA99437`? | **Yes.** The helper completed with no error, the process was elevated, and it read both games from `/data/prospero-win` | `seq=3 data_mount … helper_completed=1 helper_errno=0 data_after=1 elevated_after=1`, `seq=4 library status=ok … games=2` |
+| What fails without work item 1? | **As predicted.** The eboot looked for its own files under the built-in ID's sandbox, `/mnt/sandbox/PPSA11018_00N/app0`, and didn't find PC5's files. It fell back to prospero-win's plain blue "Prospero Win" launcher, listing the 2 games, instead of PC5's screens | `seq=6 pc5 files missing from the app` |
 
-Evidence so far:
-- **The eboot runs under any ID.** The forwarder format's one prebuilt `eboot.bin` (built as `PPSA99100` with the same `ps5-native-app-boilerplate` as PC5's) runs in every tile under its own ID. prospero-win's signing step (`self --sign … --magic 0x1D3D154F`) takes no app ID.
-- **Lapy checks nothing else that depends on the ID.** Its README lists the process's private credential, one thread, private file table and prison state, none of which involve the ID.
+The unpatched helper grants only `PPSA11018`, so it would have refused the tile.
+`helper_completed=1` therefore also confirms that the tile ran as `PPSA99437`.
+
+Both unknowns are answered. The design needs neither Lapy's resident service nor an upstream Lapy change.
+
+### Test 2: the same tile with patch 0054 (to do)
+
+This test needs a PC5 build with patch `0054`: `tools/build.sh`, or Actions › Build. The patch
+changes only prospero-win's `native/`, `tests/`, `Makefile` and allowlist, not its `tools/` or
+`wine/`. The Wine pieces therefore keep their keys, and only `title`, `package` and `app` rebuild.
+
+1. Make the tile as in test 1, but copy the **new build's** app folder. Keep the patched `lapy.elf` and the edited `param.json`.
+2. Start the tile.
+
+Expected:
+- `PW_WINE64 title id=PPSA99437 from=param.json built=PPSA11018` near the start of the log.
+- No `pc5 files missing from the app`. PC5's own screens open, with your library.
+- A game started from those screens runs, because Wine is found under `/mnt/sandbox/PPSA99437_00N/app0`.
+- Closing it returns to PC5's screens inside the tile. Tile mode (work item 2) isn't there yet.
+- PC5 itself (`PPSA11018`) logs `PW_WINE64 title id=PPSA11018 from=param.json` and works as before.
+
+Until tile mode exists, the tile shows the whole of PC5. Don't run an update or install a game
+from inside the tile during this test. The updater looks for PC5's own `PPSA11018` folder, and
+updating it from a copy is untested.
 
 ## Costs and limits
 
