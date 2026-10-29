@@ -1,0 +1,12 @@
+PW_REPORT/1 build=7be0f7b698e29c6445e5d7f6ae612ff814f55870 profile=launcher cycle=0 pid=131 time=1793262280
+REC seq=1 t=10322.378603332 PW_WINE64 hid preload libSceKeyboard id=0x106 status=0 handle=208
+REC seq=2 t=10322.382359858 PW_WINE64 hid preload libSceMouse id=0xa9 status=0 handle=209
+REC seq=3 t=10323.896233981 PW_WINE64 data_mount data_before=1 elevated_before=0 helper_completed=1 helper_errno=0 data_after=1 elevated_after=1 waited_ms=0 settled_ms=1000 root=/data/prospero-win
+REC seq=4 t=10323.896452726 PW_WINE64 library status=ok listed_by=1 scan_errno=0 entries=2 games=2 root=/data/prospero-win
+REC seq=5 t=10323.910035656 PW_WINE64 args argc=1 mode=launcher profile=- cycle=0 refused=0 tile=- exit_after=0
+REC seq=6 t=10323.910108223 PW_WINE64 pc5 files missing from the app
+REC seq=7 t=10323.924549538 PW_WINE64 hid keyboard module=0xd0 init=0 open=0x11d0700 user=309542613
+REC seq=8 t=10323.924640308 PW_WINE64 hid mouse module=0xd1 init=0 open=0x1e0700 merged=1 user=309542613
+REC seq=9 t=10323.924643034 PW_WINE64 launcher video=ok pad=ok hid=ok frame=1 apps=2 cycle=0 refused=0 script=0
+REC seq=10 t=10323.924669335 PW_WINE64 hid mouse record 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+REC seq=11 t=10324.026264744 PW_WINE64 the line before came 2 more times
