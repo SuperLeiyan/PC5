@@ -45,7 +45,7 @@ typedef enum Screen {
     S_PROGRAMS, S_INSTALL, S_STOP, S_UNINSTALL_LIST, S_UNINSTALL_CONFIRM, S_REMOVING, S_MESSAGE, S_LAUNCH,
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
-    S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API
+    S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -54,7 +54,7 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "update", "checking", "game-menu", "game-reading", "queue-read", "queue",
                                             "buttons", "keys", "report", "upgrade-ask", "upgrading", "game-update-ask",
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
-                                            "compatibility", "graphics-api" };
+                                            "compatibility", "graphics-api", "report-check", "report-update" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;
@@ -2152,7 +2152,8 @@ static int system_row(const Pc5Ui *ui, SettingRow row)
 
 /* Asks GitHub (blocking, one request) and tells with the console's notification once per
  * release, but not when asked to be quiet: PC5 offers to install it at once, its window says
- * so (as each time the player opens PC5). 1 when the release has PC5's zip. */
+ * so (as each time the player opens PC5), nor ever when quiet_if_offered is 2 (a window says so
+ * whatever it offers). 1 when the release has PC5's zip. */
 static int update_check_now(Pc5Ui *ui, int quiet_if_offered)
 {
     Pc5Update update;
@@ -2163,7 +2164,7 @@ static int update_check_now(Pc5Ui *ui, int quiet_if_offered)
         update.asset_url[0] != 0, update.delta_url[0] != 0, update.delta_from[0] ? update.delta_from : "-",
         pc5_update_small(&update, PC5_VERSION));
     int offered = update.state == PC5_UPDATE_AVAILABLE && update.asset_url[0] && can_upgrade(ui);
-    if (offered && quiet_if_offered) {
+    if ((offered && quiet_if_offered) || (update.state == PC5_UPDATE_AVAILABLE && quiet_if_offered == 2)) {
         pc5_copy(ui->update.told, sizeof(ui->update.told), update.version);
     } else if (update.state == PC5_UPDATE_AVAILABLE && strcmp(ui->update.told, update.version)) {
         char text[200];
@@ -2238,6 +2239,29 @@ static void report_open(Pc5Ui *ui)
         ui->report_url[0] = 0;
     say(ui, "PC5 report log=%s link=%zu qr=%d", pc5_report_file(&ui->report), strlen(ui->report_url), ui->report_qr.size);
     go(ui, S_REPORT);
+}
+
+/* A newer PC5 than this one is known to be out. */
+static int newer_known(const Pc5Ui *ui)
+{
+    return ui->update.last.state == PC5_UPDATE_AVAILABLE && pc5_version_compare(ui->update.last.version, PC5_VERSION) > 0;
+}
+
+/* Triangle on a kept log's message: a newer PC5 may have fixed it, so when one is out PC5
+ * offers it first (S_REPORT_UPDATE). It asks GitHub (S_REPORT_CHECK) unless it did in the
+ * last hour; with no answer, the report opens as before. */
+static void report_begin(Pc5Ui *ui)
+{
+    int64_t now = unix_now(ui, NULL);
+    int fresh = now > 0 && ui->update.checked && now >= ui->update.checked && now - ui->update.checked < PC5_UPDATE_EVERY_S;
+    if (newer_known(ui)) {
+        ui->button = 0;
+        go(ui, S_REPORT_UPDATE);
+    } else if (fresh && ui->update.last.state == PC5_UPDATE_CURRENT) {
+        report_open(ui);
+    } else {
+        go(ui, S_REPORT_CHECK);
+    }
 }
 
 /* From the start screens to the library, telling first what went wrong last time. */
@@ -3081,7 +3105,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_MESSAGE:
         if (ui->message_report && (k & PC5_KEY_TRIANGLE)) {
-            report_open(ui);
+            report_begin(ui);
             break;
         }
         if (k & (accept | back)) {
@@ -3091,6 +3115,28 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_REPORT:
         if (k & (accept | back)) go(ui, S_MESSAGE);
+        break;
+    case S_REPORT_CHECK:
+        if (!ui->drawn) break;
+        update_check_now(ui, 2);
+        say(ui, "PC5 report update check newer=%d", newer_known(ui));
+        if (newer_known(ui)) {
+            ui->button = 0;
+            go(ui, S_REPORT_UPDATE);
+        } else {
+            report_open(ui);
+        }
+        break;
+    case S_REPORT_UPDATE:
+        /* Update now (when PC5 can update itself here) or Back, and Report anyway. */
+        if (k & (PC5_KEY_LEFT | PC5_KEY_RIGHT)) { ui->button = !ui->button; ui->dirty = 1; }
+        if (k & back) go(ui, S_MESSAGE);
+        else if ((k & accept) && ui->now - ui->entered > 300) {
+            say(ui, "PC5 report update choice=%s", ui->button ? "report" : offer_update(ui) ? "update" : "back");
+            if (ui->button) report_open(ui);
+            else if (offer_update(ui)) upgrade_begin(ui, S_MESSAGE);
+            else go(ui, S_MESSAGE);
+        }
         break;
     case S_LAUNCH:
         if (!ui->drawn) break;
@@ -4770,6 +4816,22 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         break;
     case S_MESSAGE: message_dialog(ui, c); break;
     case S_REPORT: library_screen(ui, c); report_screen(ui, c); break;
+    case S_REPORT_CHECK: message_dialog(ui, c); busy_dialog(ui, c, "Checking for a newer PC5", "A newer one may have fixed it", 0); break;
+    case S_REPORT_UPDATE: {
+        char title[120], body[500], how[200];
+        snprintf(title, sizeof(title), "Update to PC5 %s first?", ui->update.last.version);
+        if (offer_update(ui)) {
+            update_how(ui, how, sizeof(how));
+            snprintf(body, sizeof(body), "This problem may already be fixed in it. Update, try the game again, and report it "
+                     "if it still happens. %s.", how);
+        } else {
+            snprintf(body, sizeof(body), "You have %s. This problem may already be fixed in the newer one: install it from "
+                     "ProsperoStore or GitHub, try the game again, and report it if it still happens.", PC5_VERSION);
+        }
+        message_dialog(ui, c);
+        confirm_dialog(ui, c, title, body, offer_update(ui) ? "Update now" : "Back", "Report anyway", 0, NULL);
+        break;
+    }
     case S_LAUNCH: {
         int index = pc5_library_find(&ui->library, ui->launch_id);
         snprintf(line, sizeof(line), "Starting %s", index >= 0 ? ui->library.games[index].title : "the game");

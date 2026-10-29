@@ -388,3 +388,12 @@ controller's speaker.
 | 186 | Touhou 12.3 (th123.exe) on Auto | it starts past where it stopped with 0xe06d7363 | no `out of memory for allocation … size baa50000` |
 | 187 | A Godot game installed before 1.9.8 (MegaMan X Regenesis) | △ shows OpenGL; it starts with Mesa Zink | `zink provider=ok`, `prefixes/<game>/pc5/godot.txt` says godot |
 | 188 | Any other game after 1.9.8 | as before | `godot.txt` says other |
+
+## Report after updating (next)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 189 | A crash message with a newer PC5 out: △ | "Update to PC5 x.y.z first?", Update now / Report anyway; no console notification | `PC5 report update check newer=1` (or no check line when PC5 asked in the last hour) |
+| 190 | Report anyway | the QR code, as before | `PC5 report update choice=report`, `PC5 report log=` |
+| 191 | Update now | PC5 updates and restarts | `PC5 report update choice=update`, `PC5 update start` |
+| 192 | The newest PC5, or offline: △ | the QR code straight away | `newer=0` |

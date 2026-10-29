@@ -69,6 +69,8 @@ In that message, press **△**. PC5 shows a QR code: scan it with your phone, an
 
 The QR code only opens the form: nothing is sent until you submit it, and the log goes only if you attach it.
 
+When a newer PC5 is out, **△** first offers it: the problem may already be fixed in it. **Update now** updates PC5 (or **Back**, where PC5 can't update itself), and **Report anyway** shows the QR code. PC5 asks GitHub for the newest version then, unless it asked in the last hour; when GitHub doesn't answer, the QR code shows straight away.
+
 ### When there is no message
 
 - **The game froze, or you had to restart the console.** Attach that game's newest `log-…` (or `issue-…`) zip: it holds the session up to a few seconds before it stopped. Its `about.txt` says the log has no end line. Don't play the game again before copying it, as that replaces it.

@@ -5538,7 +5538,13 @@ static void test_report(const char *fonts)
              "starting debugger...\nREC seq=2 t=2.0 PW_WINE64 session_end reason=wine-exit\n", library.games[0].id);
     path(file, sizeof(file), "%s/session-0.log", logs);
     write_text(file, text);
+    Pc5UpdateMemory before;
+    pc5_update_load(root, &before);
     {
+        /* Not asked yet, and GitHub doesn't answer: Triangle asks, then reports. */
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        pc5_update_save(root, &memory);
         Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         until_screen(ui, "message", &canvas);
@@ -5551,6 +5557,41 @@ static void test_report(const char *fonts)
         CHECK(!strcmp(pc5_ui_screen(ui), "library"), "then the library: %s", pc5_ui_screen(ui));
         pc5_ui_destroy(ui);
     }
+    {
+        /* A newer PC5 is out (asked a minute ago): Triangle offers it first; Report anyway reports. */
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        memory.checked = fake_time(NULL, NULL) - 60;
+        memory.last.state = PC5_UPDATE_AVAILABLE;
+        pc5_copy(memory.last.version, sizeof(memory.last.version), "99.0.0");
+        pc5_update_save(root, &memory);
+        path(file, sizeof(file), "%s/next.txt", logs);
+        write_text(file, "3\n");
+        path(file, sizeof(file), "%s/session-0.log", logs);
+        write_text(file, text);
+        Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
+        console.notifications = 0;
+        Pc5Ui *ui = pc5_ui_create(&config, &platform);
+        until_screen(ui, "message", &canvas);
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "report-update") && !console.notifications, "Triangle: update first: %s %d",
+              pc5_ui_screen(ui), console.notifications);
+        pc5_ui_draw(ui, &canvas);
+        save_shot(&canvas, "report-update");
+        press(ui, PC5_KEY_BACK, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Back: the message: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        frames(ui, 0, 0, 25, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Back (PC5 can't update itself here): the message: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        press(ui, PC5_KEY_RIGHT, &canvas);
+        frames(ui, 0, 0, 25, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "report"), "Report anyway: Report on GitHub: %s", pc5_ui_screen(ui));
+        pc5_ui_destroy(ui);
+    }
+    pc5_update_save(root, &before);
     CHECK(!pc5_logs_newest(root, library.games[0].id, kept, sizeof(kept)) && pc5_ends_with_ci(kept, ".zip"), "kept: %s", kept);
     unlink(kept);
     pc5_free(canvas.px);
