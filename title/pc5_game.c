@@ -481,15 +481,16 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
     /* Frame generation and the aspect ratio, which libvulkan.prx reads from the
      * environment (the picture of a game drawn on the CPU follows its profile's
      * scaling), a 32-bit game's address space, which Wine does (patch 0921:
-     * 4 GB unless PW_LARGE_ADDRESS_AWARE=0), and CPU sharing, which Wine's server
+     * 4 GB for any program unless PW_LARGE_ADDRESS_AWARE=0, which Auto sets: then only for one
+     * whose large-address flag asks for it, as on Windows), and CPU sharing, which Wine's server
      * reads (patch 0882, WINE_PS5_SCHED=1; the profile says it too, but PC5 writes
      * only the profiles of the games it installed). */
-    int memory_2gb = 0, stretch = 0, cpu_sharing = 0;
+    int memory_4gb = 0, stretch = 0, cpu_sharing = 0;
     if (prefix && prefix[0]) {
         Pc5Controls controls;
         pc5_controls_load(root, prefix, &controls);
         game->frame_generation = controls.frame_generation;
-        memory_2gb = controls.memory_2gb;
+        memory_4gb = controls.memory_4gb;
         stretch = controls.stretch;
         cpu_sharing = controls.cpu_sharing;
     }
@@ -509,8 +510,8 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
         unsetenv("PW_HANDOFF");
         unsetenv("PW_HANDOFF_DIR");
     }
-    if (memory_2gb) setenv("PW_LARGE_ADDRESS_AWARE", "0", 1);
-    else unsetenv("PW_LARGE_ADDRESS_AWARE");
+    if (memory_4gb) unsetenv("PW_LARGE_ADDRESS_AWARE");
+    else setenv("PW_LARGE_ADDRESS_AWARE", "0", 1);
     if (cpu_sharing) setenv("WINE_PS5_SCHED", "1", 1);
     else unsetenv("WINE_PS5_SCHED");
     /* A Java game's launcher made with jpackage: its app folder in PATH from the start, which
@@ -527,7 +528,7 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
         game->settings.fps,
         pc5_game_overlay_lines(&game->settings), (int)game->settings.fps_corner, game->settings.vibration,
         (int)game->settings.light_bar, (int)game->settings.triggers, game->settings.trigger_rumble,
-        game->settings.trigger_resistance, (unsigned)game->cover_tint, game->frame_generation, memory_2gb ? "2gb" : "4gb",
+        game->settings.trigger_resistance, (unsigned)game->cover_tint, game->frame_generation, memory_4gb ? "4gb" : "auto",
         stretch ? "stretch" : "keep", cpu_sharing);
 }
 

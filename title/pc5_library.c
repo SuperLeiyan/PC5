@@ -535,6 +535,24 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
                 pc5_write_file(path, text, strlen(text));
         }
     }
+    /* A Godot game installed before 1.9.8 as drawing with Direct3D (what its program imports):
+     * OpenGL, kept in its notes. Its program is read once (pc5/godot.txt says it was). */
+    if (info.api != PC5_API_OPENGL && info.api != PC5_API_DDRAW &&
+        !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/godot.txt", root, id) && !pc5_exists(path)) {
+        char marker[PC5_PATH];
+        int godot = 0;
+        pc5_copy(marker, sizeof(marker), path);
+        if (!pc5_format(path, sizeof(path), "%s/prefixes/%s/drive_c/Games/%s/%s", root, id, info.folder, program.exe) &&
+            (godot = pc5_pe_godot(path))) {
+            info.api = program.api = PC5_API_OPENGL;
+            if (!pc5_info_text(&info, text, sizeof(text)) &&
+                !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/info.txt", root, id))
+                pc5_write_file(path, text, strlen(text));
+        }
+        const char *note = godot ? "# PC5 read the game's program: a Godot game, so it draws with OpenGL\ngodot\n"
+                                 : "# PC5 read the game's program: not a Godot game\nother\n";
+        pc5_write_file(marker, note, strlen(note));
+    }
     /* A Java game installed before 1.8.2 as drawing with Windows itself (or what its runtime's
      * libraries import): neither its program nor the libraries beside it import anything to
      * draw with, and a Java runtime is beside it, so it draws with OpenGL (pc5_folder_api),
@@ -661,7 +679,8 @@ static void handed_program(const char *path, const char *dir, Pc5Info *program)
 
     if (pc5_pe_read(path, &pe) || pe.dll) return;
     if (pe.bits == 32 || pe.bits == 64) program->bits = pe.bits;
-    if ((drawing = pe.imports & PC5_IMPORT_DRAWING) || (drawing = pc5_pe_named_libraries(path) & PC5_IMPORT_DRAWING) ||
+    if (pc5_pe_godot(path)) program->api = PC5_API_OPENGL;   /* a Godot game: OpenGL, whatever it imports */
+    else if ((drawing = pe.imports & PC5_IMPORT_DRAWING) || (drawing = pc5_pe_named_libraries(path) & PC5_IMPORT_DRAWING) ||
         (dir[0] && (drawing = pc5_dll_imports_in(dir) & PC5_IMPORT_DRAWING)))
         program->api = pc5_api_from_imports(pc5_pe_unreal_d3d12(path, drawing) ? drawing | PC5_IMPORT_D3D12 : drawing);
     else if (dir[0] && pc5_java_beside(dir))

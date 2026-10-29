@@ -88,7 +88,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Frame generation | **Off** (the default) or **30 → 60 fps**. See [Frame generation](#frame-generation) below. |
 | Resolution | Only for games drawn with Direct3D, Vulkan or OpenGL: **1080p** (the default), **1440p** or **4K**. See [Resolution](#resolution) below. |
 | Aspect ratio | **Keep** (the default) or **Stretch**. See [Aspect ratio](#aspect-ratio) below. |
-| Memory | Only for 32-bit games: **4 GB** (the default since 1.4.0) or **2 GB**. A 32-bit game gets 4 GB of address space, room for big textures and mods. Set 2 GB for a game that misbehaves with it. |
+| Memory | Only for 32-bit games: **Auto** (the default from 1.9.8) or **4 GB**. Auto is as on Windows: a game made for more memory (its program says so) gets 4 GB of address space, any other gets 2 GB. 4 GB gives every game 4 GB, room for big textures and mods, but an older game not made for it can crash with it. From 1.4.0 to 1.9.7 every game had 4 GB; a game left as it was is Auto from 1.9.8. |
 | CPU sharing | **Off** (the default) or **On**. The console runs each of a game's threads on a CPU of its own until it waits, where Windows lets them take turns, so a game that keeps more threads busy than its 13 CPUs can stop for seconds at a time and carry on after a while, or after the PS button. **On** gives the game's threads turns, as on a PC. It applies the next time the game starts. |
 
 ### Appearance

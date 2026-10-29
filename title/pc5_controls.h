@@ -58,7 +58,11 @@ typedef struct Pc5Controls {
     int speed;                    /* 1..PC5_SPEEDS */
     uint8_t key[PC5_CONTROLS];    /* an index into pc5_keys */
     int frame_generation;         /* 1: the game held at 30 fps, shown at 60 (libvulkan.prx's frame generation) */
-    int memory_2gb;               /* 1: a 32-bit game keeps 2 GB of address space, not the 4 GB it gets */
+    /* A 32-bit game's address space. 0, Auto (the default from 1.9.8): as on Windows, 4 GB for a
+     * program made for it (its large-address flag), 2 GB for one that isn't, which may take an
+     * address above 2 GB for a negative number or size what it asks for by the room it sees.
+     * 1: 4 GB for any, room for big textures and mods (the default from 1.4.0 to 1.9.7). */
+    int memory_4gb;
     int resolution;               /* 0: 1920x1080, 1: 2560x1440, 2: 3840x2160 (games drawn through Vulkan) */
     int stretch;                  /* 1: the picture stretched to fill the 16:9 screen, 0: its own shape */
     int cpu_sharing;              /* 1: the game's threads take turns on the CPUs, as on a PC (prospero-win's

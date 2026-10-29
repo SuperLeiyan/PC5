@@ -105,7 +105,7 @@ With ShadowMountPlus and elfldr running.
 | 41 | A game that checks for enough memory (one that said "minimum specs" or "not enough memory") | no memory warning | |
 | 42 | A 64-bit game that crashed with `map_view anon mmap error Cannot allocate memory` | it goes on past that point | `wine-ps5: address space for programs grows by …`, no `anon mmap error` |
 | 43 | A 32-bit game without the large-address flag | it starts as before | `wine-ps5: a 32-bit program without the large-address flag: 4 GiB of address space…` |
-| 44 | △ on a 32-bit game › Memory to 2 GB, start it | it starts | `PC5 game … memory_32bit=2gb` and `…: 2 GiB of address space (PW_LARGE_ADDRESS_AWARE=0)` |
+| 44 | △ on a 32-bit game › Memory to 4 GB, start it, then back to Auto | it starts both times | `PC5 game … memory_32bit=4gb` and `…: 4 GiB of address space, as one with it`; on Auto `memory_32bit=auto` and, for a program without the flag, `…: 2 GiB of address space (PW_LARGE_ADDRESS_AWARE=0)` |
 | 45 | A game that starts hundreds of threads (one that logged `kqueue failed with error: 24`) | it goes on past that point | no `kqueue failed`; `wine-ps5: threads in the server's table: 256` and more, no `cannot register thread` |
 | 46 | Play a game for a while, then close it, and open its kept log (Keep all logs) | the log starts with the session's first lines | `…-start.log` beside it when the session was long; repeated lines as `the line before came N more times` |
 | 47 | A game with sound | it sounds as before | `wineps5: stream … opened: 48000 Hz, …`; any `ran short in … of 1000 grains` names a stream the game fed late |
@@ -378,3 +378,13 @@ controller's speaker.
 | 181 | Play a game, come back to PC5 | no question again within the hour | no `PC5 update state=` line |
 | 182 | An Unreal Engine 5 game PC5 had as DirectX 11 (its program in Binaries\Win64) | △ shows DirectX 12; the game starts on VKD3D-Proton | `dll_overrides=…d3d12,d3d12core,dxgi=n` |
 | 183 | An Unreal Engine 5 game on Direct3D 12 that crashed at start (shared resources) | it gets past its first frames | `Can't export memory … an ordinary allocation` with `WINEDEBUG` warn+vulkan, no crash |
+
+## Memory follows the program (1.9.8)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 184 | A 32-bit game installed before 1.9.8, Memory never changed: △ › Graphics | Memory shows Auto | `memory_32bit=auto`; for a program without the large-address flag `2 GiB of address space` |
+| 185 | A 32-bit game whose program has the large-address flag, on Auto | it gets 4 GB | no `without the large-address flag` line |
+| 186 | Touhou 12.3 (th123.exe) on Auto | it starts past where it stopped with 0xe06d7363 | no `out of memory for allocation … size baa50000` |
+| 187 | A Godot game installed before 1.9.8 (MegaMan X Regenesis) | △ shows OpenGL; it starts with Mesa Zink | `zink provider=ok`, `prefixes/<game>/pc5/godot.txt` says godot |
+| 188 | Any other game after 1.9.8 | as before | `godot.txt` says other |

@@ -2051,7 +2051,7 @@ static void controls_changed(Pc5Ui *ui)
     say(ui, "PC5 controls id=%s mode=%s left=%s right=%s speed=%d frame_generation=%d memory_32bit=%s resolution=%s "
         "aspect_ratio=%s cpu_sharing=%d graphics_api=%s", ui->launch_id, pc5_pad_mode_name(k->mode),
         pc5_stick_use_name(k->stick[0]), pc5_stick_use_name(k->stick[1]), k->speed, k->frame_generation,
-        k->memory_2gb ? "2gb" : "4gb", k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p",
+        k->memory_4gb ? "4gb" : "auto", k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p",
         k->stretch ? "stretch" : "keep", k->cpu_sharing, pc5_graphics_name(k->graphics, ui_game_api(ui)));
 }
 
@@ -2766,7 +2766,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             controls_changed(ui);
             ui->dirty = 1;
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_MEMORY) {
-            ui->controls.memory_2gb = !ui->controls.memory_2gb;
+            ui->controls.memory_4gb = !ui->controls.memory_4gb;
             controls_changed(ui);
             ui->dirty = 1;
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_CPU_SHARING) {
@@ -3743,8 +3743,9 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         break;
     case GR_MEMORY:
         *label = "Memory";
-        *text = ui->controls.memory_2gb ? "What Windows gives a 32-bit game that doesn't ask for more" : "Room for big textures and mods; 2 GB if the game misbehaves";
-        *value = ui->controls.memory_2gb ? "2 GB" : "4 GB";
+        *text = ui->controls.memory_4gb ? "4 GB even for a game not made for it: room for mods; Auto if it misbehaves"
+                                        : "As Windows: 4 GB for a game made for it, otherwise 2 GB";
+        *value = ui->controls.memory_4gb ? "4 GB" : "Auto";
         break;
     case GR_CPU_SHARING:
         *label = "CPU sharing";

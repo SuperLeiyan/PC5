@@ -429,6 +429,52 @@ int pc5_pe_unreal_d3d12(const char *path, uint32_t imports)
     return (pc5_pe_named_libraries(path) & PC5_IMPORT_D3D12) != 0;
 }
 
+/* 1 when the file at path holds text (ASCII, as it is), in its first GB. */
+static int file_has_text(const char *path, const char *text)
+{
+    enum { CHUNK = 1 << 20, KEEP = 64 };
+    const size_t n = strlen(text);
+    const uint64_t most = (uint64_t)1 << 30;
+    uint64_t total = 0;
+    size_t kept = 0;
+    ssize_t got;
+    uint8_t *buf;
+    int fd, found = 0;
+
+    if (!n || n > KEEP || (fd = open(path, O_RDONLY)) < 0) return 0;
+    if (!(buf = pc5_alloc(CHUNK + KEEP))) {
+        close(fd);
+        return 0;
+    }
+    while (!found && total < most && (got = read(fd, buf + kept, CHUNK)) > 0) {
+        size_t have = kept + (size_t)got;
+        total += (uint64_t)got;
+        for (const uint8_t *at = buf; !found && (at = memchr(at, (unsigned char)text[0], have - (size_t)(at - buf)));
+             at++)
+            found = (size_t)(buf + have - at) >= n && !memcmp(at, text, n);
+        /* The tail again with the next chunk: the text may run across the two. */
+        kept = have < KEEP ? have : KEEP;
+        memmove(buf, buf + have - kept, kept);
+    }
+    pc5_free(buf);
+    close(fd);
+    return found;
+}
+
+int pc5_pe_godot(const char *path)
+{
+    char pck[PC5_PATH];
+    size_t n = strlen(path);
+    struct stat st;
+
+    if (n > 4 && n < sizeof(pck) && !pc5_casecmp(path + n - 4, ".exe")) {
+        memcpy(pck, path, n - 4);
+        memcpy(pck + n - 4, ".pck", 5);
+        if (!stat(pck, &st) && S_ISREG(st.st_mode)) return 1;
+    }
+    return file_has_text(path, "Godot Engine");
+}
+
 const char *pc5_api_name(Pc5Api api)
 {
     switch (api) {

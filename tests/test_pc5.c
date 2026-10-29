@@ -584,6 +584,17 @@ static void test_pe(void)
         CHECK(pc5_pe_unreal_d3d12("Game\\Binaries\\Win64\\missing.exe", PC5_IMPORT_D3D11) == 0, "nor a missing one");
         write_text(ue, "MZ ... d3d11.dll only ...");
         CHECK(!pc5_pe_unreal_d3d12(ue, PC5_IMPORT_D3D11), "nor one that doesn't name it");
+        /* A Godot game: the engine's name in its program, or its data beside it. */
+        char godot[PC5_PATH], pck[PC5_PATH];
+        path(godot, sizeof(godot), "%s/godot/Mega Game 1.0.exe", work);
+        write_text(godot, "MZ ... Godot Engine v4.7.stable ...");
+        CHECK(pc5_pe_godot(godot), "a Godot game's program");
+        write_text(godot, "MZ ... nothing of the engine ...");
+        CHECK(!pc5_pe_godot(godot), "not another program");
+        path(pck, sizeof(pck), "%s/godot/Mega Game 1.0.pck", work);
+        write_text(pck, "GDPC");
+        CHECK(pc5_pe_godot(godot), "a program with its .pck beside it");
+        CHECK(!pc5_pe_godot(ue), "nor an Unreal one");
     }
     path(file, sizeof(file), "%s/game64.exe", programs);
     CHECK(!pc5_pe_read(file, &pe), "game64 reads");
@@ -4289,18 +4300,30 @@ static void test_game(const char *fonts_path)
         pc5_controls_save(game_root, "liberty", &controls);
         pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
         CHECK(!game.frame_generation && !getenv("PW_PC5_FRAMEGEN"), "and off again");
-        /* A 32-bit game gets 4 GB unless its Memory is 2 GB, which Wine reads (patch 0921). */
-        CHECK(!getenv("PW_LARGE_ADDRESS_AWARE"), "4 GB by default");
-        controls.memory_2gb = 1;
-        CHECK(!pc5_controls_save(game_root, "liberty", &controls) && !pc5_controls_load(game_root, "liberty", &again) &&
-              again.memory_2gb == 1, "Memory is kept with the game");
-        pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
+        /* A 32-bit game's Memory, which Wine reads (patch 0921): Auto by default, 4 GB only
+         * for a program whose large-address flag asks for it, as on Windows; 4 GB for any. */
         env = getenv("PW_LARGE_ADDRESS_AWARE");
-        CHECK(env && !strcmp(env, "0"), "a game set to 2 GB tells Wine");
-        controls.memory_2gb = 0;
+        CHECK(env && !strcmp(env, "0"), "Auto by default: as Windows");
+        controls.memory_4gb = 1;
+        CHECK(!pc5_controls_save(game_root, "liberty", &controls) && !pc5_controls_load(game_root, "liberty", &again) &&
+              again.memory_4gb == 1, "Memory is kept with the game");
+        pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
+        CHECK(!getenv("PW_LARGE_ADDRESS_AWARE"), "a game set to 4 GB tells Wine");
+        controls.memory_4gb = 0;
         pc5_controls_save(game_root, "liberty", &controls);
         pc5_game_begin(&game, &ops, game_root, app, "liberty", "Liberty Town");
-        CHECK(!getenv("PW_LARGE_ADDRESS_AWARE"), "and 4 GB again");
+        env = getenv("PW_LARGE_ADDRESS_AWARE");
+        CHECK(env && !strcmp(env, "0"), "and Auto again");
+        {
+            /* A game saved before 1.9.8 said 4gb whether chosen or not (then the default): Auto. */
+            char saved[PC5_PATH];
+            path(saved, sizeof(saved), "%s/prefixes/liberty/pc5/controls.txt", game_root);
+            write_text(saved, "mode = xinput\nmemory_32bit = 4gb\n");
+            CHECK(!pc5_controls_load(game_root, "liberty", &again) && !again.memory_4gb, "an old 4gb is Auto now");
+            write_text(saved, "mode = xinput\nmemory = 4gb\n");
+            CHECK(!pc5_controls_load(game_root, "liberty", &again) && again.memory_4gb, "4 GB chosen stays");
+            pc5_controls_save(game_root, "liberty", &controls);
+        }
         /* CPU sharing reaches Wine's server for any game, its profile written by PC5 or not. */
         CHECK(!getenv("WINE_PS5_SCHED"), "the console's scheduling by default");
         controls.cpu_sharing = 1;
