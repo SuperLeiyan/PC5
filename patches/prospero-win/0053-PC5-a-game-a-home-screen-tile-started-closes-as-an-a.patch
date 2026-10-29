@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 07:30:00 +0000
+Subject: [PATCH 53/53] PC5: a game a home screen tile started closes as an app
+ does, without the error
+
+A game started from its home screen tile (--exit-after-game) went back
+to the home screen by letting the process end: on_exit_report returned
+to exit(), and the close timeout called _exit(0). On the console exit()
+and _exit() raise SIGSYS, so every game closed from its tile was
+reported as a crash, "Game or App Error CE-108255-1", over a game that
+had closed normally. Inside PC5 the title is restarted with LoadExec
+instead, which is why closing a game there never shows it.
+
+close_title_to_home() asks the console's shell to end the title by its
+own app id (sceSystemServiceKillApp on
+sceSystemServiceGetAppIdOfRunningBigApp, as other homebrew closes
+itself), or failing that with LoadExec("exit"), and waits. If both are
+refused it goes back to PC5 rather than crash, and logs why. It never
+returns, so nothing after it reaches exit().
+---
+ native/wine64_main.c | 39 ++++++++++++++++++++++++++++-----------
+ 1 file changed, 28 insertions(+), 11 deletions(-)
+
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index 098c472..1dd65ef 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -269,6 +269,8 @@ void pc5_game_ps5_ops(Pc5GameOps *ops, void (*log)(const char *line));
+ 
+ 
+ int sceSystemServiceLoadExec(const char *path, char *const argv[]);
++int sceSystemServiceGetAppIdOfRunningBigApp(void);
++int sceSystemServiceKillApp(int app_id, int how, int reason, int core_dump);
+ int32_t sceKernelLoadStartModule(const char *path, size_t argc, const void *argv,
+                                  uint32_t flags, const void *option, int *result);
+ int sceKernelGetModuleInfo(int32_t handle, void *info);
+@@ -685,9 +687,32 @@ static void restart_title(const PwWineApp *app, uint32_t cycle, const char *reas
+     restart_title_exit(app, cycle, reason, 0);
+ }
+ 
++/* A game a home screen tile started has ended: the title closes as an app does, back to the
++ * home screen. exit() and _exit() raise SIGSYS on the console, which then reports the title as
++ * crashed (CE-108255-1) over a game that closed normally. So the title asks the console's
++ * shell to end it, by its own app id (sceSystemServiceKillApp, as other homebrew closes
++ * itself), or failing that with LoadExec("exit"), and waits for it; refused both ways, it goes
++ * back to PC5 rather than crash. Never returns. */
++static void close_title_to_home(const char *reason)
++{
++    int app = sceSystemServiceGetAppIdOfRunningBigApp(), killed = -1, exited = -1;
++
++    PS5LOG_LOG("PW_WINE64 exit to the home screen: started from a tile app=%d", app);
++    pw_diagnostics_close(reason);
++    if (app > 0) killed = sceSystemServiceKillApp(app, -1, 0, 0);
++    for (int i = 0; killed >= 0 && i < 100; i++) usleep(100000);   /* the shell ends the title */
++    exited = sceSystemServiceLoadExec("exit", NULL);
++    for (int i = 0; exited >= 0 && i < 100; i++) usleep(100000);
++    pw_diagnostics_resume();
++    PS5LOG_LOG("PW_WINE64 tile exit refused app=%d kill=0x%08x exit=0x%08x: back to PC5", app, (unsigned)killed,
++               (unsigned)exited);
++    restart_title(NULL, launch.cycle + 1u, "tile-exit-refused");
++    for (;;) usleep(1000000);   /* exit() would be taken for a crash: the player closes it */
++}
++
+ /* Wine ends the process with exit() when its last program ends: go back to
+  * the launcher, or, for a game a home screen tile started, to the home
+- * screen (the process just ends). */
++ * screen (close_title_to_home: the console ends the process). */
+ static void load_catalog(void);
+ 
+ static void on_exit_report(void)
+@@ -714,11 +739,7 @@ static void on_exit_report(void)
+         }
+     }
+ #endif
+-    if (launch.mode == PW_WINE_LAUNCH_GAME && launch.exit_after) {
+-        PS5LOG_LOG("PW_WINE64 exit to the home screen: started from a tile");
+-        pw_diagnostics_close("tile-exit");
+-        return;
+-    }
++    if (launch.mode == PW_WINE_LAUNCH_GAME && launch.exit_after) close_title_to_home("tile-exit");
+     restart_title(NULL, launch.cycle + 1u, "wine-exit");
+     pw_diagnostics_close("wine64-exit");
+ }
+@@ -1884,11 +1905,7 @@ int main(int argc, char **argv)
+         }
+         if (close_requested && now - close_requested >= (uint64_t)PW_WINE64_CLOSE_WAIT_S * 1000000000u) {
+             PS5LOG_LOG("PW_WINE64 close timeout: leaving the game");
+-            if (launch.exit_after) {   /* started from a tile: back to the home screen */
+-                PS5LOG_LOG("PW_WINE64 exit to the home screen: started from a tile");
+-                pw_diagnostics_close("tile-exit");
+-                _exit(0);
+-            }
++            if (launch.exit_after) close_title_to_home("tile-exit");   /* started from a tile: back to the home screen */
+             restart_title(NULL, launch.cycle + 1u, "close-timeout");
+             break;
+         }
+-- 
+2.43.0
+

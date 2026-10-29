@@ -73,7 +73,7 @@ With ShadowMountPlus and elfldr running.
 | # | Do | Expect | Expect in the log |
 | --- | --- | --- | --- |
 | 31 | △ on a game › Home screen tile | "Added to the home screen", the row says On with the tile's ID; the tile appears on the home screen with the game's cover | `PC5 home tile added …`; `/data/homebrew/PPSA99xxx/forwarder.json` |
-| 32 | Start the game from its tile, play, then hold the touchpad and Options | PC5 opens straight into the game (no library); leaving the game goes back to the home screen, not to PC5 | `PW_WINE64 args … tile=<game> exit_after=1`, `PW_WINE64 exit to the home screen: started from a tile` |
+| 32 | Start the game from its tile, play, then hold the touchpad and Options | PC5 opens straight into the game (no library); leaving the game goes back to the home screen, not to PC5, with no error | `PW_WINE64 args … tile=<game> exit_after=1`, `PW_WINE64 exit to the home screen: started from a tile app=…` |
 | 33 | △ › Home screen tile again (Off), and uninstall a game that has a tile | the tile's folder is gone from `/data/homebrew` (delete the tile on the home screen if it stays) | `PC5 home tile removed …` |
 | 34 | Without internet: install a game whose USB folder has a `cover.png` | the review screen offers "your picture" first; the library shows it | `PC5 cover choices=…` |
 | 35 | Put `<game's name>.png` in `/data/prospero-win/covers/`, open PC5 | that game's cover becomes the picture, and its tile's picture too if it has one, after the tile is turned on again | |
@@ -358,3 +358,11 @@ controller's speaker.
 | 171 | The same in a Vulkan or Direct3D 12 game | the same | `pw_pc5_hud: overlay magnified=1 rc=0` |
 | 172 | Each corner (Settings › Overlay › Corner) | the overlay fully on screen in each | |
 | 173 | Size back to Large, then Normal | its own size again | `magnified=0 rc=0` |
+
+## Closing a game started from its tile (1.9.6)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 174 | Start a game from its home screen tile, play, hold the touchpad and Options for two seconds | back to the home screen with no "Game or App Error CE-108255-1" | `PW_WINE64 exit to the home screen: started from a tile app=…` and no `tile exit refused` |
+| 175 | The same, quitting from the game's own menu | the same | the same |
+| 176 | Start the game from its tile again, then a game from PC5's library | both start; leaving the library's game goes back to PC5 | `PW_WINE64 restart to=launcher … reason=wine-exit` |
