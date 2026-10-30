@@ -24,6 +24,7 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 | Game maintenance › | Installing and uninstalling games, and the game compatibility list. See [Game maintenance](#game-maintenance). |
 | In games › | Vibration, light bar and adaptive triggers. See [In games](#in-games). |
 | Overlay › | The overlay shown over every game. See [Overlay](#overlay). |
+| File manager › | Copy, move, rename and delete files on the console and its drives. See [File manager](File-manager). |
 | System › | The startup sound, the logs, the picture sources and updates. When a newer PC5 is out, the row says so. See [System](#system). |
 | About PC5 | The version, where games are kept, the free space on the console, and a QR code for Buy Me a Coffee. |
 

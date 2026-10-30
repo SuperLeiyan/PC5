@@ -29,6 +29,7 @@ PC5 contains no games and downloads none. You install the games you own.
 | [Covers](Covers) | Where covers come from, and using your own |
 | [Home screen tiles](Home-screen-tiles) | A game's own tile on the PS5's home screen |
 | [Launch options](Launch-options) | Starting a game with options, with `launch.txt` |
+| [File manager](File-manager) | A game's own files, and the console's, from PC5 |
 | [Files and folders](Files-and-folders) | Where PC5 keeps games, saves, settings, covers and logs |
 | [Troubleshooting](Troubleshooting) | PC5's messages, and what to do about them |
 | [FAQ](FAQ) | Short answers to common questions |

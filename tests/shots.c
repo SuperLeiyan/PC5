@@ -179,7 +179,7 @@ static Pc5Ui *open_ui(const char *root, int network)
     pc5_write_file(file, "eboot", 5);
     platform = (Pc5Platform){ NULL, { NULL, network ? sample_net : offline, NULL, NULL }, fake_clock, fake_play, NULL, NULL, NULL, 0, NULL,
                               NULL, keyboard_open, keyboard_state, keyboard_close };
-    config = (Pc5UiConfig){ root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0 };
+    config = (Pc5UiConfig){ root, template_prefix, fonts, roots, tiles, tile_template, NULL, NULL, NULL, NULL, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
     until(ui, "library");
     settle(ui);

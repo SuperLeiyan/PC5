@@ -9,6 +9,7 @@
 #include "pc5.h"
 #include "pc5_backgrounds.h"
 #include "pc5_cover.h"
+#include "pc5_files.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
 #include "pc5_image.h"
@@ -945,7 +946,9 @@ static Pc5InstallPhase install_folder(const char *name, int cancel_after_copy_st
     do {
         phase = pc5_install_step(&install, 1);
         steps++;
-        if (cancel_after_copy_steps && phase == PC5_INSTALL_COPY && --cancel_after_copy_steps == 0) pc5_install_cancel(&install);
+        /* Copying and checking, a step after another: on a fast machine all of it may take only a step or two. */
+        if (cancel_after_copy_steps && (phase == PC5_INSTALL_COPY || phase == PC5_INSTALL_VERIFY) && --cancel_after_copy_steps == 0)
+            pc5_install_cancel(&install);
         /* The copy of level1.pak spoilt once it is whole and before it is read back. A step is
          * a millisecond's work and the files come in the order the drive lists them, so the
          * first step of checking may already have read it back: it is spoilt while the files
@@ -1392,7 +1395,7 @@ static void test_install(void)
     CHECK(install_folder("NeonDrift", 0, 0, id, sizeof(id)) == PC5_INSTALL_DONE && !strcmp(id, "neondrift-2"), "second: %s", id);
 
     /* Cancelled: nothing stays. */
-    CHECK(install_folder("NeonDrift", 3, 0, id, sizeof(id)) == PC5_INSTALL_CANCELLED, "cancel");
+    CHECK(install_folder("NeonDrift", 1, 0, id, sizeof(id)) == PC5_INSTALL_CANCELLED, "cancel");
     path(file, sizeof(file), "%s/profiles/%s.profile", root, id);
     CHECK(!pc5_exists(file), "no profile after cancel");
     CHECK(count_entries(prefixes, ".installing-") == 0, "no staging after cancel");
@@ -1852,9 +1855,12 @@ static int fake_keyboard_state_text(void *context) { (void)context; return 2; }
  * the key itself (never). */
 #define TEST_WRONG_KEY "not-the-key-but-secret"
 static int key_refused_lines, key_shown_lines;
+static int files_cut_lines;
+
 static void fake_log(void *context, const char *line)
 {
     (void)context;
+    files_cut_lines += !strncmp(line, "PC5 files cut ", 14);
     key_refused_lines += strstr(line, "SteamGridDB refused the key") != NULL;
     key_shown_lines += strstr(line, TEST_WRONG_KEY) != NULL || strstr(line, TEST_GRIDDB_KEY) != NULL;
 }
@@ -5457,7 +5463,8 @@ static void test_screens(const char *fonts)
         CHECK(!strcmp(pc5_ui_screen(ui), "game-menu"), "its menu: %s", pc5_ui_screen(ui));
         for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Manage, the last row */
         press(ui, PC5_KEY_ACCEPT, &canvas);
-        press(ui, PC5_KEY_DOWN, &canvas);        /* Update, after Change program */
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);        /* Update, after Change program and Game files */
         save_shot(&canvas, "game-menu-update");
         press(ui, PC5_KEY_ACCEPT, &canvas);
         until_screen(ui, "sources", &canvas);
@@ -5622,7 +5629,8 @@ static void test_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on In games");
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
-    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* System, after Overlay and File manager */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Startup sound: cheap chinese speaker, the first, -> Chime */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Chime, the last one, -> Off */
     {
@@ -5654,6 +5662,7 @@ static void test_screens(const char *fonts)
     /* Off again, then rumble: only its own strength shows; then Startup sound again. */
     press(ui, PC5_KEY_UP, &canvas);
     press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* In games */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);        /* Adaptive triggers */
@@ -5665,6 +5674,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_RIGHT, &canvas);       /* trigger rumble: 100 % -> 25 % */
     press(ui, PC5_KEY_LEFT, &canvas);        /* and back */
     press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
@@ -5694,6 +5704,7 @@ static void test_screens(const char *fonts)
     /* Overlay: its lines, each on its own, and the corner. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page");
+    press(ui, PC5_KEY_UP, &canvas);          /* File manager */
     press(ui, PC5_KEY_UP, &canvas);          /* Overlay */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Show FPS: on */
@@ -5717,6 +5728,7 @@ static void test_screens(const char *fonts)
     /* System's Check now finds a newer PC5 and says so once, with the console's notification. */
     press(ui, PC5_KEY_BACK, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back to the first page, on Overlay");
+    press(ui, PC5_KEY_DOWN, &canvas);        /* File manager */
     press(ui, PC5_KEY_DOWN, &canvas);        /* System */
     press(ui, PC5_KEY_ACCEPT, &canvas);
     for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Check now, past the startup sound's volume */
@@ -5737,13 +5749,13 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
     rows_uncut(ui, &canvas, "Settings", 0);
-    for (int row = 0; row < 4; row++) {     /* Game maintenance, In games, Overlay, and System last */
-        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "System" };
+    for (int row = 0; row < 5; row++) {     /* Game maintenance, In games, Overlay, File manager's places, and System last */
+        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "File manager", "System" };
         for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, &canvas);
         for (int i = 0; i < row; i++) press(ui, PC5_KEY_DOWN, &canvas);
         press(ui, PC5_KEY_ACCEPT, &canvas);
-        rows_uncut(ui, &canvas, pages[row], row > 0);
-        if (row < 3) press(ui, PC5_KEY_BACK, &canvas);
+        rows_uncut(ui, &canvas, pages[row], row > 0 && row != 3);
+        if (row < 4) press(ui, PC5_KEY_BACK, &canvas);
     }
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
@@ -6012,7 +6024,13 @@ static void test_report(const char *fonts)
              "starting debugger...\nREC seq=2 t=2.0 PW_WINE64 session_end reason=wine-exit\n", library.games[0].id);
     path(file, sizeof(file), "%s/session-0.log", logs);
     write_text(file, text);
+    Pc5UpdateMemory before;
+    pc5_update_load(root, &before);
     {
+        /* Not asked yet, and GitHub doesn't answer: Triangle asks, then reports. */
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        pc5_update_save(root, &memory);
         Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
         Pc5Ui *ui = pc5_ui_create(&config, &platform);
         until_screen(ui, "message", &canvas);
@@ -6025,6 +6043,44 @@ static void test_report(const char *fonts)
         CHECK(!strcmp(pc5_ui_screen(ui), "library"), "then the library: %s", pc5_ui_screen(ui));
         pc5_ui_destroy(ui);
     }
+    {
+        /* A newer PC5 is out (asked a minute ago): Triangle offers it first; Report anyway reports, Update now
+         * (PC5 can't update itself in this test) opens Settings › System. */
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        memory.checked = fake_time(NULL, NULL) - 60;
+        memory.last.state = PC5_UPDATE_AVAILABLE;
+        pc5_copy(memory.last.version, sizeof(memory.last.version), "99.0.0");
+        pc5_update_save(root, &memory);
+        path(file, sizeof(file), "%s/next.txt", logs);
+        write_text(file, "3\n");
+        path(file, sizeof(file), "%s/session-0.log", logs);
+        write_text(file, text);
+        Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
+        console.notifications = 0;
+        Pc5Ui *ui = pc5_ui_create(&config, &platform);
+        until_screen(ui, "message", &canvas);
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "report-update") && !console.notifications, "Triangle: update first: %s %d",
+              pc5_ui_screen(ui), console.notifications);
+        pc5_ui_draw(ui, &canvas);
+        save_shot(&canvas, "report-update");
+        press(ui, PC5_KEY_BACK, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Back: the message: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        press(ui, PC5_KEY_RIGHT, &canvas);
+        frames(ui, 0, 0, 25, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "report"), "Report anyway: Report on GitHub: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_BACK, &canvas);
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        frames(ui, 0, 0, 25, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "Update now, where PC5 can't update itself: Settings › System: %s",
+              pc5_ui_screen(ui));
+        pc5_ui_destroy(ui);
+    }
+    pc5_update_save(root, &before);
     CHECK(!pc5_logs_newest(root, library.games[0].id, kept, sizeof(kept)) && pc5_ends_with_ci(kept, ".zip"), "kept: %s", kept);
     unlink(kept);
     pc5_free(canvas.px);
@@ -6104,7 +6160,7 @@ static void test_upgrade_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "library") && !net.downloads, "Later: %s", pc5_ui_screen(ui));
 
     press(ui, PC5_KEY_OPTIONS, &canvas);
-    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* System */
     for (int i = 0; i < 6; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Update now, the seventh row */
     pc5_ui_draw(ui, &canvas);
@@ -6178,6 +6234,517 @@ static void test_upgrade_screens(const char *fonts)
     pc5_free(canvas.px);
 }
 
+/* ---- the file manager's core (pc5_files.c) ---------------------------------------------------- */
+
+static int read_is(const char *file, const char *text)
+{
+    Pc5Buf buf = {0};
+    int same = !pc5_read_file(file, &buf, 1 << 20) && buf.len == strlen(text) && !memcmp(buf.data, text, buf.len);
+    pc5_buf_free(&buf);
+    return same;
+}
+
+static int files_run(Pc5FilesOp op, const char *const *sources, int count, const char *dest, Pc5FilesConflict conflict,
+                     Pc5FilesJob *job)
+{
+    int rc = pc5_files_begin(job, op, sources, count, dest, conflict), steps = 0;
+    if (!rc) {
+        while (pc5_files_step(job, 1) && steps < 100000) steps++;
+        /* once a step says there is no more, it says how it ended (never still working) */
+        CHECK(job->state != PC5_FILES_WORKING, "a %d job ended, not still working", (int)op);
+    }
+    return rc;
+}
+
+static void test_files(void)
+{
+    char base[PC5_PATH], a[PC5_PATH], b[PC5_PATH], file[PC5_PATH], why[PC5_ERROR], name[PC5_FILES_NAME];
+    Pc5FileList list;
+    Pc5FilesJob job;
+
+    path(base, sizeof(base), "%s/files", work);
+    path(a, sizeof(a), "%s/a", base);
+    path(b, sizeof(b), "%s/b", base);
+    path(file, sizeof(file), "rm -rf '%s'", base);
+    run(file);
+    path(file, sizeof(file), "%s/Game.exe", a); write_text(file, "program");
+    path(file, sizeof(file), "%s/data/level1.pak", a); write_text(file, "one");
+    path(file, sizeof(file), "%s/data/deep/x.txt", a); write_text(file, "x");
+    path(file, sizeof(file), "%s/readme.txt", a); write_text(file, "hello");
+    path(file, sizeof(file), "%s/Zeta", a); pc5_mkdirs(file);
+    pc5_mkdirs(b);
+
+    /* listing: folders first, by name with case aside */
+    CHECK(!pc5_files_list(a, &list) && list.count == 4, "a's four items listed (%d)", list.count);
+    if (list.count == 4) {
+        CHECK(list.items[0].dir && !strcmp(list.items[0].name, "data") && list.items[1].dir && !strcmp(list.items[1].name, "Zeta"),
+              "folders first, case aside: %s %s", list.items[0].name, list.items[1].name);
+        CHECK(!strcmp(list.items[2].name, "Game.exe") && list.items[2].size == 7 && !strcmp(list.items[3].name, "readme.txt"),
+              "then files with their sizes");
+    }
+    pc5_files_list_free(&list);
+    path(file, sizeof(file), "%s/none", base);
+    CHECK(pc5_files_list(file, &list) == -1 && list.error == ENOENT && !list.count, "a folder that isn't there says why");
+    pc5_files_list_free(&list);
+
+    /* places and names */
+    CHECK(pc5_files_within("/data", "/data") && pc5_files_within("/data", "/data/a/b") && pc5_files_within("/data/", "/data/x"),
+          "inside /data");
+    CHECK(!pc5_files_within("/data", "/data2") && !pc5_files_within("/data", "/mnt/usb0") && !pc5_files_within("/data", "/data/../etc") &&
+          !pc5_files_within("/data", "/data/./x"), "not inside /data");
+    CHECK(pc5_files_within("/", "/system") && !pc5_files_within("/", "/a/../b"), "everything is inside /, but dot parts");
+    CHECK(!pc5_files_name_ok("Saves 2", why, sizeof(why)) && !pc5_files_name_ok(".hidden", why, sizeof(why)), "good names");
+    CHECK(pc5_files_name_ok("", why, sizeof(why)) && pc5_files_name_ok("..", why, sizeof(why)) && pc5_files_name_ok("a/b", why, sizeof(why)) &&
+          pc5_files_name_ok("a:b", why, sizeof(why)) && pc5_files_name_ok("end.", why, sizeof(why)) && pc5_files_name_ok("end ", why, sizeof(why)) &&
+          pc5_files_name_ok("tab\there", why, sizeof(why)), "bad names refused");
+    pc5_files_name_ok("a?b", why, sizeof(why));
+    CHECK(strstr(why, "?") != NULL, "the reason names the character: %s", why);
+    {
+        char longer[300];
+        memset(longer, 'n', 299); longer[299] = 0;
+        CHECK(pc5_files_name_ok(longer, why, sizeof(why)) && strstr(why, "255"), "a name over 255 bytes refused");
+    }
+    CHECK(!pc5_files_free_name(a, "new.txt", name, sizeof(name)) && !strcmp(name, "new.txt"), "a free name stays");
+    CHECK(!pc5_files_free_name(a, "readme.txt", name, sizeof(name)) && !strcmp(name, "readme (2).txt"), "a taken name gets (2): %s", name);
+    path(file, sizeof(file), "%s/readme (2).txt", a); write_text(file, "");
+    CHECK(!pc5_files_free_name(a, "readme.txt", name, sizeof(name)) && !strcmp(name, "readme (3).txt"), "then (3): %s", name);
+    unlink(file);
+    CHECK(!pc5_files_free_name(a, "data", name, sizeof(name)) && !strcmp(name, "data (2)"), "a folder gets (2): %s", name);
+
+    /* copy a folder and a file into b */
+    {
+        char data[PC5_PATH], readme[PC5_PATH];
+        path(data, sizeof(data), "%s/data", a);
+        path(readme, sizeof(readme), "%s/readme.txt", a);
+        const char *sources[] = { data, readme };
+        CHECK(pc5_files_conflicts(sources, 2, b, 1) == 0, "nothing in b yet");
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "copied: %s", job.error);
+        CHECK(job.total_bytes == 9 && job.done_bytes == 9 && job.done_items == job.total_items && job.total_items == 5,
+              "progress counted (%llu/%llu bytes, %u/%u items)", (unsigned long long)job.done_bytes,
+              (unsigned long long)job.total_bytes, job.done_items, job.total_items);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/data/deep/x.txt", b);
+        CHECK(read_is(file, "x"), "the deep file came");
+        path(file, sizeof(file), "%s/readme.txt", b);
+        CHECK(read_is(file, "hello"), "the file came");
+        CHECK(read_is(readme, "hello") && pc5_is_dir(data), "the sources stay");
+        path(file, sizeof(file), "%s/readme.txt.pc5part", b);
+        CHECK(!pc5_exists(file), "no .pc5part left");
+        CHECK(pc5_files_conflicts(sources, 2, b, 1) == 2, "both names are in b now");
+        CHECK(pc5_files_conflicts(sources, 2, a, 1) == 2 && pc5_files_conflicts(sources, 2, a, 0) == 0,
+              "in their own folder: names taken for a copy, nothing for a move");
+
+        /* Skip: nothing changes */
+        path(file, sizeof(file), "%s/readme.txt", b); write_text(file, "mine");
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_SKIP, &job) && job.state == PC5_FILES_DONE && job.skipped == 2,
+              "skipped both (%u)", job.skipped);
+        pc5_files_end(&job);
+        CHECK(read_is(file, "mine"), "Skip left b's file");
+
+        /* Replace: the file overwritten, the folder merged */
+        path(file, sizeof(file), "%s/data/only-in-b.txt", b); write_text(file, "b");
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "replaced: %s", job.error);
+        pc5_files_end(&job);
+        CHECK(read_is(file, "b"), "Replace merges: b's own file stays");
+        path(file, sizeof(file), "%s/readme.txt", b);
+        CHECK(read_is(file, "hello"), "Replace overwrote the file");
+
+        /* Keep both */
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_KEEP_BOTH, &job) && job.state == PC5_FILES_DONE, "kept both: %s", job.error);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/readme (2).txt", b);
+        CHECK(read_is(file, "hello"), "the copy is readme (2).txt");
+        path(file, sizeof(file), "%s/data (2)/level1.pak", b);
+        CHECK(read_is(file, "one"), "the folder copy is data (2)");
+
+        /* a copy pasted where it is: Keep both makes a copy beside it, the others do nothing */
+        CHECK(!files_run(PC5_FILES_COPY, &sources[1], 1, a, PC5_FILES_REPLACE, &job) && job.skipped == 1, "pasted on itself: nothing");
+        pc5_files_end(&job);
+        CHECK(read_is(readme, "hello"), "and the file is whole");
+        CHECK(!files_run(PC5_FILES_COPY, &sources[1], 1, a, PC5_FILES_KEEP_BOTH, &job) && job.state == PC5_FILES_DONE, "duplicated");
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/readme (2).txt", a);
+        CHECK(read_is(file, "hello"), "the duplicate is readme (2).txt");
+        unlink(file);
+
+        /* a file and a folder in each other's place, under Replace */
+        path(file, sizeof(file), "rm -rf '%s/data' '%s/readme.txt' && mkdir '%s/readme.txt' && printf f > '%s/data'", b, b, b, b);
+        run(file);
+        CHECK(!files_run(PC5_FILES_COPY, sources, 2, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "kinds swapped: %s", job.error);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/data/level1.pak", b);
+        CHECK(read_is(file, "one"), "a file where a folder goes is replaced by the folder");
+        path(file, sizeof(file), "%s/readme.txt", b);
+        CHECK(read_is(file, "hello"), "a folder where a file goes is replaced by the file");
+
+        /* a folder into itself */
+        char inner[PC5_PATH];
+        path(inner, sizeof(inner), "%s/data/deep", a);
+        CHECK(files_run(PC5_FILES_COPY, sources, 1, inner, PC5_FILES_REPLACE, &job) == -1 && job.state == PC5_FILES_FAILED &&
+              strstr(job.error, "itself"), "a folder into itself refused: %s", job.error);
+        pc5_files_end(&job);
+        CHECK(files_run(PC5_FILES_MOVE, sources, 1, data, PC5_FILES_REPLACE, &job) == -1, "or moved into itself");
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/gone", base);
+        CHECK(files_run(PC5_FILES_COPY, sources, 1, file, PC5_FILES_REPLACE, &job) == -1 && strstr(job.error, "isn't there"),
+              "pasting into a folder that's gone: %s", job.error);
+        pc5_files_end(&job);
+    }
+
+    /* move within the drive: a rename; then a move that merges a folder */
+    {
+        char from[PC5_PATH], to[PC5_PATH];
+        path(from, sizeof(from), "%s/data (2)", b);
+        const char *sources[] = { from };
+        CHECK(!files_run(PC5_FILES_MOVE, sources, 1, a, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "moved: %s", job.error);
+        CHECK(job.total_items == 1, "a move on one drive is one rename (%u)", job.total_items);
+        pc5_files_end(&job);
+        path(to, sizeof(to), "%s/data (2)/deep/x.txt", a);
+        CHECK(read_is(to, "x") && !pc5_exists(from), "it is in a and not in b");
+        /* cut and pasted in the same folder: nothing */
+        path(from, sizeof(from), "%s/data (2)", a);
+        CHECK(!files_run(PC5_FILES_MOVE, sources, 1, a, PC5_FILES_KEEP_BOTH, &job) && job.skipped == 1 && pc5_is_dir(from),
+              "cut and pasted where it is: nothing");
+        pc5_files_end(&job);
+        /* merging into b/data: its own file stays, the source goes */
+        path(to, sizeof(to), "%s/data/only-in-a.txt", a);
+        write_text(to, "a");
+        path(from, sizeof(from), "%s/data", a);
+        CHECK(!files_run(PC5_FILES_MOVE, sources, 1, b, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "merged: %s", job.error);
+        pc5_files_end(&job);
+        path(to, sizeof(to), "%s/data/only-in-a.txt", b);
+        CHECK(read_is(to, "a") && !pc5_exists(from), "a merged move moves the files and deletes the source");
+        path(to, sizeof(to), "%s/data/level1.pak", b);
+        CHECK(read_is(to, "one"), "and keeps the rest");
+    }
+
+    /* stop: the file being copied goes, a move deletes none of its sources */
+    {
+        char big[PC5_PATH], dest[PC5_PATH];
+        path(big, sizeof(big), "%s/big.bin", a);
+        path(dest, sizeof(dest), "%s/stop", base);
+        pc5_mkdirs(dest);
+        {
+            uint8_t *bytes = pc5_alloc(64u << 20);
+            pc5_write_file(big, bytes, 64u << 20);
+            pc5_free(bytes);
+        }
+        const char *sources[] = { big };
+        /* across drives is planned as copy then delete; on one drive the test uses Copy to see a stop part way */
+        CHECK(!pc5_files_begin(&job, PC5_FILES_COPY, sources, 1, dest, PC5_FILES_REPLACE), "began");
+        pc5_files_step(&job, 0);   /* at least one chunk */
+        pc5_files_stop(&job);
+        pc5_files_step(&job, 5);
+        CHECK(job.state == PC5_FILES_STOPPED, "stopped (%d)", job.state);
+        pc5_files_end(&job);
+        path(file, sizeof(file), "%s/big.bin", dest);
+        CHECK(!pc5_exists(file), "no half file under its name");
+        path(file, sizeof(file), "%s/big.bin.pc5part", dest);
+        CHECK(!pc5_exists(file), "and no .pc5part");
+        CHECK(pc5_exists(big), "the source stays");
+    }
+
+    /* delete */
+    {
+        char one[PC5_PATH], two[PC5_PATH];
+        path(one, sizeof(one), "%s/data", b);
+        path(two, sizeof(two), "%s/readme.txt", b);
+        const char *sources[] = { one, two };
+        CHECK(!files_run(PC5_FILES_DELETE, sources, 2, NULL, PC5_FILES_REPLACE, &job) && job.state == PC5_FILES_DONE, "deleted: %s", job.error);
+        pc5_files_end(&job);
+        CHECK(!pc5_exists(one) && !pc5_exists(two), "both gone");
+        path(file, sizeof(file), "%s/readme (2).txt", b);
+        CHECK(read_is(file, "hello"), "and nothing else");
+    }
+
+    /* A step that runs out of time just as the last item is done still says Done: on the console a
+     * folder on a USB drive is deleted slowly enough for that ("Not everything was deleted" with
+     * nothing left). Each folder here takes a few milliseconds, the steps one. */
+    {
+        int ended = 1;
+        for (int round = 0; round < 40; round++) {
+            char folder[PC5_PATH], one[PC5_PATH];
+            path(folder, sizeof(folder), "%s/slow-%d", base, round);
+            for (int i = 0; i < 150; i++) {
+                path(one, sizeof(one), "%s/f%03d.txt", folder, i);
+                write_text(one, "x");
+            }
+            const char *sources[] = { folder };
+            int steps = 0;
+            if (pc5_files_begin(&job, PC5_FILES_DELETE, sources, 1, NULL, PC5_FILES_REPLACE)) ended = 0;
+            while (pc5_files_step(&job, 1) && steps < 100000) steps++;
+            ended &= job.state == PC5_FILES_DONE && !pc5_exists(folder);
+            pc5_files_end(&job);
+        }
+        CHECK(ended, "every slow delete ended Done");
+    }
+
+    /* too little room is said before anything is copied */
+    {
+        char big[PC5_PATH];
+        uint64_t room = 0;
+        path(big, sizeof(big), "%s/big.bin", a);
+        const char *sources[] = { big };
+        if (!pc5_free_bytes(b, &room)) {
+            Pc5FilesJob plan;
+            pc5_files_begin(&plan, PC5_FILES_COPY, sources, 1, b, PC5_FILES_REPLACE);
+            CHECK(plan.state == PC5_FILES_WORKING && plan.total_bytes == (64u << 20), "planned 64 MB");
+            pc5_files_end(&plan);
+        }
+    }
+}
+
+/* The file manager's screens: Settings › File manager's places, a folder, ticking, Copy and
+ * Paste (with a name taken: Keep both), Rename, New folder, Delete, Cut and Paste, a read-only
+ * place, Stop; and a game's own folder from its menu. */
+static void files_wait(Pc5Ui *ui, Pc5Canvas *canvas)
+{
+    frames(ui, 0, 0, 30, canvas);   /* past the dialogs' early-press guard */
+}
+
+static void until_not(Pc5Ui *ui, const char *name, Pc5Canvas *canvas)
+{
+    for (int i = 0; i < 20000 && !strcmp(pc5_ui_screen(ui), name); i++) frames(ui, 0, 0, 1, canvas);
+}
+
+static void test_files_screens(const char *fonts)
+{
+    FakeConsole console = { 0 };
+    FakeNet net = { 0 };
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
+                             NULL, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
+    const char *roots[] = { usb, NULL };
+    char usb0[PC5_PATH], ext0[PC5_PATH], file[PC5_PATH];
+    path(usb0, sizeof(usb0), "%s/fm/usb0", work);
+    path(ext0, sizeof(ext0), "%s/fm/ext0", work);
+    path(file, sizeof(file), "rm -rf '%s/fm'", work);
+    run(file);
+    path(file, sizeof(file), "%s/Mods/a.txt", usb0); write_text(file, "mod");
+    path(file, sizeof(file), "%s/readme.txt", usb0); write_text(file, "hello");
+    pc5_mkdirs(ext0);
+    const char *drives[] = { usb0, ext0, NULL };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, drives, NULL, NULL, 0, 0 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
+    {
+        /* asked a minute ago: no update question as it opens */
+        Pc5UpdateMemory memory;
+        memset(&memory, 0, sizeof(memory));
+        memory.checked = fake_time(NULL, NULL) - 60;
+        memory.last.state = PC5_UPDATE_CURRENT;
+        pc5_update_save(root, &memory);
+    }
+    Pc5Ui *ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "library", &canvas);
+    for (int i = 0; i < 5 && strcmp(pc5_ui_screen(ui), "library"); i++) { press(ui, PC5_KEY_ACCEPT, &canvas); until_screen(ui, "library", &canvas); }
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "the library: %s", pc5_ui_screen(ui));
+
+    press(ui, PC5_KEY_OPTIONS, &canvas);
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "settings-file-manager");
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* File manager, between Overlay and System */
+    CHECK(!strcmp(pc5_ui_screen(ui), "files"), "Settings › File manager: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-places");
+    CHECK(!cuts_after(ui, 0, &canvas), "the places: no text cut short");
+
+    /* USB drive 1: Mods and readme.txt, both ticked and copied */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_SQUARE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_SQUARE, &canvas);
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-folder");
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files-menu"), "Triangle: what can be done: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-menu");
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Copy */
+    CHECK(!strcmp(pc5_ui_screen(ui), "files"), "copied: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_BACK, &canvas);        /* the places */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Extended storage 1, empty */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Paste, its first row */
+    until_not(ui, "files-working", &canvas);
+    path(file, sizeof(file), "%s/Mods/a.txt", ext0);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files") && read_is(file, "mod"), "pasted: %s", pc5_ui_screen(ui));
+    path(file, sizeof(file), "%s/readme.txt", ext0);
+    CHECK(read_is(file, "hello"), "both");
+
+    /* Paste again: the names are taken; Keep both */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 2; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Copy, Cut, Paste */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files-conflict"), "the names are taken: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-conflict");
+    press(ui, PC5_KEY_RIGHT, &canvas);       /* Keep both */
+    files_wait(ui, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_not(ui, "files-working", &canvas);
+    path(file, sizeof(file), "%s/readme (2).txt", ext0);
+    CHECK(read_is(file, "hello"), "Keep both: readme (2).txt");
+    path(file, sizeof(file), "%s/Mods (2)/a.txt", ext0);
+    CHECK(read_is(file, "mod"), "and Mods (2)");
+
+    /* Rename readme.txt, the last row (Mods, Mods (2), readme (2).txt, readme.txt) */
+    for (int i = 0; i < 6; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Copy, Cut, Paste, Rename */
+    console.typed = "notes.txt";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    path(file, sizeof(file), "%s/notes.txt", ext0);
+    CHECK(!strcmp(console.keyboard_title, "Rename") && !strcmp(console.keyboard_start, "readme.txt") && read_is(file, "hello"),
+          "renamed: %s %s", console.keyboard_title, console.keyboard_start);
+    path(file, sizeof(file), "%s/readme.txt", ext0);
+    CHECK(!pc5_exists(file) && !strcmp(pc5_ui_screen(ui), "files"), "the old name is gone: %s", pc5_ui_screen(ui));
+
+    /* New folder, then a name exFAT refuses */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* ... Rename, New folder */
+    console.typed = "Saves";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    path(file, sizeof(file), "%s/Saves", ext0);
+    CHECK(!strcmp(console.keyboard_title, "New folder") && pc5_is_dir(file), "a new folder: %s", console.keyboard_title);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    console.typed = "a:b";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "message"), "a name with ':' refused: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files"), "back to the folder: %s", pc5_ui_screen(ui));
+    console.typed = NULL;
+
+    /* Delete Mods (2): Cancel first, then Delete (Mods, Mods (2), Saves, notes.txt, readme (2).txt) */
+    for (int i = 0; i < 10; i++) press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* ... New folder, Delete */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files-delete"), "Delete asks: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-delete");
+    files_wait(ui, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Cancel */
+    path(file, sizeof(file), "%s/Mods (2)", ext0);
+    CHECK(!strcmp(pc5_ui_screen(ui), "files") && pc5_is_dir(file), "Cancel keeps it");
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_RIGHT, &canvas);
+    files_wait(ui, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_not(ui, "files-working", &canvas);
+    CHECK(!pc5_exists(file) && !strcmp(pc5_ui_screen(ui), "files"), "deleted: %s", pc5_ui_screen(ui));
+
+    /* Cut notes.txt (Mods, Saves, notes.txt, readme (2).txt) and paste it on USB drive 1 */
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Cut */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_UP, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* USB drive 1 */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Copy, Cut, Paste */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_not(ui, "files-working", &canvas);
+    path(file, sizeof(file), "%s/notes.txt", usb0);
+    CHECK(read_is(file, "hello"), "moved here");
+    path(file, sizeof(file), "%s/notes.txt", ext0);
+    CHECK(!pc5_exists(file), "and gone from there");
+
+    /* Stop, part way through a big copy: nothing half copied is left */
+    {
+        char big[PC5_PATH];
+        path(big, sizeof(big), "%s/big.bin", usb0);
+        uint8_t *bytes = pc5_alloc(256u << 20);
+        if (bytes) pc5_write_file(big, bytes, 256u << 20);
+        pc5_free(bytes);
+        press(ui, PC5_KEY_BACK, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);  /* USB drive 1 again: big.bin is the first file */
+        for (int i = 0; i < 10; i++) press(ui, PC5_KEY_UP, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);    /* Mods, big.bin */
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);  /* Copy */
+        press(ui, PC5_KEY_BACK, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_ACCEPT, &canvas);  /* Extended storage 1 */
+        press(ui, PC5_KEY_TRIANGLE, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);
+        press(ui, PC5_KEY_DOWN, &canvas);    /* Copy, Cut, Paste */
+        frames(ui, 0, PC5_KEY_ACCEPT, 1, &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "files-working"), "copying: %s", pc5_ui_screen(ui));
+        frames(ui, 0, 0, 2, &canvas);
+        pc5_ui_draw(ui, &canvas);
+        save_shot(&canvas, "files-working");
+        frames(ui, 0, PC5_KEY_BACK, 1, &canvas);
+        until_not(ui, "files-working", &canvas);
+        CHECK(!strcmp(pc5_ui_screen(ui), "message"), "Stopped: %s", pc5_ui_screen(ui));
+        press(ui, PC5_KEY_ACCEPT, &canvas);
+        path(file, sizeof(file), "%s/big.bin", ext0);
+        CHECK(!pc5_exists(file), "no half file");
+        path(file, sizeof(file), "%s/big.bin.pc5part", ext0);
+        CHECK(!pc5_exists(file), "and no .pc5part");
+        unlink(big);
+    }
+
+    /* The whole console is read-only: Triangle has Copy and Tick all only */
+    press(ui, PC5_KEY_BACK, &canvas);
+    for (int i = 0; i < 10; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Whole console, the last */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "files-read-only");
+    int cuts = files_cut_lines;
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* the second row: Tick all */
+    CHECK(!strcmp(pc5_ui_screen(ui), "files") && files_cut_lines == cuts && cuts == 1,
+          "read-only: the second row is Tick all, not Cut: %s %d %d", pc5_ui_screen(ui), cuts, files_cut_lines);
+    for (int i = 0; i < 2; i++) press(ui, PC5_KEY_BACK, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "Back to Settings: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_BACK, &canvas);
+
+    /* A game's own folder, from its menu: Manage › Game files; Back from its top leaves it */
+    {
+        Pc5Library library;
+        int g = -1;
+        pc5_library_load(root, &library);
+        for (int i = 0; i < library.count && g < 0; i++)
+            if (library.games[i].pc5) g = i;
+        CHECK(g >= 0, "a game PC5 installed");
+        if (g >= 0) {
+            char folder[PC5_PATH];
+            pc5_game_folder(root, library.games[g].id, folder, sizeof(folder));
+            path(file, sizeof(file), "%s/mod.ini", folder);
+            write_text(file, "x");
+            for (int i = 0; i < 10; i++) press(ui, PC5_KEY_LEFT, &canvas);
+            for (int i = 0; i < g; i++) press(ui, PC5_KEY_RIGHT, &canvas);
+            press(ui, PC5_KEY_TRIANGLE, &canvas);
+            for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Manage, the last row */
+            press(ui, PC5_KEY_ACCEPT, &canvas);
+            press(ui, PC5_KEY_DOWN, &canvas);    /* Game files, after Change program */
+            press(ui, PC5_KEY_ACCEPT, &canvas);
+            CHECK(!strcmp(pc5_ui_screen(ui), "files"), "Game files: %s", pc5_ui_screen(ui));
+            pc5_ui_draw(ui, &canvas);
+            save_shot(&canvas, "files-game");
+            /* delete mod.ini: it is in the list */
+            for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);
+            press(ui, PC5_KEY_BACK, &canvas);
+            CHECK(!strcmp(pc5_ui_screen(ui), "game-menu"), "Back from its folder: its menu: %s", pc5_ui_screen(ui));
+            unlink(file);
+        }
+    }
+    pc5_ui_destroy(ui);
+    pc5_free(canvas.px);
+}
+
 int main(int argc, char **argv)
 {
     char fonts[PC5_PATH];
@@ -6224,12 +6791,14 @@ int main(int argc, char **argv)
     test_named_libraries();
     test_java();
     test_batch_bits();
+    test_files();
     test_game(fonts);
     test_screens(fonts);
     test_tile_start(fonts);
     test_report(fonts);
     test_upgrade_screens(fonts);
     test_background_screen(fonts);
+    test_files_screens(fonts);
     printf("test_pc5: %d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

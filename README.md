@@ -50,6 +50,7 @@ Everything else is in the **[wiki](https://github.com/bornaradusin/PC5/wiki)**:
 | [Covers](https://github.com/bornaradusin/PC5/wiki/Covers) | Where covers and backgrounds come from, and your own |
 | [Home screen tiles](https://github.com/bornaradusin/PC5/wiki/Home-screen-tiles) | A game on the PS5's home screen |
 | [Launch options](https://github.com/bornaradusin/PC5/wiki/Launch-options) | A game's command line (`launch.txt`) |
+| [File manager](https://github.com/bornaradusin/PC5/wiki/File-manager) | A game's own files, and the console's, from PC5 |
 | [Files and folders](https://github.com/bornaradusin/PC5/wiki/Files-and-folders) | What PC5 keeps where on the console |
 | [Troubleshooting](https://github.com/bornaradusin/PC5/wiki/Troubleshooting) and [FAQ](https://github.com/bornaradusin/PC5/wiki/FAQ) | When something doesn't work |
 | [Reporting a problem](https://github.com/bornaradusin/PC5/wiki/Reporting-a-problem) | How to report one, and which log to attach |

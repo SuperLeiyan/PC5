@@ -56,7 +56,9 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
             size_t n = 0;
             at += sizeof(mark) - 1;
             if (*at == 'v' || *at == 'V') at++;
-            while (n + 1 < sizeof(from) && ((at[n] >= '0' && at[n] <= '9') || at[n] == '.')) {
+            /* a version: digits and dots, and a test build's suffix ("1.9.8-file-manager-test") */
+            while (n + 1 < sizeof(from) && ((at[n] >= '0' && at[n] <= '9') || (at[n] >= 'a' && at[n] <= 'z') || at[n] == '.' ||
+                                            at[n] == '-')) {
                 from[n] = at[n];
                 n++;
             }

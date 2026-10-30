@@ -73,7 +73,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Button mapping | Only with Keyboard & mouse: what each button and stick sends. See [Controllers](Controllers#button-mapping). |
 | Graphics › | Graphics API, frame generation, resolution, aspect ratio, memory and CPU sharing. See [Graphics](#graphics). |
 | Appearance › | The game's cover, its background and its home screen tile. See [Appearance](#appearance). |
-| Manage › | The program PC5 starts, updating the game and uninstalling it. See [Manage](#manage). |
+| Manage › | The program PC5 starts, its files, updating the game and uninstalling it. See [Manage](#manage). |
 
 **○** goes back from a group to the menu, and from the menu to the library. **△** closes the menu from anywhere in it.
 
@@ -110,6 +110,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Row | What it does |
 | --- | --- |
 | Change program | The program PC5 starts for this game ("Now: …"). Choose another one if PC5 picked the wrong one. See [Choosing the right program](Installing-games#choosing-the-right-program). |
+| Game files | Only for games PC5 installed: the game's own folder, to copy, move, rename and delete its files. See [File manager](File-manager). |
 | Update | Only for games PC5 installed: copies a newer version from the USB drive over the game. Its saves, settings and options stay. See [Updating a game](Installing-games#updating-a-game). |
 | Uninstall | Deletes the game, keeping its saves or not, after asking. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
 
