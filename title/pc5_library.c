@@ -17,9 +17,9 @@
 #include <time.h>
 #include <unistd.h>
 
-/* TEMPLATE_ROOM: a game's copy of the Windows template, some 60 MB now that Wine's own DLLs
+/* TEMPLATE_ROOM: a game's copy of the Windows template, some 115 MB now that Wine's own DLLs
  * stay in the app (tools/make-prefix.py), with room to grow. */
-enum { CHUNK = 4 * 1024 * 1024, TEMPLATE_ROOM = 128u * 1024 * 1024, SPARE_ROOM = 1024u * 1024 * 1024,
+enum { CHUNK = 4 * 1024 * 1024, TEMPLATE_ROOM = 192u * 1024 * 1024, SPARE_ROOM = 1024u * 1024 * 1024,
        REMOVE_STACK = 96 };
 
 uint64_t pc5_now_ms(void)

@@ -22,7 +22,7 @@ console reads.
    prefix from that list when it installs a game (title/pc5_library.c), so it never has to
    list the app's own folder. A file in system32 or syswow64 that is the same as Wine's
    own (APP_DIR/win/wine/lib/wine/x86_64-windows or i386-windows, by its lower-case name)
-   is left out of both, some 1,650 files and 300 MB: on the console, Wine finds a name
+   is left out of both, some 1,650 files and 250 MB: on the console, Wine finds a name
    missing there in its own folder (Wine patch 0985), so no game needs a copy, nor the app
    two.
 5. APP_DIR/pc5/prefix-media.reg holds what registering winegstreamer.dll (64- and 32-bit)
