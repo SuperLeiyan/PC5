@@ -32,7 +32,7 @@ permissions:
   actions: write   # an earlier run's archives, and the work kept by earlier runs
 
 concurrency:
-  group: pc5-builds
+  group: pc5-build
   cancel-in-progress: false
 
 env:
