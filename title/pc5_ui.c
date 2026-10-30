@@ -745,6 +745,7 @@ Pc5Ui *pc5_ui_create(const Pc5UiConfig *config, const Pc5Platform *platform)
     }
     if (config->start) pc5_copy(ui->start, sizeof(ui->start), config->start);
     ui->usb_roots = config->usb_roots;
+    pc5_usb_roots(config->usb_roots);   /* where games played from a USB drive are looked for */
     ui->platform = *platform;
     if (pc5_fonts_load(&ui->fonts, config->fonts)) say(ui, "PC5 fonts missing: %s", config->fonts);
     make_backdrop(ui);
@@ -1546,14 +1547,24 @@ static void speed_reset(Pc5Ui *ui)
     ui->speed_phase = ui->install.phase;
 }
 
-static void begin_install(Pc5Ui *ui)
+/* 1 when the review's folder is on a USB drive, so it can be played from there. */
+static int review_on_usb(const Pc5Ui *ui)
+{
+    char relative[PC5_PATH];
+    return ui->queue_review < 0 && !pc5_usb_relative(ui->folder.path, relative, sizeof(relative));
+}
+
+/* The review's game installed: copied to the console, or (in_place) played from its USB drive. */
+static void begin_install_as(Pc5Ui *ui, int in_place)
 {
     Pc5Image cover = ui->review_image;
     int status;
 
     ui->review_image = (Pc5Image){ 0 };
-    status = pc5_install_begin(&ui->install, ui->root, ui->template_prefix, &ui->folder, ui->exe, &cover,
-                               ui->review_tint, ui->review_source);
+    status = (in_place ? pc5_install_begin_usb : pc5_install_begin)(&ui->install, ui->root, ui->template_prefix,
+                                                                    &ui->folder, ui->exe, &cover, ui->review_tint,
+                                                                    ui->review_source);
+    if (!status) say(ui, "PC5 install id=%s from=%s usb=%d", ui->install.id, ui->folder.path, in_place);
     ui->installing = 1;
     if (status) {
         char title[200];
@@ -2592,9 +2603,13 @@ static void files_open(Pc5Ui *ui, int game)
     ui->files_changed = 0;
     if (game) {
         if (pc5_game_folder(ui->root, ui->launch_id, ui->files_top, sizeof(ui->files_top)) || !pc5_is_dir(ui->files_top)) {
+            int index = pc5_library_find(&ui->library, ui->launch_id);
             ui->files_top[0] = 0;
-            message(ui, 0, "PC5 can't find the game's folder", "Its files may be missing: uninstall it and install it again.",
-                    S_GAME_MENU);
+            if (index >= 0 && ui->library.games[index].usb)   /* played from its USB drive */
+                message(ui, 0, "Plug in the game's USB drive", "Its files are on the USB drive it plays from.", S_GAME_MENU);
+            else
+                message(ui, 0, "PC5 can't find the game's folder", "Its files may be missing: uninstall it and install it again.",
+                        S_GAME_MENU);
             return;
         }
         pc5_copy(ui->files_path, sizeof(ui->files_path), ui->files_top);
@@ -3333,6 +3348,21 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             go(ui, S_PROGRAMS);
         } else if (ui->queue_review >= 0 && (k & (back | accept))) {
             queue_review_close(ui);
+        } else if ((k & PC5_KEY_TRIANGLE) && review_on_usb(ui)) {
+            /* Played from its USB drive: only its Windows on the console, nothing copied. */
+            uint64_t free_bytes = 0;
+            if (ui->folder.problem[0]) {
+                message(ui, 0, "This folder can't be installed", ui->folder.problem, S_REVIEW);
+            } else if (!pc5_free_bytes(ui->root, &free_bytes) && free_bytes < pc5_install_needs_usb(&ui->folder)) {
+                char need[32], have[32], body[200];
+                pc5_size_text(pc5_install_needs_usb(&ui->folder), need, sizeof(need));
+                pc5_size_text(free_bytes, have, sizeof(have));
+                snprintf(body, sizeof(body), "Its Windows needs %s and the console has %s free.", need, have);
+                message(ui, 0, "Not enough space", body, S_REVIEW);
+            } else {
+                ui->use_saves[0] = 0;
+                begin_install_as(ui, 1);
+            }
         } else if (k & back) {
             ui->menu = 0;
             for (int i = 0; i < ui->source_count; i++)
@@ -3354,7 +3384,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 go(ui, S_SAVES_ASK);
             } else {
                 ui->use_saves[0] = 0;
-                begin_install(ui);
+                begin_install_as(ui, 0);
             }
         }
         break;
@@ -3366,7 +3396,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             go(ui, S_REVIEW);
         } else if ((k & accept) && ui->now - ui->entered > 300) {
             if (!ui->button) ui->use_saves[0] = 0;   /* Start fresh: they stay kept */
-            begin_install(ui);
+            begin_install_as(ui, 0);
         }
         break;
     case S_GAME_UPDATE_ASK:
@@ -3900,6 +3930,10 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                     pc5_graphics_name(chosen.graphics, game->api), game->bits);
             } else {
                 say(ui, "PC5 play id=%s", ui->launch_id);
+            }
+            if (index >= 0 && ui->library.games[index].usb) {
+                char where[PC5_PATH];
+                if (!pc5_game_folder(ui->root, ui->launch_id, where, sizeof(where))) say(ui, "PC5 play from usb dir=%s", where);
             }
             if (ui->platform.play) ui->platform.play(ui->platform.context, ui->launch_id);
             snprintf(title, sizeof(title), "%s didn't start", index >= 0 ? ui->library.games[index].title : "The game");
@@ -4945,12 +4979,16 @@ static void review_screen(Pc5Ui *ui, Pc5Canvas *c)
                       "A .NET program: it runs with Wine Mono, which PC5 sets up the first time a .NET game starts.", 0);
         ny += 90;
     }
-    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ny, (int)tw, 3, 40, C_DIM,
-                  "The game is copied to the console once and checked against the USB drive. Whether a game "
-                  "runs is only known by trying it.", 0);
-    Hint list[4];
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ny, (int)tw, 4, 40, C_DIM,
+                  review_on_usb(ui)
+                      ? "Install copies the game to the console. Play from USB copies nothing: the game plays from "
+                        "the drive, which stays plugged in. Whether a game runs is only known by trying it."
+                      : "The game is copied to the console once and checked against the USB drive. Whether a game "
+                        "runs is only known by trying it.", 0);
+    Hint list[5];
     int n = 0;
     list[n++] = (Hint){ accept_glyph(ui), ui->queue_review >= 0 ? "Done" : "Install" };
+    if (review_on_usb(ui)) list[n++] = (Hint){ G_TRIANGLE, "Play from USB" };
     if (choices > 1) list[n++] = (Hint){ G_L1R1, "Other covers" };
     if (ui->folder.exe_count > 1) list[n++] = (Hint){ G_SQUARE, "Change program" };
     if (ui->queue_review < 0) list[n++] = (Hint){ back_glyph(ui), "Back" };

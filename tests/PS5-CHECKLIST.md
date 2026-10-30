@@ -414,3 +414,15 @@ controller's speaker.
 | 202 | Whole console, or PC5's app: △ | only Copy and Tick all | — |
 | 203 | Console storage: the prospero-win folder: △ | no Cut, Rename or Delete for it | — |
 | 204 | Delete a mod from a game's folder, back to the library | the game still starts | `PC5 files close changed=1`, `PC5 library games=` |
+
+## Play from USB (next)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 205 | Install games from USB › a game › △ Play from USB | done in seconds, nothing copied; the library shows `USB ·` before its details | `PC5 install id=… usb=1` |
+| 206 | Start it | it starts and plays as a copied one would | `PC5 play from usb dir=/mnt/usb…`; no `can't open` or `not found` for its files |
+| 207 | Save in the game, quit, start again | the save is there | |
+| 208 | A game that saves into its own folder | it saves (or the log shows the write refused on the drive) | |
+| 209 | Unplug the drive, start it | "Plug in the USB drive with …", no start | `PC5 problem play …: Plug in the USB drive` |
+| 210 | Plug the drive into another port, start it | it starts | `dir=/mnt/usb<other>` |
+| 211 | Uninstall it (Keep saves, then Delete all) | the console's part gone; the game's folder on the drive unchanged | |
