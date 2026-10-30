@@ -51,4 +51,26 @@ That is up to the game. Look for the game's PC launch options: the ones you woul
 
 Don't edit the game's profile in `/data/prospero-win/profiles/` instead: PC5 writes it again each time the game starts. `launch.txt` is the place for launch options.
 
+## A game's environment variables (env.txt)
+
+Some games read environment variables, the way a fix on PCGamingWiki or a game's own documentation may ask you to set one. In PC5 you set them for one game in a text file called `env.txt`, in the game's `pc5` folder:
+
+```text
+/data/prospero-win/prefixes/<game>/pc5/env.txt
+```
+
+`<game>` is the game's id, as above. Write one variable per line, as `NAME=value`, for example:
+
+```text
+# Turns off the game's crash monitor
+MY_GAME_NO_MONITOR=1
+```
+
+- PC5 reads the file each time the game starts, so a change takes effect at the next start.
+- Lines starting with `#` are comments. Up to 32 variables are used.
+- A name has letters, digits and `_` only. Names PC5, prospero-win and Wine set themselves are left out: those starting with `WINE`, `PW_`, `LD_`, `PS5` or `PC5`, and `PATH`, `HOME` and `TMPDIR`.
+- The game's log says which were set: `PC5 env.txt set=1 MY_GAME_NO_MONITOR`.
+
+To stop using them, delete `env.txt`, or put `#` in front of a line.
+
 See also [Files and folders](Files-and-folders) for where everything else is.

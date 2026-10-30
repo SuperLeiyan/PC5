@@ -1,7 +1,7 @@
 PC5 has a file manager for the console's own files, in two places:
 
 - **A game's own folder**: in the library, press **△** on the game, then **Manage › Game files**. It opens the folder PC5 installed the game in, and nothing above it. Use it to add a mod, delete a file a game doesn't need, or copy a save out. It is there for games PC5 installed.
-- **The whole console**: **Settings › File manager** (press **Options** in the library). It starts with the places there are: **Console storage** (`/data`), each **USB drive** and **Extended storage** drive plugged in, **PC5's app** and the **Whole console** (`/`).
+- **The whole console**: **Settings › File manager** (press **Options** in the library). It starts with the places there are: **Console storage** (`/data`), each **USB drive** and **Extended storage** drive plugged in, **PC5's app**, **PC5's INSTALL folder** and the **Whole console** (`/`).
 
 ![A game's files](images/files-game.png)
 *Manage › Game files: the game's own folder.*
@@ -34,7 +34,7 @@ A file is copied under a temporary name (`<name>.pc5part`) and renamed when it i
 
 ## What it won't change
 
-PC5 writes only to Console storage (`/data`), USB drives and Extended storage. **PC5's app** and the **Whole console** are read-only: you can look and copy from them, nothing more. PC5 never deletes, moves or renames a drive itself, `/data/prospero-win`, or PC5's own app folder (it can change what is inside `/data/prospero-win`, so take care there: deleting a game's files from there can stop it running).
+PC5 writes only to Console storage (`/data`), USB drives and Extended storage. **PC5's app** and the **Whole console** are read-only: you can look and copy from them, nothing more. PC5's own folder is read-only wherever it is, except its INSTALL folder: paste a game's folder there and PC5 offers to install it the next time it opens (see [The INSTALL folder](Installing-games#the-install-folder)). PC5 never deletes, moves or renames a drive itself, `/data/prospero-win`, PC5's own folder or its INSTALL folder (it can change what is inside `/data/prospero-win`, so take care there: deleting a game's files from there can stop it running).
 
 Names follow exFAT's rules, so they work on USB drives too: no `\ / : * ? " < > |`, no name ending in a space or a dot, and 255 bytes at most.
 

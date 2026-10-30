@@ -71,8 +71,8 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Play | Starts the game. |
 | Controller | What the game sees: **Xbox controller** (the default), **DualSense**, or **Keyboard & mouse**. Press **✕** or left / right to change it. See [Controllers](Controllers). |
 | Button mapping | Only with Keyboard & mouse: what each button and stick sends. See [Controllers](Controllers#button-mapping). |
-| Graphics › | Graphics API, frame generation, resolution, aspect ratio, memory and CPU sharing. See [Graphics](#graphics). |
-| Appearance › | The game's cover, its background and its home screen tile. See [Appearance](#appearance). |
+| Graphics › | Graphics API, frame generation, resolution, aspect ratio, memory, video memory and CPU sharing. See [Graphics](#graphics). |
+| Appearance › | The game's cover, its background, its home screen tile and the tile's picture. See [Appearance](#appearance). |
 | Manage › | The program PC5 starts, its files, updating the game and uninstalling it. See [Manage](#manage). |
 
 **○** goes back from a group to the menu, and from the menu to the library. **△** closes the menu from anywhere in it.
@@ -89,6 +89,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Resolution | Only for games drawn with Direct3D, Vulkan or OpenGL: **1080p** (the default), **1440p** or **4K**. See [Resolution](#resolution) below. |
 | Aspect ratio | **Keep** (the default) or **Stretch**. See [Aspect ratio](#aspect-ratio) below. |
 | Memory | Only for 32-bit games: **Auto** (the default from 1.9.8) or **4 GB**. Auto is as on Windows: a game made for more memory (its program says so) gets 4 GB of address space, any other gets 2 GB. 4 GB gives every game 4 GB, room for big textures and mods, but an older game not made for it can crash with it. From 1.4.0 to 1.9.7 every game had 4 GB; a game left as it was is Auto from 1.9.8. |
+| Video memory | Only for 32-bit games: **Auto** (the default) or **Full**. Auto tells the game it has 2 GB of video memory: some older games misread more than that, and refuse to start or say they need more than there is. **Full** tells the game all the console's. |
 | CPU sharing | **Off** (the default) or **On**. The console runs each of a game's threads on a CPU of its own until it waits, where Windows lets them take turns, so a game that keeps more threads busy than its 13 CPUs can stop for seconds at a time and carry on after a while, or after the PS button. **On** gives the game's threads turns, as on a PC. It applies the next time the game starts. |
 
 ### Appearance
@@ -100,7 +101,8 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | --- | --- |
 | Cover | Another of the covers found for the game, one found for a name you type, or the card made from its icon. See [Changing a cover or background](Covers#changing-a-cover-or-background). |
 | Background | Another of the backgrounds found, one found for a name you type, or none. See [Changing a cover or background](Covers#changing-a-cover-or-background). |
-| Home screen tile | **Off** or **On**: a tile on the PS5's home screen that starts this game. See [Home screen tiles](Home-screen-tiles). |
+| Home screen tile | **Off** or **On**: a tile on the PS5's home screen, an app of its own that starts this game. See [Home screen tiles](Home-screen-tiles). |
+| Tile picture | The tile's picture: a square one from SteamGridDB (with your key), or one made from its cover. See [The tile's picture](Home-screen-tiles#the-tiles-picture). |
 
 ### Manage
 
@@ -110,7 +112,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | Row | What it does |
 | --- | --- |
 | Change program | The program PC5 starts for this game ("Now: …"). Choose another one if PC5 picked the wrong one. See [Choosing the right program](Installing-games#choosing-the-right-program). |
-| Game files | Only for games PC5 installed: the game's own folder, to copy, move, rename and delete its files. See [File manager](File-manager). |
+| Game files | Only for games PC5 installed: the game's own folder, to copy, move, rename and delete its files (on its drive, for a game that [plays from USB](Installing-games#playing-a-game-from-its-usb-drive)). See [File manager](File-manager). |
 | Update | Only for games PC5 installed: copies a newer version from the USB drive over the game. Its saves, settings and options stay. See [Updating a game](Installing-games#updating-a-game). |
 | Uninstall | Deletes the game, keeping its saves or not, after asking. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
 

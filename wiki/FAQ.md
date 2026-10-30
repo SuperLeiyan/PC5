@@ -26,10 +26,10 @@ It is PC5's title ID: the name of the app's folder and of the release's zip file
 ## Installing
 
 **Can I install from the console's own storage or the network?**
-No. PC5 installs games from USB drives only, formatted as exFAT. See [Installing games](Installing-games).
+From USB drives formatted as exFAT, and from PC5's INSTALL folder, which you can fill over FTP or with the file manager. See [The INSTALL folder](Installing-games#the-install-folder).
 
 **Do I need to keep the USB drive plugged in to play?**
-No. PC5 copies each game to the console. The USB drive is only read while installing, and never written to.
+Not for an installed game: PC5 copies each game to the console, and the USB drive is only read while installing. A game you chose to [play from USB](Installing-games#playing-a-game-from-its-usb-drive) needs its drive plugged in.
 
 **Can I install a game's installer (setup.exe)?**
 No. Install the game on a PC first, then copy the installed folder to the USB drive.
