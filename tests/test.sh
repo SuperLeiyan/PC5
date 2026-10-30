@@ -113,6 +113,25 @@ else
     echo "test_wine_fs: left out, no Wine source at $wine (tools/build.sh sources fetches it)"
 fi
 
+# Wine patch 0985: a name missing from a game's system32 or syswow64 is Wine's own file,
+# taken from Wine's file.c with prospero-win's patches applied (as for 0935 above).
+if [[ -f $wine/dlls/ntdll/unix/file.c ]]; then
+    mkdir -p "$out/wine-system/dlls/ntdll/unix"
+    cp "$wine/dlls/ntdll/unix/file.c" "$out/wine-system/dlls/ntdll/unix/"
+    for patch in "$PW"/wine/patches/*.patch; do
+        grep -q '^+++ b/dlls/ntdll/unix/file\.c' "$patch" || continue
+        GIT_CEILING_DIRECTORIES=$out git -C "$out/wine-system" apply --include=dlls/ntdll/unix/file.c "$patch"
+    done
+    awk '/^static NTSTATUS ps5_wine_system_file/{p=1} p{print} p&&/^}/{exit}' \
+        "$out/wine-system/dlls/ntdll/unix/file.c" > "$out/wine-system/system_func.c"
+    grep -q ps5_wine_system_file "$out/wine-system/system_func.c" ||
+        { echo "test_wine_system: Wine patch 0985 isn't applied" >&2; exit 1; }
+    cc -std=c11 -Wall -Wextra -Werror -I"$out/wine-system" tests/test_wine_system.c -o "$out/test_wine_system"
+    "$out/test_wine_system"
+else
+    echo "test_wine_system: left out, no Wine source at $wine (tools/build.sh sources fetches it)"
+fi
+
 # Clang 18, as the console build uses it, finds nothing to warn about either.
 for file in title/pc5*.c; do
     # The console's own system calls (FreeBSD headers): built by tools/build.sh only. pc5_console.c,

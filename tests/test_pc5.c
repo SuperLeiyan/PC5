@@ -43,6 +43,7 @@ void pc5_web_host_init(void);   /* the same */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -240,7 +241,20 @@ typedef struct FakeNet {
     int no_steam_heroes;     /* Steam has no library hero for any game */
 } FakeNet;
 
+/* One request at a time, as the console's network takes them (pc5_net.c): PC5 asks GitHub on
+ * a thread of its own as it opens, while the screens may ask for a cover. */
+static pthread_mutex_t fake_net_lock = PTHREAD_MUTEX_INITIALIZER;
+static int fake_get_unlocked(void *context, const char *url, Pc5Buf *out, size_t max, int *status);
+
 static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int *status)
+{
+    pthread_mutex_lock(&fake_net_lock);
+    int rc = fake_get_unlocked(context, url, out, max, status);
+    pthread_mutex_unlock(&fake_net_lock);
+    return rc;
+}
+
+static int fake_get_unlocked(void *context, const char *url, Pc5Buf *out, size_t max, int *status)
 {
     FakeNet *net = context;
     char file[PC5_PATH] = "";
@@ -307,15 +321,27 @@ static int fake_get(void *context, const char *url, Pc5Buf *out, size_t max, int
 
 /* SteamGridDB's API, which wants "Bearer <key>": its search, and the grids and heroes of the
  * made-up game 5001 (Steam app 901001). */
+static int fake_get_authorized_unlocked(void *context, const char *url, const char *authorization, Pc5Buf *out,
+                                        size_t max, int *status);
+
 static int fake_get_authorized(void *context, const char *url, const char *authorization, Pc5Buf *out, size_t max,
                                int *status)
+{
+    pthread_mutex_lock(&fake_net_lock);
+    int rc = fake_get_authorized_unlocked(context, url, authorization, out, max, status);
+    pthread_mutex_unlock(&fake_net_lock);
+    return rc;
+}
+
+static int fake_get_authorized_unlocked(void *context, const char *url, const char *authorization, Pc5Buf *out,
+                                        size_t max, int *status)
 {
     FakeNet *net = context;
     char file[PC5_PATH] = "";
     const char *api = "https://www.steamgriddb.com/api/v2/", *plain =
         "&types=static&mimes=image%2Fpng%2Cimage%2Fjpeg&nsfw=false&humor=false&epilepsy=false";
 
-    if (strncmp(url, api, strlen(api))) return fake_get(context, url, out, max, status);   /* the key goes nowhere else */
+    if (strncmp(url, api, strlen(api))) return fake_get_unlocked(context, url, out, max, status);   /* the key goes nowhere else */
     net->requests++;
     net->griddb_requests++;
     pc5_copy(net->last, sizeof(net->last), url);
@@ -1071,7 +1097,6 @@ static void test_install_folder(void)
     run(file);
     path(game, sizeof(game), "%s/NeonDrift", take);
     pc5_install_take_from(take);
-    CHECK(pc5_install_take_dir() && !strcmp(pc5_install_take_dir(), take), "the INSTALL folder named");
 
     install_from(game, root2, &install, 0, 0);
     CHECK(install.phase == PC5_INSTALL_DONE && install.take, "installed by moving it: %s", install.error);
@@ -1144,7 +1169,6 @@ static void test_install_folder(void)
     CHECK(install.phase == PC5_INSTALL_DONE && !install.take && pc5_is_dir(from), "from a USB drive: copied");
     pc5_install_end(&install);
     pc5_install_take_from(NULL);
-    CHECK(!pc5_install_take_dir(), "and none named after");
 }
 
 static void test_install(void)
@@ -1218,7 +1242,7 @@ static void test_install(void)
         Pc5Info twelve = info;
         static char text[4096];
         twelve.api = PC5_API_D3D12;
-        CHECK(!pc5_profile_text("twelve", &twelve, "", NULL, NULL, text, sizeof(text)) &&
+        CHECK(!pc5_profile_text_at("twelve", &twelve, "", NULL, NULL, NULL, text, sizeof(text)) &&
               strstr(text, "dll_overrides = d3d8,d3d9,d3d10core,d3d11,d3d12,d3d12core,dxgi=n\n"), "d3d12 overrides");
     }
     /* Changed launch options take effect at the next start. */
@@ -1303,11 +1327,11 @@ static void test_install(void)
         pc5_controls_default(&controls);
         controls.resolution = 2;
         flat.api = PC5_API_DDRAW;
-        CHECK(!pc5_profile_text("flat", &flat, "", &controls, NULL, text, sizeof(text)) && strstr(text, "desktop = 1920x1080\n"),
+        CHECK(!pc5_profile_text_at("flat", &flat, "", &controls, NULL, NULL, text, sizeof(text)) && strstr(text, "desktop = 1920x1080\n"),
               "DirectDraw at 1080p");
         CHECK(strstr(text, "graphics = opengl\n") != NULL, "DirectDraw through Wine's Direct3D on Zink");
         flat.api = PC5_API_GDI;
-        CHECK(!pc5_profile_text("flat", &flat, "", &controls, NULL, text, sizeof(text)) && strstr(text, "graphics = gdi\n"),
+        CHECK(!pc5_profile_text_at("flat", &flat, "", &controls, NULL, NULL, text, sizeof(text)) && strstr(text, "graphics = gdi\n"),
               "plain Windows drawing stays with Wine");
     }
     /* Overrides stay within prospero-win's 256 characters: whole names only. */
@@ -1316,7 +1340,7 @@ static void test_install(void)
         snprintf(many, sizeof(many), "%s", "api-ms-win-crt-conio-l1-1-0,api-ms-win-crt-heap-l1-1-0,api-ms-win-crt-locale-l1-1-0,"
                  "api-ms-win-crt-math-l1-1-0,api-ms-win-crt-runtime-l1-1-0,api-ms-win-crt-stdio-l1-1-0,"
                  "api-ms-win-crt-time-l1-1-0,msvcp140,vcruntime140");
-        CHECK(!pc5_profile_text("many", &info, "", NULL, many, text, sizeof(text)), "long list");
+        CHECK(!pc5_profile_text_at("many", &info, "", NULL, many, NULL, text, sizeof(text)), "long list");
         char *line = strstr(text, "dll_overrides = "), *end = line ? strchr(line, '\n') : NULL;
         CHECK(line && end && end - line - 16 <= 256 && !memcmp(end - 4, "=n,b", 4) && *(end - 5) != ',', "cut at a name: %.*s",
               line && end ? (int)(end - line) : 0, line ? line : "");
@@ -5909,10 +5933,18 @@ static void test_screens(const char *fonts)
     until_screen(ui, "library", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "library"), "library after start: %s", pc5_ui_screen(ui));
     {
+        /* GitHub is asked on a thread of its own: the library shows without waiting for it, and
+         * its answer comes in while the library shows. */
         Pc5UpdateMemory memory;
-        pc5_update_load(root, &memory);
+        for (int i = 0; i < 2000; i++) {
+            pc5_update_load(root, &memory);
+            if (memory.checked) break;
+            frames(ui, 0, 0, 1, &canvas);
+            usleep(1000);
+        }
         CHECK(memory.checked == 1792700000 && memory.last.state == PC5_UPDATE_NONE, "asked GitHub at start: %d",
               (int)memory.last.state);
+        CHECK(!strcmp(pc5_ui_screen(ui), "library"), "still the library after GitHub's answer: %s", pc5_ui_screen(ui));
     }
     /* The covers the start fetched: Starfall had one; Orbital Nine looked online. */
     press(ui, PC5_KEY_OPTIONS, &canvas);
@@ -6648,6 +6680,9 @@ static void test_upgrade_screens(const char *fonts)
     }
     Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, drives, NULL, NULL, 0, 0 };
     Pc5Ui *ui = pc5_ui_create(&config, &platform);
+    /* GitHub is asked on a thread of its own: the library first, then the offer over it. */
+    until_screen(ui, "library", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "the library before GitHub's answer: %s", pc5_ui_screen(ui));
     until_screen(ui, "upgrade-ask", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "upgrade-ask") && !console.notifications, "asked when PC5 opens: %s %d",
           pc5_ui_screen(ui), console.notifications);

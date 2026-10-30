@@ -20,7 +20,11 @@ console reads.
    CPU, wowprospero.dll goes in system32, and the console user's folders are there.
 4. APP_DIR/pc5/prefix.list lists every folder (ending in '/') and file: PC5 copies the
    prefix from that list when it installs a game (title/pc5_library.c), so it never has to
-   list the app's own folder.
+   list the app's own folder. A file in system32 or syswow64 that is the same as Wine's
+   own (APP_DIR/win/wine/lib/wine/x86_64-windows or i386-windows, by its lower-case name)
+   is left out of both, some 1,650 files and 300 MB: on the console, Wine finds a name
+   missing there in its own folder (Wine patch 0985), so no game needs a copy, nor the app
+   two.
 5. APP_DIR/pc5/prefix-media.reg holds what registering winegstreamer.dll (64- and 32-bit)
    adds to system.reg: the sections the prefix has that unregistering it takes away. A game
    installed before winegstreamer was built has none of it, and wineboot cannot run on the
@@ -32,7 +36,7 @@ console reads.
    RuntimePath, which PC5 sets: title/pc5_game.c). The installer's own copy of the MSI is
    left out. APP_DIR/pc5/prefix-dotnet.reg holds what installing it added to system.reg,
    for games installed before (as prefix-media.reg), and APP_DIR/pc5/mono-version.txt names
-   the version.
+   the version. Its C# and Visual Basic compilers are left out: no game builds itself.
 7. Fonts: tools/build.sh puts Liberation and Droid Sans Fallback in Wine's own fonts folder,
    which Wine loads for every game. HKCU\\Software\\Wine\\Fonts\\Replacements gives them the
    names games ask for (FONT_REPLACEMENTS: Arial, Times New Roman, Courier New, and the
@@ -52,6 +56,7 @@ import argparse
 import calendar
 import hashlib
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -97,6 +102,11 @@ MACHINE_CPU = {"PROCESSOR_IDENTIFIER": "AMD64 Family 23 Model 71 Stepping 0, Aut
 # The registry's GUIDs Wine makes by chance; a device's ContainerId keeps its first part
 # (the device's own ID), so the same device has the same one in each file.
 RANDOM_GUIDS = ("MachineGuid", "MachineId", "VideoID", "ContainerId")
+
+
+# Wine Mono's compilers and their settings, by name (lower case): left out of its runtime (6.).
+COMPILERS = {"csc.exe", "csc.exe.config", "csc.rsp", "csi.exe", "csi.exe.config", "csi.rsp", "vbc.exe",
+             "vbc.exe.config", "vbc.rsp", "vbcscompiler.exe", "vbcscompiler.exe.config"}
 
 
 def filetime(seconds: int) -> int:
@@ -318,6 +328,13 @@ def main() -> int:
     runtime = "drive_c/windows/mono/"
     mono_files = {key[len(runtime):]: path for key, path in files.items() if key.startswith(runtime)}
     mono_dirs = {d[len(runtime):] for d in dirs if d.startswith(runtime) and d != runtime.rstrip("/")}
+    # Its C# and Visual Basic compilers (Roslyn, some 11 MB), which no game runs: a game's
+    # program is already built.
+    compilers = {key for key in mono_files if posixpath.basename(key).startswith("Microsoft.CodeAnalysis") or
+                 posixpath.basename(key).lower() in COMPILERS}
+    if not compilers:
+        sys.exit("make-prefix: Wine Mono's compilers aren't where they were: look at what is left out again")
+    mono_files = {key: path for key, path in mono_files.items() if key not in compilers}
     files = {key: path for key, path in files.items() if not key.startswith(runtime)}
     dirs = {d for d in dirs if not d.startswith(runtime) and d != runtime.rstrip("/")}
     if any(folder.startswith(runtime) or folder == runtime.rstrip("/") for folder in links):
@@ -337,6 +354,25 @@ def main() -> int:
             path = f"{path}/{part}" if path else part
             dirs.add(path)
     dirs.add("drive_c/Games")
+
+    # Wine's own DLLs: Wine on the console serves them from its folder (4. above).
+    if not list((args.pw / "wine" / "patches").glob("0985-*.patch")):
+        sys.exit("make-prefix: Wine patch 0985 isn't in the series: the template must keep Wine's DLLs")
+    wine_lib = args.out / "win" / "wine" / "lib" / "wine"
+    served = set()
+    for folder, pe_dir in (("drive_c/windows/system32/", "x86_64-windows"), ("drive_c/windows/syswow64/", "i386-windows")):
+        for key in files:
+            name = key[len(folder):]
+            if not key.startswith(folder) or "/" in name or key in pw_prefix.REGISTRY:
+                continue
+            own = wine_lib / pe_dir / name.lower()
+            if own.is_file() and own.stat().st_size == files[key].stat().st_size and \
+                    own.read_bytes() == files[key].read_bytes():
+                served.add(key)
+    if not served:
+        sys.exit(f"make-prefix: no file in system32 or syswow64 is Wine's own from {wine_lib}: is Wine in the app?")
+    served_size = sum(files[key].stat().st_size for key in served)
+    files = {key: path for key, path in files.items() if key not in served}
 
     print(f"-- the Windows template: writing its {len(files)} files", flush=True)
     target = args.out / "pc5" / "prefix"
@@ -388,7 +424,9 @@ def main() -> int:
           f"prefix-media.reg: {media.count(chr(10) + '[')} keys; prefix-dotnet.reg: {dotnet.count(chr(10) + '[')} keys; "
           f"prefix-fonts.reg: {len(FONT_REPLACEMENTS)} font names; "
           f"Wine Mono {args.mono_version}: {len(mono_listed)} entries, {mono_size >> 20} MB; "
-          f"left out, empty and unholdable on Windows: {len(unholdable)}")
+          f"left out, empty and unholdable on Windows: {len(unholdable)}; "
+          f"left out, Wine's own: {len(served)} files, {served_size >> 20} MB; "
+          f"left out, Wine Mono's compilers: {len(compilers)} files")
     return 0
 
 

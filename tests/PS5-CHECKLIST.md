@@ -476,3 +476,15 @@ controller's speaker.
 | 254 | A game with Valve's `steam_api64.dll` (no SteamStub), started | it starts as without Steam's client; `steam_api64.dll.pc5-valve` and `steam_settings/` beside the DLL | `PC5 steam emulator on changed=1` |
 | 255 | △ › Manage › Steam emulator Off, start it | Valve's DLL back (and the game quits for want of Steam, as before) | `PC5 steam emulator off changed=1` |
 | 256 | A game whose program has SteamStub (a `.bind` section) | "… needs Steam", not started | `PC5 problem play …: SteamStub (.bind) in …` |
+
+## 2.0.3-test2: smaller games, smaller PC5, no wait at start
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 257 | Open PC5 with the console online | the library at once, then "PC5 … is available" over it if there is a newer one | `PC5 update checking in the background`, then `PC5 update state=…` |
+| 258 | Open PC5 with the console offline | the library at once, no wait | `PC5 update state=1` |
+| 259 | Install a game (from USB or the INSTALL folder) | it installs sooner; its `drive_c/windows/system32` holds a few dozen files, not over a thousand | `PC5 installed id=…` |
+| 260 | Start that game (one on Direct3D 9, one on Direct3D 11, a 32-bit one) | it starts and plays as before | no `err:module:import_dll Library … not found` |
+| 261 | A .NET game installed with this build | it starts | no `mscoree` errors |
+| 262 | A game installed before this build | it starts as before | |
+| 263 | A game installed with this build that ships its own `d3dx9_43.dll` or `xinput1_3.dll` | its own one is used | `Loaded L"C:\\Games\\…\\d3dx9_43.dll" … native` |

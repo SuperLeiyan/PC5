@@ -64,11 +64,8 @@ int pc5_library_find(const Pc5Library *library, const char *id);
 int pc5_info_read(const char *root, const char *id, Pc5Info *info);
 int pc5_info_text(const Pc5Info *info, char *out, size_t size);
 /* The profile prospero-win reads for a PC5 game; arguments may be "", own_dlls NULL or
- * "" (pc5_own_dlls: the game's own Microsoft DLLs, which then go first). */
-int pc5_profile_text(const char *id, const Pc5Info *info, const char *arguments, const Pc5Controls *controls,
-                     const char *own_dlls, char *out, size_t size);
-/* The same, with the working folder working_directory (a Windows path) in place of the
- * program's own when it isn't NULL. */
+ * "" (pc5_own_dlls: the game's own Microsoft DLLs, which then go first), and
+ * working_directory NULL for the program's own folder, or a Windows path in its place. */
 int pc5_profile_text_at(const char *id, const Pc5Info *info, const char *arguments, const Pc5Controls *controls,
                         const char *own_dlls, const char *working_directory, char *out, size_t size);
 /* The Microsoft DLLs (Visual C++ runtimes, Direct3D compilers, D3DX) the game's program
@@ -211,7 +208,6 @@ uint64_t pc5_install_needs_usb(const Pc5Folder *folder);
  * not copied, when they are on the same drive: no second copy, and done at once. */
 void pc5_install_take_from(const char *dir);
 #define PC5_INSTALL_FOLDER "INSTALL"
-const char *pc5_install_take_dir(void);
 /* Works for about budget_ms. Returns the phase reached. */
 Pc5InstallPhase pc5_install_step(Pc5Install *install, int budget_ms);
 void pc5_install_cancel(Pc5Install *install);

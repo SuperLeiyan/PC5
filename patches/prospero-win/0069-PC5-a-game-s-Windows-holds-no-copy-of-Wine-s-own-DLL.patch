@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 21:00:00 +0000
+Subject: [PATCH 69/69] PC5: a game's Windows holds no copy of Wine's own DLLs: a
+ name missing from its system32 or syswow64 is Wine's file of that name (Wine
+ patch 0985)
+
+---
+ ...erve-wine-dlls-missing-from-system32.patch | 114 ++++++++++++++++++
+ 1 file changed, 114 insertions(+)
+ create mode 100644 wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+
+diff --git a/wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch b/wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+new file mode 100644
+index 0000000..a9723ac
+--- /dev/null
++++ b/wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+@@ -0,0 +1,114 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 12:00:00 +0000
++Subject: [PATCH] ntdll: Serve Wine's own DLLs missing from a PS5 prefix's
++ system32.
++
++A Windows that PC5 makes for a game copied every file of its template,
++some 300 MB of them Wine's own DLLs, the same files as in the app's
++lib/wine/x86_64-windows and i386-windows. Upstream finds a builtin with
++no file in system32 only while a prefix is being made
++(find_builtin_without_file), and programs open, query and version-check
++these files by their system32 path, so the files can't just be left out.
++
++On a PS5 title, a name looked up for opening (FILE_OPEN) that isn't in
++the prefix's windows/system32 or windows/syswow64 is the file of that
++name in Wine's own folder for that architecture, as if linked there:
++loading, opening for reading and querying it all work. The name is
++looked for in lower case, as Wine names its files; a file the game makes
++there is found first from then on, and creating one is unchanged. A
++prefix that still has its copies never gets this far.
++
++Not listed: a directory listing of system32 doesn't show these names.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++index 48de148..e0ee85f 100644
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -3916,6 +3916,69 @@ static int dir_prefix_find( int root_fd, char **buffer, int *unix_len, int pos,
++ }
++ #endif
++ 
+++#ifdef __PROSPERO__
+++/* PC5 gives a game's Windows no copy of the DLLs Wine itself has (some 300 MB a game):
+++ * a name missing from its system32 or syswow64 is Wine's own file of that name, as if
+++ * linked there. Only for opening what is there; a game's own file of that name, once
+++ * made, is the one found. dir is the folder looked in (unix_name up to pos), name the
+++ * last element. STATUS_SUCCESS with *buffer the file's path, or the status unchanged. */
+++static NTSTATUS ps5_wine_system_file( char **buffer, int *unix_len, int pos, const WCHAR *name, int length )
+++{
+++    static const struct { const char *folder, *pe_dir; } folders[] =
+++    {
+++        { "/dosdevices/c:/windows/system32", "/x86_64-windows" },
+++        { "/dosdevices/c:/windows/syswow64", "/i386-windows" },
+++        { "/drive_c/windows/system32", "/x86_64-windows" },
+++        { "/drive_c/windows/syswow64", "/i386-windows" },
+++    };
+++    size_t config_len = strlen( config_dir );
+++    const char *dir = *buffer, *pe_dir = NULL;
+++    char lower[MAX_DIR_ENTRY_LEN + 1], *path;
+++    unsigned int i;
+++    struct stat st;
+++    int ret;
+++
+++    if ((size_t)pos <= config_len || strncmp( dir, config_dir, config_len )) return STATUS_OBJECT_NAME_NOT_FOUND;
+++    for (i = 0; i < ARRAY_SIZE(folders) && !pe_dir; i++)
+++        if ((size_t)pos - config_len == strlen( folders[i].folder ) &&
+++            !strncmp( dir + config_len, folders[i].folder, pos - config_len ))
+++            pe_dir = folders[i].pe_dir;
+++    if (!pe_dir) return STATUS_OBJECT_NAME_NOT_FOUND;
+++    /* Wine's files are named in lower case ASCII: any other name isn't one of them. */
+++    if (length > MAX_DIR_ENTRY_LEN) return STATUS_OBJECT_NAME_NOT_FOUND;
+++    for (ret = 0; ret < length; ret++)
+++    {
+++        WCHAR c = name[ret];
+++        if (c >= 0x80 || c == '/' || c < 32) return STATUS_OBJECT_NAME_NOT_FOUND;
+++        lower[ret] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
+++    }
+++    lower[length] = 0;
+++    if (!strcmp( lower, "." ) || !strcmp( lower, ".." ) || (length > 2 && !strcmp( lower + length - 2, ".a" )))
+++        return STATUS_OBJECT_NAME_NOT_FOUND;   /* Wine's import libraries are no Windows files */
+++    for (i = 0; dll_paths[i]; i++)
+++    {
+++        if (asprintf( &path, "%s%s/%s", dll_paths[i], pe_dir, lower ) == -1) return STATUS_NO_MEMORY;
+++        if (!stat( path, &st ) && S_ISREG( st.st_mode ))
+++        {
+++            size_t needed = strlen( path ) + 1;
+++            if ((size_t)*unix_len < needed)
+++            {
+++                char *bigger = realloc( *buffer, needed );
+++                if (!bigger) { free( path ); return STATUS_NO_MEMORY; }
+++                *buffer = bigger;
+++                *unix_len = needed;
+++            }
+++            memcpy( *buffer, path, needed );
+++            TRACE( "%s: Wine's own %s\n", debugstr_wn( name, length ), path );
+++            free( path );
+++            return STATUS_SUCCESS;
+++        }
+++        free( path );
+++    }
+++    return STATUS_OBJECT_NAME_NOT_FOUND;
+++}
+++#endif
+++
++ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_STRING *nt_name,
++                                   unsigned int nt_pos, char **buffer, int unix_len, int pos,
++                                   UINT disposition, BOOL open_reparse, BOOL is_unix, unsigned int reparse_count )
++@@ -4054,6 +4117,16 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
++         /* if this is the last element, not finding it is not necessarily fatal */
++         if (!name_len)
++         {
+++#ifdef __PROSPERO__
+++            if (status == STATUS_OBJECT_NAME_NOT_FOUND && disposition == FILE_OPEN && root_fd == AT_FDCWD &&
+++                !is_unix && end == next)
+++            {
+++                unix_name[pos] = 0;
+++                status = ps5_wine_system_file( buffer, &unix_len, pos, name, end - name );
+++                unix_name = *buffer;
+++                if (status != STATUS_OBJECT_NAME_NOT_FOUND) return status;
+++            }
+++#endif
++             if (status == STATUS_OBJECT_NAME_NOT_FOUND)
++             {
++                 if (disposition != FILE_OPEN && disposition != FILE_OVERWRITE)
+-- 
+2.43.0
+

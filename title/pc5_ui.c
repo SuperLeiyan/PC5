@@ -293,6 +293,17 @@ typedef struct Cover {
     int state;           /* 0 not loaded, 1 loaded */
 } Cover;
 
+/* The update check as PC5 opens, on a thread of its own so the library shows at once: its
+ * answer is taken on the screens' thread (update_check_follow), and a newer PC5 is offered
+ * once the library is showing. */
+typedef struct UpdateJob {
+    pthread_t thread;
+    int running, offer;
+    atomic_int done;
+    Pc5Http http;
+    Pc5Update result;
+} UpdateJob;
+
 struct Pc5Ui {
     Pc5UiConfig config;
     char root[PC5_PATH], template_prefix[PC5_PATH], app[PC5_PATH];
@@ -380,6 +391,7 @@ struct Pc5Ui {
     int griddb_refused;            /* SteamGridDB refused that key at its last answer */
     int api_choice;                /* the Graphics API window: the choice picked (an index of pc5_graphics_choices) */
     Pc5UpdateMemory update;
+    UpdateJob update_job;
     Pc5LogIssue issue;             /* what went wrong last time, told once the library shows */
     int issue_pending;
     Pc5InstallPhase speed_phase;
@@ -807,6 +819,7 @@ void pc5_ui_destroy(Pc5Ui *ui)
     }
     pc5_backgrounds_end(&ui->backgrounds, 1);
     if (ui->bg_job.running) pthread_join(ui->bg_job.thread, NULL);
+    if (ui->update_job.running) pthread_join(ui->update_job.thread, NULL);
     pc5_image_free(&ui->bg_job.cover);
     pc5_free(ui->bg_job.out);
     if (ui->runtime_state == 1) pc5_runtime_end(&ui->runtime);
@@ -2490,10 +2503,56 @@ static int system_row(const Pc5Ui *ui, SettingRow row)
  * release, but not when asked to be quiet: PC5 offers to install it at once, its window says
  * so (as each time the player opens PC5), nor ever when quiet_if_offered is 2 (a window says so
  * whatever it offers). 1 when the release has PC5's zip. */
+static int update_answer(Pc5Ui *ui, const Pc5Update *answer, int quiet_if_offered);
+
 static int update_check_now(Pc5Ui *ui, int quiet_if_offered)
 {
     Pc5Update update;
     pc5_update_check(&ui->platform.http, PC5_VERSION, &update);
+    return update_answer(ui, &update, quiet_if_offered);
+}
+
+static void *update_job_main(void *arg)
+{
+    UpdateJob *job = arg;
+    pc5_update_check(&job->http, PC5_VERSION, &job->result);
+    atomic_store(&job->done, 1);
+    return NULL;
+}
+
+/* The check as PC5 opens, started on its thread: 0, or -1 when there is no thread (the
+ * caller asks on the screens' thread instead). */
+static int update_check_start(Pc5Ui *ui)
+{
+    if (ui->update_job.running) return 0;
+    ui->update_job.http = ui->platform.http;
+    atomic_store(&ui->update_job.done, 0);
+    if (pc5_thread_start(&ui->update_job.thread, update_job_main, &ui->update_job, 0)) return -1;
+    ui->update_job.running = 1;
+    say(ui, "PC5 update checking in the background");
+    return 0;
+}
+
+/* Each frame: the check's answer once it is in, and its offer once the library has shown
+ * (not over a menu or a game being started). */
+static void update_check_follow(Pc5Ui *ui)
+{
+    if (ui->update_job.running && atomic_load(&ui->update_job.done)) {
+        pthread_join(ui->update_job.thread, NULL);
+        ui->update_job.running = 0;
+        ui->update_job.offer = update_answer(ui, &ui->update_job.result, 1);
+    }
+    if (ui->update_job.offer && ui->screen == S_LIBRARY && ui->drawn) {
+        ui->update_job.offer = 0;
+        ui->button = 0;
+        go(ui, S_UPGRADE_ASK);
+    }
+}
+
+/* What the check found, remembered and told (as update_check_now says). */
+static int update_answer(Pc5Ui *ui, const Pc5Update *answer, int quiet_if_offered)
+{
+    Pc5Update update = *answer;
     ui->update.last = update;
     ui->update.checked = unix_now(ui, NULL);
     say(ui, "PC5 update state=%d latest=%s zip=%d update_zip=%d from=%s small=%d", (int)update.state, update.version,
@@ -3273,8 +3332,9 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             queue_missing_covers(ui);
             /* Each time the player opens PC5; after a game (the title restarts), at most once an hour. */
             if (ui->settings.check_updates && (ui->config.opened || now <= 0 ||
-                                               now - ui->update.checked >= PC5_UPDATE_EVERY_S || now < ui->update.checked))
-                go(ui, S_UPDATE);
+                                               now - ui->update.checked >= PC5_UPDATE_EVERY_S || now < ui->update.checked) &&
+                update_check_start(ui))
+                go(ui, S_UPDATE);   /* no thread: asked here, behind its screen */
             else if (ui->cover_count) go(ui, S_COVERS);
             else to_library(ui);
         }
@@ -3296,7 +3356,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             upgrade_begin(ui, S_LIBRARY);
         } else if (k & (accept | back)) {
             say(ui, "PC5 update later latest=%s", ui->update.last.version);
-            if (ui->cover_count) go(ui, S_COVERS);
+            if (ui->cover_at < ui->cover_count) go(ui, S_COVERS);
             else to_library(ui);
         }
         break;
@@ -4285,6 +4345,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     }
 
+    update_check_follow(ui);
     /* The chosen game's background, behind the library and what opens over it. */
     if (ui->screen != S_START && ui->screen != S_COVERS && ui->screen != S_UPDATE && ui->screen != S_UPGRADE_ASK) {
         if (ui->screen == S_LIBRARY) backgrounds_refresh(ui);

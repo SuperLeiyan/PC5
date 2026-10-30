@@ -17,7 +17,9 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { CHUNK = 4 * 1024 * 1024, TEMPLATE_ROOM = 512u * 1024 * 1024, SPARE_ROOM = 1024u * 1024 * 1024,
+/* TEMPLATE_ROOM: a game's copy of the Windows template, some 60 MB now that Wine's own DLLs
+ * stay in the app (tools/make-prefix.py), with room to grow. */
+enum { CHUNK = 4 * 1024 * 1024, TEMPLATE_ROOM = 128u * 1024 * 1024, SPARE_ROOM = 1024u * 1024 * 1024,
        REMOVE_STACK = 96 };
 
 uint64_t pc5_now_ms(void)
@@ -291,12 +293,6 @@ static const char *desktop_size(const Pc5Info *info, const Pc5Controls *controls
 {
     if (info->api <= PC5_API_DDRAW || !controls) return "1920x1080";
     return controls->resolution == 2 ? "3840x2160" : controls->resolution == 1 ? "2560x1440" : "1920x1080";
-}
-
-int pc5_profile_text(const char *id, const Pc5Info *info, const char *arguments, const Pc5Controls *controls,
-                     const char *own_dlls, char *out, size_t size)
-{
-    return pc5_profile_text_at(id, info, arguments, controls, own_dlls, NULL, out, size);
 }
 
 int pc5_profile_text_at(const char *id, const Pc5Info *info, const char *arguments, const Pc5Controls *controls,
@@ -1959,11 +1955,6 @@ static int template_paths(Pc5Install *install)
 void pc5_install_take_from(const char *dir)
 {
     pc5_copy(take_dir, sizeof(take_dir), dir ? dir : "");
-}
-
-const char *pc5_install_take_dir(void)
-{
-    return take_dir[0] ? take_dir : NULL;
 }
 
 /* 1 when the folder at path is in PC5's INSTALL folder and on the same drive as root's
