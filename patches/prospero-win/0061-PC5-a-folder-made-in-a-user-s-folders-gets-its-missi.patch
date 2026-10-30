@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 10:00:00 +0000
+Subject: [PATCH 61/61] PC5: a folder made in a user's folders gets its missing
+ parents (Wine patch 0940)
+
+A game copied from a PC was never installed on the console, so the
+folders its installer made in the user's own folders aren't there. Call
+of Juarez Gunslinger's engine makes AppData\Local\Techland\COJGunslinger
+and stopped with an uncaught C++ exception when Techland wasn't there.
+Wine now makes the missing parents of a folder a program makes under
+C:\users\<name>\, as the installer would have; nothing outside the
+users' folders changes.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...ents-of-a-folder-in-a-user-s-folders.patch | 90 +++++++++++++++++++
+ 3 files changed, 92 insertions(+)
+ create mode 100644 wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index b2036a6..3327797 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -587,6 +587,7 @@ wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+ wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+ wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
+ wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch
++wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index afb24fe..3b8fbfd 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -143,6 +143,7 @@ before evaluating a candidate built from that cache.
+ | 0937 | `win32u`: memory a program asks `vkAllocateMemory` for as shareable (`VkExportMemoryAllocateInfo` with Win32 handle types) is an ordinary allocation when the host can't export memory: the PS5's RADV has no `VK_KHR_external_memory_fd`, so the export failed ("Unsupported handle type 0") and the allocation with it. DXVK making a shared texture for an Unreal Engine 5 game on Direct3D 12 (STRETCHER.MEN) got no memory, and the game crashed calling a null function; now it gets its memory, and a handle for it can't be had |
+ | 0938 | `ntdll`: `NtQueryDirectoryFile` logs an error, with the directory's name when the server keeps one, the step and the status, when it fails before patch 0936's logging: the server gives no descriptor for the handle, it isn't a directory, or its names aren't read (the directory cache refuses the handle). A .NET game reported only "invalid handle" for its folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936). A listing that works, or only ends, logs nothing |
+ | 0939 | `kernelbase`: the crash report (0912, 0924) names a C++ exception a program threw and didn't catch (0xe06d7363): its type as the compiler names it and, for a `std::exception`, its message; and it shows the flags register and the 16 bytes of code at the fault. Call of Juarez Gunslinger's engine gave up with an uncaught C++ exception in every log, none saying why; Far Cry's CrySystem.dll faulted on an instruction reported only as a read of FFFFFFFF. Both are read under an exception handler and only add lines to the report |
++| 0940 | `ntdll`: a folder a program makes (or opens if there) as a folder, by its full name, under `C:\users\<name>\`, whose parent isn't there, gets its missing parents made first, as the program's installer would have made them on Windows: a game copied from a PC was never installed here. Call of Juarez Gunslinger's engine makes `AppData\Local\Techland\COJGunslinger`, whose `Techland` its installer makes, and stopped with an uncaught C++ exception when that failed. The users folder and a user's own folder are never made; each parent made is logged |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch b/wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch
+new file mode 100644
+index 0000000..85d9d68
+--- /dev/null
++++ b/wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch
+@@ -0,0 +1,90 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 10:00:00 +0000
++Subject: [PATCH] ntdll: Make the missing parents of a folder made in a user's folders on PS5.
++
++A game copied from a PC was never installed on the console, so the
++folders its installer made in the user's own folders aren't there. Call
++of Juarez Gunslinger's engine makes
++AppData\Local\Techland\COJGunslinger, whose Techland its installer
++makes, and stops with an uncaught C++ exception when that fails
++(STATUS_OBJECT_PATH_NOT_FOUND). A folder made, or opened if there, as a
++folder by its full name under C:\users\<name>\ whose parent isn't there
++now gets its missing parents first, one at a time, the same way, and is
++then made. The users folder and a user's own folder are never made;
++nothing outside the users' folders changes. Each parent made is logged.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -4850,6 +4850,47 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
++ /******************************************************************************
++  *              NtCreateFile   (NTDLL.@)
++  */
+++#ifdef __PROSPERO__
+++/* A folder a program makes in a user's own folders (C:\users\<name>\...) whose parent isn't
+++ * there: its missing parents are made first, as the program's installer would have made them
+++ * on Windows. A game copied from a PC was never installed here: Call of Juarez Gunslinger's
+++ * engine makes AppData\Local\Techland\COJGunslinger, whose Techland its installer makes, and
+++ * stops when that fails. Only a folder made or opened as one, by its full name, and never the
+++ * users folder or a user's own: TRUE when the parent is there now. */
+++static BOOL ps5_make_parent( const OBJECT_ATTRIBUTES *attr )
+++{
+++    static const char users[] = "\\??\\c:\\users\\";
+++    const UNICODE_STRING *name = attr->ObjectName;
+++    USHORT len = name->Length / sizeof(WCHAR), n = sizeof(users) - 1, i, cut = 0, inside = 0;
+++    OBJECT_ATTRIBUTES parent_attr;
+++    UNICODE_STRING parent;
+++    IO_STATUS_BLOCK io;
+++    HANDLE parent_handle;
+++
+++    if (attr->RootDirectory || !name->Buffer || len <= n) return FALSE;
+++    for (i = 0; i < n; i++)
+++    {
+++        WCHAR c = name->Buffer[i];
+++        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+++        if (c != (unsigned char)users[i]) return FALSE;
+++    }
+++    for (i = len; i > n; i--)
+++        if (name->Buffer[i - 1] == '\\') { cut = i - 1; break; }
+++    for (i = n; i < cut; i++) inside += name->Buffer[i] == '\\';
+++    if (!cut || !inside) return FALSE;   /* the parent is a user's own folder: never made here */
+++    parent.Buffer = name->Buffer;
+++    parent.Length = parent.MaximumLength = cut * sizeof(WCHAR);
+++    InitializeObjectAttributes( &parent_attr, &parent, attr->Attributes, 0, NULL );
+++    if (NtCreateFile( &parent_handle, FILE_LIST_DIRECTORY | SYNCHRONIZE, &parent_attr, &io, NULL,
+++                      FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+++                      FILE_OPEN_IF, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0 ))
+++        return FALSE;
+++    NtClose( parent_handle );
+++    if (io.Information == FILE_CREATED) ERR( "made %s, which %s is in\n", debugstr_us(&parent), debugstr_us(name) );
+++    return TRUE;
+++}
+++#endif
+++
++ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr,
++                               IO_STATUS_BLOCK *io, LARGE_INTEGER *alloc_size,
++                               ULONG attributes, ULONG sharing, ULONG disposition,
++@@ -4884,6 +4925,19 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
++     }
++     else status = get_nt_and_unix_names( &new_attr, &nt_name, &unix_name, disposition,
++                                          options & FILE_OPEN_REPARSE_POINT );
+++#ifdef __PROSPERO__
+++    if (status == STATUS_OBJECT_PATH_NOT_FOUND && (options & FILE_DIRECTORY_FILE) &&
+++        !(options & FILE_OPEN_BY_FILE_ID) && (disposition == FILE_CREATE || disposition == FILE_OPEN_IF) &&
+++        ps5_make_parent( attr ))
+++    {
+++        free( unix_name );
+++        free( nt_name.Buffer );
+++        unix_name = NULL;
+++        new_attr = *attr;
+++        status = get_nt_and_unix_names( &new_attr, &nt_name, &unix_name, disposition,
+++                                        options & FILE_OPEN_REPARSE_POINT );
+++    }
+++#endif
++ 
++     if (status == STATUS_BAD_DEVICE_TYPE)
++     {
++-- 
++2.43.0
++
+-- 
+2.43.0
+

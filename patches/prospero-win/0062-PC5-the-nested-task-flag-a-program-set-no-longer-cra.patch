@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 11:00:00 +0000
+Subject: [PATCH 62/62] PC5: the nested-task flag a program set no longer crashes it
+ (Wine patch 0941)
+
+Far Cry crashed as it started, in its CPU check (CrySystem.dll), with a
+fault Wine reported as a read of FFFFFFFF: the check sets the
+nested-task flag with popf, and the next return to the game faults
+with it set (Wine bug 33275). Wine now clears the flag when such a
+fault happens and runs the instruction again; Windows and Linux clear
+it the same way. No other fault changes.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...r-the-nested-task-flag-a-program-set.patch | 43 +++++++++++++++++++
+ 3 files changed, 45 insertions(+)
+ create mode 100644 wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 3327797..7048e53 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -588,6 +588,7 @@ wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+ wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
+ wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch
+ wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch
++wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 3b8fbfd..ac4c547 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -144,6 +144,7 @@ before evaluating a candidate built from that cache.
+ | 0938 | `ntdll`: `NtQueryDirectoryFile` logs an error, with the directory's name when the server keeps one, the step and the status, when it fails before patch 0936's logging: the server gives no descriptor for the handle, it isn't a directory, or its names aren't read (the directory cache refuses the handle). A .NET game reported only "invalid handle" for its folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936). A listing that works, or only ends, logs nothing |
+ | 0939 | `kernelbase`: the crash report (0912, 0924) names a C++ exception a program threw and didn't catch (0xe06d7363): its type as the compiler names it and, for a `std::exception`, its message; and it shows the flags register and the 16 bytes of code at the fault. Call of Juarez Gunslinger's engine gave up with an uncaught C++ exception in every log, none saying why; Far Cry's CrySystem.dll faulted on an instruction reported only as a read of FFFFFFFF. Both are read under an exception handler and only add lines to the report |
+ | 0940 | `ntdll`: a folder a program makes (or opens if there) as a folder, by its full name, under `C:\users\<name>\`, whose parent isn't there, gets its missing parents made first, as the program's installer would have made them on Windows: a game copied from a PC was never installed here. Call of Juarez Gunslinger's engine makes `AppData\Local\Techland\COJGunslinger`, whose `Techland` its installer makes, and stopped with an uncaught C++ exception when that failed. The users folder and a user's own folder are never made; each parent made is logged |
++| 0941 | `ntdll`: a general protection fault with the nested-task flag (NT, 0x4000) set in the frame clears it and runs the instruction again, logged the first time. A program that sets NT with `popf` (Far Cry's CPU check in CrySystem.dll) made the next `iretq` back to it fault, from Wine's 64-bit side or the kernel's, reported as a read of FFFFFFFF (Wine bug 33275; Linux and Windows clear NT on entry). No program uses NT, and no fault without it changes |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch b/wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+new file mode 100644
+index 0000000..7b35700
+--- /dev/null
++++ b/wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+@@ -0,0 +1,43 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 11:00:00 +0000
++Subject: [PATCH] ntdll: Clear the nested-task flag a program set when a return to it faults on PS5.
++
++Far Cry's CPU check (CrySystem.dll) sets the nested-task flag (NT,
++0x4000) with popf. An iretq with it set faults, so the next return to
++the program, from Wine's 64-bit side or the kernel's, raised a general
++protection fault that Wine reported as a read of FFFFFFFF, and the game
++crashed as it started (Wine bug 33275, which Linux fixed by clearing NT
++on entry, as Windows does). A general protection fault with NT set in
++the frame now clears it and runs the instruction again, logged the
++first time. No program uses NT, and no fault without it changes.
++---
++diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
++--- a/dlls/ntdll/unix/signal_x86_64.c
+++++ b/dlls/ntdll/unix/signal_x86_64.c
++@@ -2948,6 +2948,22 @@ static void __attribute__((used)) segv_handler( int signal, siginfo_t *siginfo,
++     case TRAP_x86_PROTFLT:   /* General protection fault */
++         {
++             WORD err = ERROR_sig(sigcontext);
+++#ifdef __PROSPERO__
+++            /* The nested-task flag, which a program sets with popf (Far Cry's CPU check does,
+++             * Wine bug 33275), makes the next iretq fault: the one that returns to its 32-bit
+++             * code from Wine's 64-bit side, or the kernel's. Windows and Linux clear it on entry;
+++             * here it is cleared in the frame and the instruction runs again. */
+++            if (TRAP_sig(sigcontext) == TRAP_x86_PROTFLT && (EFL_sig(sigcontext) & 0x4000))
+++            {
+++                static LONG cleared;
+++                if (InterlockedIncrement( &cleared ) == 1)
+++                    MESSAGE( "wine-ps5: the nested-task flag a program set made a return to it fault at %p: "
+++                             "cleared\n", (void *)RIP_sig(sigcontext) );
+++                EFL_sig(sigcontext) &= ~0x4000;
+++                leave_handler( data, sigcontext );
+++                return;
+++            }
+++#endif
++             if (!err && (rec.ExceptionCode = is_privileged_instr( &context.c ))) break;
++             if ((err & 7) == 2 && handle_interrupt( data, sigcontext, &rec, &context )) return;
++             rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
++-- 
++2.43.0
++
+-- 
+2.43.0
+
