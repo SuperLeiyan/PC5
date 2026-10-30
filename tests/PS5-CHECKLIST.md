@@ -426,3 +426,17 @@ controller's speaker.
 | 209 | Unplug the drive, start it | "Plug in the USB drive with …", no start | `PC5 problem play …: Plug in the USB drive` |
 | 210 | Plug the drive into another port, start it | it starts | `dir=/mnt/usb<other>` |
 | 211 | Uninstall it (Keep saves, then Delete all) | the console's part gone; the game's folder on the drive unchanged | |
+
+## Tiles that are apps, and fixes from reports (next)
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 212 | △ › Appearance › Home screen tile on a game | the tile on the home screen once PC5 closes; it starts the game straight away | `PC5 home tile app id=… made=0` |
+| 213 | Change the game's background, then open PC5 again | "Updating the home screen tile" for a moment; the tile's background follows | `PC5 tile art tile=… status=0` |
+| 214 | Update PC5, open it | each tile gets the new program | `PC5 tile refreshed … program=1` |
+| 215 | Gears of War: E-Day (or another Unreal Engine 5 game PC5 had as DirectX 11) | △ › Graphics shows DirectX 12; it starts on VKD3D-Proton | `PC5 play id=… api=DirectX 12` |
+| 216 | A 32-bit game: △ › Graphics › Video memory | Auto by default; Full and back | `video_memory=auto` / `full`; the profile's `WINE_D3D_CONFIG=…VideoMemorySize=2048` on Auto |
+| 217 | Splinter Cell: Conviction on Auto | its system check no longer says 256 MB is needed | |
+| 218 | `env.txt` with `MEMORIES_NO_MONITOR=1` in Yu-Gi-Oh! Forbidden Memories Recompiled's `pc5` folder | it starts without its crash monitor | `PC5 env.txt set=1 MEMORIES_NO_MONITOR` |
+| 219 | A game that stops with an uncaught C++ exception (Call of Juarez Gunslinger) | its log names it | `wine: crash report: C++ exception …` (and `its message:` for a std::exception) |
+| 220 | Far Cry | its log shows the code at the fault | `wine: crash report: flags=… code at it: …` |
