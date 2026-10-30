@@ -112,12 +112,13 @@ PC5 needs the game's size plus about 1.5 GB of free space before it starts copyi
 
 A game can also play straight from its USB drive, without being copied to the console. This suits big games, or trying a game before you install it.
 
-1. In **Install games from USB**, choose the game and press **✕**. Its review screen opens.
+1. In **Install games from USB**, choose the game and press **✕** (one game, not ticked ones). Its review screen opens.
 2. Press **△ Play from USB** instead of **✕ Install**.
 3. PC5 sets up only the game's Windows on the console (its saves, settings and shader cache) and copies none of its files. The game appears in the library like any other.
 
 Good to know:
 
+- It is for USB drives (exFAT), not a drive the PS5 formatted as extended storage.
 - Keep the drive plugged in to play. It can be in any USB port. With it unplugged, PC5 asks you to plug it in instead of starting the game.
 - Loading is as fast as the drive is: a USB hard drive is slower than the console.
 - The game can write to its own folder on the drive (some keep their saves or settings there).
