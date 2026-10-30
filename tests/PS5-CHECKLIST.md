@@ -496,3 +496,11 @@ controller's speaker.
 | 264 | File manager (or a game's own file dialog) on a game installed with this build: `drive_c/windows/system32` from the game's side, a program that lists it (`dir C:\windows\system32\d3dx9_*.dll` in a game's console) | Wine's DLLs are listed | |
 | 265 | A game (or its setup) that writes one of Windows' DLLs into system32 | it can; another game still uses Wine's own | `wine-ps5: …system32/….dll copied into the game's Windows before it changes it` |
 | 266 | Settings › System › Check now while PC5 has just opened | one answer, the newest PC5 named right | `PC5 update state=…` |
+
+## 2.0.3-test4: open files, and .NET beside a native game
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 267 | Start any game | it starts as before | `PW_WINE64 open_files limit=… was=… most=…` (limit as high as most) |
+| 268 | A game that said "Too many open files" (Postal 2's New game, Pinball FX) | it gets further | no `Too many open files` |
+| 269 | A native game with a .NET DLL beside its program (Gears of War E-Day's SpeechSynthWrapper.dll), on a console where no .NET game has started yet | "Copying the .NET runtime" before it starts; no `Wine Mono is not installed` | `PC5 dotnet runtime copy …` |

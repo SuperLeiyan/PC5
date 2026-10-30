@@ -4422,6 +4422,21 @@ static void test_dotnet(void)
     write_text(file, "mscorlib");
     path(program, sizeof(program), "%s/game64.exe", programs);
     CHECK(pc5_runtime_begin(&runtime, root, app, program) == 0, "not a .NET program: nothing to copy");
+    {
+        /* A native program with a .NET DLL beside it (an Unreal Engine game's speech wrapper). */
+        char beside[PC5_PATH], from[PC5_PATH];
+        path(beside, sizeof(beside), "%s/beside-dotnet/Game-Win64-Shipping.exe", work);
+        path(from, sizeof(from), "%s/game64.exe", programs);
+        write_text(beside, "");
+        copy_file(from, beside);
+        path(file, sizeof(file), "%s/beside-dotnet/SpeechSynthWrapper.dll", work);
+        path(from, sizeof(from), "%s/dotnet.exe", programs);
+        copy_file(from, file);
+        CHECK(pc5_runtime_begin(&runtime, root, app, beside) == 1, "a .NET DLL beside a native program: the runtime too");
+        pc5_runtime_end(&runtime);
+        unlink(file);
+        CHECK(pc5_runtime_begin(&runtime, root, app, beside) == 0, "and without it, nothing");
+    }
     path(program, sizeof(program), "%s/dotnet.exe", programs);
     CHECK(pc5_runtime_begin(&runtime, root, app, program) == 1 && runtime.total == 4, "a .NET program: %u entries",
           (unsigned)runtime.total);

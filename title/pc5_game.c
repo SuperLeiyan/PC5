@@ -6,6 +6,7 @@
 #include "pc5_pe.h"
 #include "pw_pc5_hud.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -369,13 +370,41 @@ static uint64_t now_ms(void)
     return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
 }
 
+/* 1 when a DLL beside the program is a .NET one (a C++ library for .NET a native game loads,
+ * as an Unreal Engine game's speech): it needs the runtime as a .NET program does. */
+static int beside_dotnet(const char *program)
+{
+    char dir[PC5_PATH], path[PC5_PATH];
+    const char *slash = strrchr(program, '/');
+    int found = 0, looked = 0;
+    DIR *d;
+    struct dirent *e;
+
+    if (!slash || (size_t)(slash - program) >= sizeof(dir)) return 0;
+    memcpy(dir, program, (size_t)(slash - program));
+    dir[slash - program] = 0;
+    if (!(d = opendir(dir))) return 0;
+    while (!found && looked < 1000 && (e = readdir(d))) {
+        Pc5PeInfo pe;
+        if (!pc5_ends_with_ci(e->d_name, ".dll")) continue;
+        looked++;
+        if (!pc5_format(path, sizeof(path), "%s/%s", dir, e->d_name) && !pc5_pe_read(path, &pe) &&
+            (pe.imports & PC5_IMPORT_DOTNET))
+            found = 1;
+    }
+    closedir(d);
+    return found;
+}
+
 int pc5_runtime_begin(Pc5Runtime *runtime, const char *root, const char *app, const char *program)
 {
     char version[32], done[PC5_PATH], list[PC5_PATH];
     Pc5PeInfo pe;
+    int dotnet;
 
     memset(runtime, 0, sizeof(*runtime));
-    if (!program || pc5_pe_read(program, &pe) || !(pe.imports & PC5_IMPORT_DOTNET)) return 0;
+    if (!program || pc5_pe_read(program, &pe)) return 0;
+    dotnet = (pe.imports & PC5_IMPORT_DOTNET) != 0;
     mono_version(app, version, sizeof(version));
     if (!version[0]) return 0;
     if (pc5_format(runtime->from, sizeof(runtime->from), "%s/pc5/mono", app) ||
@@ -386,6 +415,7 @@ int pc5_runtime_begin(Pc5Runtime *runtime, const char *root, const char *app, co
         return -1;
     }
     if (pc5_exists(done)) return 0;
+    if (!dotnet && !beside_dotnet(program)) return 0;
     if (pc5_read_file(list, &runtime->list, 16u << 20) || pc5_buf_terminate(&runtime->list) || pc5_mkdirs(runtime->to)) {
         snprintf(runtime->error, sizeof(runtime->error), "PC5 can't read the app's .NET runtime.");
         pc5_buf_free(&runtime->list);

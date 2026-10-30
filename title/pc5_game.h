@@ -153,7 +153,8 @@ typedef struct Pc5Runtime {
     uint32_t total, done;
     char error[PC5_ERROR];
 } Pc5Runtime;
-/* program: the game's program on the console. 1 when it is a .NET program and root has no
+/* program: the game's program on the console. 1 when it is a .NET program (or a DLL beside it
+ * is a .NET one) and root has no
  * whole copy of the app's runtime: the copy begins (pc5_runtime_step); 0 when nothing is
  * needed; -1 when the copy can't begin (error set). */
 int pc5_runtime_begin(Pc5Runtime *runtime, const char *root, const char *app, const char *program);

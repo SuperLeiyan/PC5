@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 23:30:00 +0000
+Subject: [PATCH 71/71] PC5: the open files limit raised to the most the console
+ allows, and logged, as a game's archives ran out of it (Too many open files)
+
+---
+ native/wine64_main.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index 5b23211..8e65049 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -59,6 +59,7 @@
+ #include <stdio.h>
+ #include <sys/mman.h>
+ #include <sys/resource.h>
++#include <sys/resource.h>
+ #include <sys/stat.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -810,6 +811,21 @@ static int open_library(void)
+                mount.helper_errno, mount.data_after, mount.elevated_after, mount.waited_ms,
+                mount.settled_ms, status == 0 ? library_root : "unavailable");
+     if (status != 0) return -1;
++    {
++        /* Open files: a game that keeps many open (an Unreal Engine game's archives, an
++         * Unreal Engine 2 game's packages) ran out at the process's soft limit, "Too many
++         * open files", where Windows has no such limit: raised to the hard one. */
++        struct rlimit files;
++        if (!getrlimit(RLIMIT_NOFILE, &files)) {
++            long long was = (long long)files.rlim_cur;
++            if (files.rlim_cur < files.rlim_max) {
++                files.rlim_cur = files.rlim_max;
++                if (setrlimit(RLIMIT_NOFILE, &files)) getrlimit(RLIMIT_NOFILE, &files);
++            }
++            PS5LOG_LOG("PW_WINE64 open_files limit=%lld was=%lld most=%lld", (long long)files.rlim_cur, was,
++                       (long long)files.rlim_max);
++        }
++    }
+     find_sandbox_app0();
+     load_catalog();
+     return 0;
+-- 
+2.43.0
+
