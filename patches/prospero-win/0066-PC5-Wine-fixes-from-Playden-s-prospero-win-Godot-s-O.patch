@@ -1,0 +1,1884 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 18:00:00 +0000
+Subject: [PATCH 66/66] PC5: Wine fixes from Playden's prospero-win: Godot's OpenGL
+ window, Source games' start, a crash that froze the game, a controller that
+ came back, D3DX9 effects, many open folders (Wine patches 0871, 0956,
+ 0958-0963, 0971, 0981, 0984)
+
+---
+ PUBLICATION_ALLOWLIST.txt                     |  11 +
+ docs/WINE_PS5_BUILD.md                        |   7 +
+ tests/test_pw_wine_sink.c                     |  26 ++
+ tools/build_wine_ps5.sh                       |   9 +-
+ ...erver-ps5-park-directory-descriptors.patch | 322 ++++++++++++++
+ ...-pixel-format-with-a-native-opengl32.patch |  32 ++
+ ...-wine-cpu-topology-s-processor-count.patch |  58 +++
+ ...implement-pass-assignment-for-fx-2-0.patch | 253 +++++++++++
+ ...ampler-state-initializers-for-fx-2-0.patch | 404 ++++++++++++++++++
+ ...-true-and-false-for-any-fx-2-0-state.patch |  64 +++
+ ...shader-and-texture-states-for-fx-2-0.patch |  94 ++++
+ ...pile-ps-1-x-effect-shaders-as-ps-2-0.patch |  35 ++
+ ...ernelbase-ps5-no-debugger-in-a-title.patch |  89 ++++
+ ...ster-builtin-classes-without-waiting.patch | 151 +++++++
+ ...ws-when-the-controller-comes-or-goes.patch |  80 ++++
+ wine/ps5/pw_wine_sink.c                       |  16 +
+ wine/ps5/pw_wine_sink.h                       |   5 +
+ 17 files changed, 1653 insertions(+), 3 deletions(-)
+ create mode 100644 wine/patches/0871-server-ps5-park-directory-descriptors.patch
+ create mode 100644 wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
+ create mode 100644 wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch
+ create mode 100644 wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch
+ create mode 100644 wine/patches/0960-vkd3d-shader-fx-write-sampler-state-initializers-for-fx-2-0.patch
+ create mode 100644 wine/patches/0961-vkd3d-shader-fx-accept-true-and-false-for-any-fx-2-0-state.patch
+ create mode 100644 wine/patches/0962-vkd3d-shader-fx-write-null-shader-and-texture-states-for-fx-2-0.patch
+ create mode 100644 wine/patches/0963-vkd3d-shader-hlsl-compile-ps-1-x-effect-shaders-as-ps-2-0.patch
+ create mode 100644 wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch
+ create mode 100644 wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch
+ create mode 100644 wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 81ce6ec..dbbe508 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -591,6 +591,17 @@ wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-fol
+ wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+ wine/patches/0942-win32u-ps5-turn-the-mouse-wheel.patch
+ wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
++wine/patches/0871-server-ps5-park-directory-descriptors.patch
++wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
++wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch
++wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch
++wine/patches/0960-vkd3d-shader-fx-write-sampler-state-initializers-for-fx-2-0.patch
++wine/patches/0961-vkd3d-shader-fx-accept-true-and-false-for-any-fx-2-0-state.patch
++wine/patches/0962-vkd3d-shader-fx-write-null-shader-and-texture-states-for-fx-2-0.patch
++wine/patches/0963-vkd3d-shader-hlsl-compile-ps-1-x-effect-shaders-as-ps-2-0.patch
++wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch
++wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch
++wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 03cde17..da252e3 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -112,6 +112,7 @@ before evaluating a candidate built from that cache.
+ | 0614 | `wow64`: when the environment's `wow64native.dll` does not start (ntdll reports no native readiness, patch 0883), the process loads `wowprospero.dll` and runs on the translator instead of ending at its first 32-bit instruction; the log has `wow64native.dll did not start (<status>); using wowprospero.dll` |
+ | 0770 | `server`, `ntdll`: on PS5, the client thread runs sync-object and handle requests itself under a server lock instead of waking the server thread twice through the pipes; see [Sync requests on the client threads](#sync-requests-on-the-client-threads) |
+ | 0790 | `server`, `ntdll`: opt-in immediate mutex acquire/release using the authoritative server object without request marshalling or waiter allocation; see [Immediate mutex calls](#immediate-mutex-calls) |
++| 0871 | `server`: on PS5, past the first 64 directories open at once, a directory's descriptor is closed once its open has been checked and opened again by name when needed (same device and inode, `O_DIRECTORY`): .NET keeps a handle to every subdirectory it finds while it lists a tree, and a large tree failed with "Too many open files". `WINE_PS5_PARK_DIRECTORIES=0` parks nothing, `=N` moves the threshold. From Playden's prospero-win |
+ | 0877 | `secur32`: a handshake GnuTLS fails for a reason schannel does not map logs the GnuTLS code and message and the clock through the err channel (and a fatal alert the clock), where the caller saw SEC_E_INTERNAL_ERROR and gnutls_perror went to stderr; on the console a date behind the certificates' makes every chain not yet valid |
+ | 0878 | `crypt32`: on PS5 the root store is filled from `share/wine/ca-certificates.crt` beside the runtime, found from crypt32.prx's own path, before the system paths a title cannot see; a bundle that is not there is an error in the log, since no chain then verifies |
+ | 0879 | `win32u`: the PS5 driver's ProcessEvents reports the wake pipe as handled whenever it read it; the pipe is every GUI thread's queue fd, so a thread whose events another thread had taken kept QS_DRIVER set with its fd unarmed, and a zero-timeout message wait (DirectInput's GetDeviceState) spun until the next input, so a game stalled while a button was held |
+@@ -147,7 +148,13 @@ before evaluating a candidate built from that cache.
+ | 0941 | `ntdll`: a general protection fault with the nested-task flag (NT, 0x4000) set in the frame clears it and runs the instruction again, logged the first time. A program that sets NT with `popf` (Far Cry's CPU check in CrySystem.dll) made the next `iretq` back to it fault, from Wine's 64-bit side or the kernel's, reported as a read of FFFFFFFF (Wine bug 33275; Linux and Windows clear NT on entry). No program uses NT, and no fault without it changes |
+ | 0942 | `win32u`: input event 6 turns the mouse wheel, `x` notches away from the player positive (`MOUSEEVENTF_WHEEL` of `x` times `WHEEL_DELTA`): a USB mouse's wheel, or a controller button bound to `mouse_wheel_up` or `mouse_wheel_down`. Before, the title read a USB mouse's wheel and dropped it, and a button couldn't turn it |
+ | 0943 | `ntdll`: a name opened relative to a directory handle (`RootDirectory`) whose descriptor from the in-process server this module can't use (`fstatat`/`openat` failing with `EBADF`, `STATUS_INVALID_HANDLE`) is looked up from the directory's own name, the server's or its NT name's, as patch 0936 enters such a directory; logged the first time. .NET's `FileSystemEnumerator` opens each subfolder that way, and a game's folder with subfolders couldn't be listed (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936 and 0938) |
++| 0956 | `gdi32`: with a native `opengl32` (Mesa), setting a window's pixel format again to the one it has succeeds instead of failing: Godot 4 sets it twice and stopped with "Failed to create an OpenGL window". From Playden's prospero-win |
++| 0958 | `ntdll`: `WINE_CPU_TOPOLOGY`'s processor count (as Proton reads it) is reported as `NumberOfProcessors` when it is between 1 and the CPUs the process has (0881); logged. From Playden's prospero-win |
++| 0959-0963 | `vkd3d-shader`: fx_2_0 effects compile with pass assignments, sampler state initializers, `true`/`false` for any state, null shader and texture states, and ps_1_x shaders as ps_2_0, so D3DX9 effects from source build. From Playden's prospero-win |
++| 0971 | `kernelbase`: in a title, an unhandled exception doesn't start a debugger (which can't start there) and ends the process after the game's own filter: reading AeDebug took the process heap's lock a faulting thread could hold, and the crash froze the game instead of ending it. From Playden's prospero-win |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
++| 0981 | `win32u`: the builtin window classes are registered without waiting on another thread under the loader lock: Source games hung at start. From Playden's prospero-win |
++| 0984 | `win32u`: when a controller connects or disconnects (`pw_wine_pad_changes`), the driver posts `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED` to the top-level windows, as the plug and play service does on Windows: an Unreal Engine 4 game kept a controller that went off lost after it came back. From Playden's prospero-win |
+ 
+ ## Allocator
+ 
+diff --git a/tests/test_pw_wine_sink.c b/tests/test_pw_wine_sink.c
+index f0012b5..0c71fd6 100644
+--- a/tests/test_pw_wine_sink.c
++++ b/tests/test_pw_wine_sink.c
+@@ -231,6 +231,31 @@ static void test_players(void)
+     pw_wine_set_pad_at(0,NULL);
+ }
+ 
++/* A controller coming or going is counted and wakes the driver (Wine patch 0984);
++ * a new state of one already there, or a disconnect of one not there, is not. */
++static void test_pad_changes(void)
++{
++    PwWinePad pad={0};
++    char drain[64];
++    int fd=pw_wine_input_fd();
++    uint32_t before;
++
++    assert(fd!=-1);
++    pw_wine_set_dualsense(NULL);
++    while(read(fd,drain,sizeof(drain))>0){}
++    before=pw_wine_pad_changes();
++    pw_wine_set_pad_at(1,NULL);assert(pw_wine_pad_changes()==before && read(fd,drain,1)==-1);
++    pad.buttons=1;pw_wine_set_pad_at(1,&pad);
++    assert(pw_wine_pad_changes()==before+1 && read(fd,drain,sizeof(drain))==1);
++    pad.buttons=2;pw_wine_set_pad_at(1,&pad);assert(pw_wine_pad_changes()==before+1 && read(fd,drain,1)==-1);
++    pw_wine_set_pad_at(1,NULL);assert(pw_wine_pad_changes()==before+2 && read(fd,drain,sizeof(drain))==1);
++    PwDualSenseState state={0};
++    pw_wine_set_dualsense(&state);assert(pw_wine_pad_changes()==before+3 && read(fd,drain,sizeof(drain))==1);
++    pw_wine_set_dualsense(&state);assert(pw_wine_pad_changes()==before+3);
++    pw_wine_set_dualsense(NULL);assert(pw_wine_pad_changes()==before+4);
++    while(read(fd,drain,sizeof(drain))>0){}
++}
++
+ static void test_dualsense(void)
+ {
+     PwDualSenseState state,got;
+@@ -393,5 +418,6 @@ int main(void)
+     test_dualsense();
+     test_display_release();
+     test_players();
++    test_pad_changes();
+     return 0;
+ }
+diff --git a/tools/build_wine_ps5.sh b/tools/build_wine_ps5.sh
+index 1ec7d99..6a39344 100755
+--- a/tools/build_wine_ps5.sh
++++ b/tools/build_wine_ps5.sh
+@@ -110,8 +110,11 @@ TARGETS="dlls/ntdll/ntdll.so dlls/win32u/win32u.so server/wineserver dlls/winevu
+ # lock (patch 0700). winevulkan: emit its PE thunks alongside the Unix side so command-stream
+ # hooks and dispatch table capability checks come from the same source.
+ # xaudio2_* and xactengine*: they link Wine's static FAudio, whose resampler
+-# wrote past its buffer (patch 0972).
+-PE_MODULES="ntdll win32u xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap quartz winevulkan"
++# wrote past its buffer (patch 0972). gdi32: a window keeps its pixel format
++# with a native opengl32 (patch 0956). wined3d: it carries vkd3d-shader, which
++# d3dcompiler uses to compile D3DX effects (patches 0959-0963). kernelbase: no
++# debugger start in a title (patch 0971).
++PE_MODULES="ntdll win32u xinput1_1 xinput1_2 xinput1_3 xinput1_4 xinputuap quartz winevulkan gdi32 wined3d kernelbase"
+ PE_MODULES="$PE_MODULES xaudio2_0 xaudio2_1 xaudio2_2 xaudio2_3 xaudio2_4 xaudio2_5 xaudio2_6 xaudio2_7 xaudio2_8 xaudio2_9 xactengine2_0 xactengine2_4 xactengine2_7 xactengine2_9 xactengine3_0 xactengine3_1 xactengine3_2 xactengine3_3 xactengine3_4 xactengine3_5 xactengine3_6 xactengine3_7"
+ # Everything optional but FreeType (built below) is off: the console has none
+ # of these libraries, and a configure-time probe against the payload SDK must
+@@ -453,7 +456,7 @@ if [ "$prx_status" = 0 ]; then
+         pw_wine_present pw_wine_next_input pw_wine_input_fd \
+         pw_wine_set_pad pw_wine_rumble pw_wine_pad pw_wine_set_rumble \
+         pw_wine_set_pad_at pw_wine_rumble_at pw_wine_pad_at pw_wine_set_rumble_at \
+-        pw_wine_set_dualsense pw_wine_dualsense_output pw_wine_dualsense pw_wine_dualsense_report \
++        pw_wine_set_dualsense pw_wine_dualsense_output pw_wine_dualsense pw_wine_dualsense_report pw_wine_pad_changes \
+         pw_wine_set_audio_sink pw_wine_audio_available pw_wine_audio_output \
+         __wine_virtual_stats __wine_virtual_fault_top __wine_ps5_set_output_sink __wine_ps5_memory_stats pw_cwd_set \
+         __wine_ps5_set_segv_hook __wine_ps5_set_segv_unresolved_hook pw_wine_set_display_release pw_wine_release_display \
+diff --git a/wine/patches/0871-server-ps5-park-directory-descriptors.patch b/wine/patches/0871-server-ps5-park-directory-descriptors.patch
+new file mode 100644
+index 0000000..1c42f45
+--- /dev/null
++++ b/wine/patches/0871-server-ps5-park-directory-descriptors.patch
+@@ -0,0 +1,322 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 16 Oct 2026 21:00:00 +0000
++Subject: [PATCH] server: Park directory descriptors past a threshold on PS5.
++
++A PS5 title has few file descriptors, and the in-process server's count
++against them. .NET opens a handle to every subdirectory it finds while it
++lists a tree and keeps the handles queued until it lists each one, so a
++large tree (SMAPI's scan of a mods folder) failed with "Too many open
++files": each queued handle held a server descriptor. Past the first 64
++directories open at once, close a directory's descriptor once its open has
++been checked, and open it again by name the first time it is needed:
++get_unix_fd, dup_fd_object, locks, reparse points, disposition, rename and
++end of file. The name must lead to a directory with the same device and
++inode, opened with O_DIRECTORY, or the handle fails; renaming the directory
++through another handle gives the parked ones its new name. A dismounted
++directory is never opened again. Whether an fd is parked is tested inline,
++so one that is not costs no call. WINE_PS5_PARK_DIRECTORIES=0 parks nothing, =N moves
++the threshold.
++
++tests/test_wine_directory_handles.py lists 3001 directories with each
++one's handle queued, as .NET does. Under a host Wine and a 512-descriptor
++limit, the stock server fails it with STATUS_TOO_MANY_OPENED_FILES at about
++230 queued handles; one built with PS5_PARK_DIRECTORIES completes it.
++---
++ server/fd.c | 157 +++++++++++++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 155 insertions(+), 2 deletions(-)
++
++diff --git a/server/fd.c b/server/fd.c
++index 6c254e6..dedaa63 100644
++--- a/server/fd.c
+++++ b/server/fd.c
++@@ -132,6 +132,10 @@ struct closed_fd
++     char           *unix_name;  /* name to unlink on close, points to parent fd unix_name */
++ };
++ 
+++#if defined(__PROSPERO__) && !defined(PS5_PARK_DIRECTORIES)
+++#define PS5_PARK_DIRECTORIES
+++#endif
+++
++ struct fd
++ {
++     struct object        obj;         /* object header */
++@@ -161,8 +165,25 @@ struct fd
++     struct completion   *completion;  /* completion object attached to this fd */
++     apc_param_t          comp_key;    /* completion key to set in completion events */
++     unsigned int         comp_flags;  /* completion flags */
+++#ifdef PS5_PARK_DIRECTORIES
+++    unsigned int         ps5_parked :1;  /* a directory whose unix_fd is closed until needed */
+++    unsigned int         ps5_counted :1; /* counted in ps5_directory_fds */
+++    int                  ps5_park_flags; /* open() flags to open it again with */
+++#endif
++ };
++ 
+++#ifdef PS5_PARK_DIRECTORIES
+++static unsigned int ps5_directory_fds;  /* directory fds alive, parked or not (see ps5_park_directory) */
+++static int ps5_reopen_directory( struct fd *fd );
+++
+++/* 0 when the fd has its unix_fd (again), -1 with the error set. Inline, so
+++ * an fd that is not parked costs one test and no call. */
+++static inline int ps5_unpark_directory( struct fd *fd )
+++{
+++    return fd->ps5_parked ? ps5_reopen_directory( fd ) : 0;
+++}
+++#endif
+++
++ static void fd_dump( struct object *obj, int verbose );
++ static struct object *fd_get_sync( struct object *obj );
++ static void fd_destroy( struct object *obj );
++@@ -1577,6 +1598,9 @@ obj_handle_t lock_fd( struct fd *fd, file_pos_t start, file_pos_t count, int sha
++         set_error( STATUS_INVALID_DEVICE_REQUEST );
++         return 0;
++     }
+++#ifdef PS5_PARK_DIRECTORIES
+++    if (ps5_unpark_directory( fd ) == -1) return 0;
+++#endif
++ 
++     /* don't allow wrapping locks */
++     if (end && end < start)
++@@ -1654,6 +1678,9 @@ static void fd_destroy( struct object *obj )
++     free_async_queue( &fd->write_q );
++     free_async_queue( &fd->wait_q );
++ 
+++#ifdef PS5_PARK_DIRECTORIES
+++    if (fd->ps5_counted) ps5_directory_fds--;
+++#endif
++     if (fd->map_addr) free_map_addr( fd->map_addr, fd->map_size );
++     if (fd->completion) release_object( fd->completion );
++     remove_fd_locks( fd );
++@@ -1764,6 +1791,9 @@ static inline void unmount_fd( struct fd *fd )
++     fd->unix_fd = -1;
++     fd->no_fd_status = STATUS_VOLUME_DISMOUNTED;
++     fd->closed->unix_fd = -1;
+++#ifdef PS5_PARK_DIRECTORIES
+++    fd->ps5_parked = 0;  /* dismounted for good: never open it again */
+++#endif
++     fd->closed->disp_flags = 0;
++ 
++     /* stop using Unix locks on this fd (existing locks have been removed by close) */
++@@ -1794,6 +1824,11 @@ static struct fd *alloc_fd_object(void)
++     fd->cacheable  = 0;
++     fd->fs_locks   = 1;
++     fd->poll_index = -1;
+++#ifdef PS5_PARK_DIRECTORIES
+++    fd->ps5_parked = 0;
+++    fd->ps5_counted = 0;
+++    fd->ps5_park_flags = 0;
+++#endif
++     fd->completion = NULL;
++     fd->comp_flags = 0;
++     init_async_queue( &fd->read_q );
++@@ -1839,6 +1874,11 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
++     fd->completion = NULL;
++     fd->comp_flags = 0;
++     fd->no_fd_status = STATUS_BAD_DEVICE_TYPE;
+++#ifdef PS5_PARK_DIRECTORIES
+++    fd->ps5_parked = 0;
+++    fd->ps5_counted = 0;
+++    fd->ps5_park_flags = 0;
+++#endif
++     init_async_queue( &fd->read_q );
++     init_async_queue( &fd->write_q );
++     init_async_queue( &fd->wait_q );
++@@ -1853,13 +1893,95 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
++     return fd;
++ }
++ 
+++#ifdef PS5_PARK_DIRECTORIES
+++/* A PS5 title has few file descriptors, and the in-process server's count
+++ * against them. .NET opens a handle to every subdirectory it finds while it
+++ * lists a tree, and keeps the handles queued until it lists each one, so a
+++ * large tree ran out of descriptors (EMFILE, "Too many open files"). Past
+++ * the first PS5_PARK_THRESHOLD directories open at once, a directory's
+++ * descriptor is closed once the open has been checked ("parked") and opened
+++ * again by its name the first time it is needed, after which it stays open.
+++ * The name must then lead to a directory with the same device and inode, or
+++ * the handle fails. That check cannot tell a directory deleted and created
+++ * again under a recycled inode number while it was parked, and a parked
+++ * handle no longer follows a rename of a directory above it: hence the
+++ * threshold, so ordinary use keeps Wine's behaviour.
+++ * WINE_PS5_PARK_DIRECTORIES=0 parks nothing; =N moves the threshold to N. */
+++#define PS5_PARK_THRESHOLD 64
+++
+++static int ps5_park_threshold(void)
+++{
+++    static int threshold = -1;
+++    const char *value;
+++
+++    if (threshold == -1)
+++    {
+++        value = getenv( "WINE_PS5_PARK_DIRECTORIES" );
+++        threshold = value && *value ? atoi( value ) : PS5_PARK_THRESHOLD;
+++        if (threshold < 0) threshold = 0;
+++    }
+++    return threshold;
+++}
+++
+++static void ps5_park_directory( struct fd *fd, int flags )
+++{
+++    int threshold = ps5_park_threshold();
+++
+++    if (!fd->ps5_counted)
+++    {
+++        fd->ps5_counted = 1;
+++        ps5_directory_fds++;
+++    }
+++    if (!threshold || ps5_directory_fds <= (unsigned int)threshold) return;
+++    if (fd->unix_fd == -1 || !fd->inode || !fd->closed || !fd->unix_name || fd->closed->disp_flags ||
+++        !list_empty( &fd->inode->locks ))
+++        return;
+++    close( fd->unix_fd );
+++    fd->unix_fd = fd->closed->unix_fd = -1;
+++    fd->ps5_park_flags = O_RDONLY | (flags & ~(O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC));
+++#ifdef O_DIRECTORY
+++    fd->ps5_park_flags |= O_DIRECTORY;  /* never block on, or open, whatever took the name */
+++#endif
+++    fd->ps5_parked = 1;
+++}
+++
+++/* a parked fd's unix_fd, opened again by its name (see ps5_unpark_directory) */
+++static int ps5_reopen_directory( struct fd *fd )
+++{
+++    struct stat st;
+++    int unix_fd;
+++
+++    if ((unix_fd = open( fd->unix_name, fd->ps5_park_flags )) == -1)
+++    {
+++        file_set_error();
+++        return -1;
+++    }
+++    if (fstat( unix_fd, &st ) == -1 || !S_ISDIR( st.st_mode ) ||
+++        st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino)
+++    {
+++        close( unix_fd );
+++        set_error( STATUS_FILE_DELETED );
+++        return -1;
+++    }
+++    fd->unix_fd = fd->closed->unix_fd = unix_fd;
+++    fd->ps5_parked = 0;
+++    return 0;
+++}
+++#define PS5_UNPARK_OR_RETURN(fd) do { if (ps5_unpark_directory( fd ) == -1) return; } while (0)
+++#else
+++#define PS5_UNPARK_OR_RETURN(fd) do { } while (0)
+++#endif
+++
++ /* duplicate an fd object for a different user */
++ struct fd *dup_fd_object( struct fd *orig, unsigned int access, unsigned int sharing, unsigned int options )
++ {
++     unsigned int err;
++-    struct fd *fd = alloc_fd_object();
+++    struct fd *fd;
++ 
++-    if (!fd) return NULL;
+++#ifdef PS5_PARK_DIRECTORIES
+++    if (ps5_unpark_directory( orig ) == -1) return NULL;
+++#endif
+++    if (!(fd = alloc_fd_object())) return NULL;
++ 
++     fd->options    = options;
++     fd->cacheable  = orig->cacheable;
++@@ -2239,6 +2361,9 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
++     }
++ #endif
++ 
+++#ifdef PS5_PARK_DIRECTORIES
+++    if (S_ISDIR( st.st_mode )) ps5_park_directory( fd, flags );
+++#endif
++     if (root_fd != -1) fchdir( server_dir_fd ); /* go back to the server dir */
++     return fd;
++ 
++@@ -2294,6 +2419,9 @@ int is_fd_overlapped( struct fd *fd )
++ /* retrieve the unix fd for an object */
++ int get_unix_fd( struct fd *fd )
++ {
+++#ifdef PS5_PARK_DIRECTORIES
+++    if (ps5_unpark_directory( fd ) == -1) return -1;
+++#endif
++     if (fd->unix_fd == -1) set_error( fd->no_fd_status );
++     return fd->unix_fd;
++ }
++@@ -2343,6 +2471,9 @@ int check_fd_events( struct fd *fd, int events )
++ {
++     struct pollfd pfd;
++ 
+++#ifdef PS5_PARK_DIRECTORIES
+++    if (fd->ps5_parked) return events;  /* a parked directory has an inode */
+++#endif
++     if (fd->unix_fd == -1) return POLLERR;
++     if (fd->inode) return events;  /* regular files are always signaled */
++ 
++@@ -2614,6 +2745,7 @@ static void set_reparse_point( struct fd *fd, struct async *async )
++     struct stat st;
++     size_t len;
++ 
+++    PS5_UNPARK_OR_RETURN( fd );
++     if (!fd->unix_name)
++     {
++         set_error( STATUS_OBJECT_TYPE_MISMATCH );
++@@ -2665,6 +2797,7 @@ static void get_reparse_point( struct fd *fd, struct async *async )
++     char buffer[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
++     int ret;
++ 
+++    PS5_UNPARK_OR_RETURN( fd );
++     if (!fd->unix_name)
++     {
++         set_error( STATUS_OBJECT_TYPE_MISMATCH );
++@@ -2708,6 +2841,7 @@ static void delete_reparse_point( struct fd *fd, struct async *async )
++     char *base_name;
++     size_t len;
++ 
+++    PS5_UNPARK_OR_RETURN( fd );
++     if (!fd->unix_name)
++     {
++         set_error( STATUS_OBJECT_TYPE_MISMATCH );
++@@ -2876,6 +3010,7 @@ static void set_fd_disposition( struct fd *fd, unsigned int flags )
++ {
++     struct stat st;
++ 
+++    PS5_UNPARK_OR_RETURN( fd );
++     if (!fd->inode)
++     {
++         set_error( STATUS_OBJECT_TYPE_MISMATCH );
++@@ -2951,6 +3086,7 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
++     char *name;
++     const unsigned int replace = flags & FILE_RENAME_REPLACE_IF_EXISTS;
++ 
+++    PS5_UNPARK_OR_RETURN( fd );
++     if (!fd->inode || !fd->unix_name)
++     {
++         set_error( STATUS_OBJECT_TYPE_MISMATCH );
++@@ -3077,6 +3213,22 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
++     free( name );
++     if (!fd->unix_name)
++         set_error( STATUS_NO_MEMORY );
+++#ifdef PS5_PARK_DIRECTORIES
+++    else
+++    {
+++        /* other handles to this directory that are parked open it again by
+++         * its new name */
+++        struct fd *fd_ptr;
+++        char *unix_name;
+++
+++        LIST_FOR_EACH_ENTRY( fd_ptr, &fd->inode->open, struct fd, inode_entry )
+++        {
+++            if (!fd_ptr->ps5_parked || !(unix_name = strdup( fd->unix_name ))) continue;
+++            free( fd_ptr->unix_name );
+++            fd_ptr->closed->unix_name = fd_ptr->unix_name = unix_name;
+++        }
+++    }
+++#endif
++     return;
++ 
++ failed:
++@@ -3093,6 +3245,7 @@ static void set_fd_eof( struct fd *fd, file_pos_t eof )
++         return;
++     }
++ 
+++    PS5_UNPARK_OR_RETURN( fd );
++     if (fd->unix_fd == -1)
++     {
++         set_error( fd->no_fd_status );
+diff --git a/wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch b/wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
+new file mode 100644
+index 0000000..0f7cfcb
+--- /dev/null
++++ b/wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
+@@ -0,0 +1,32 @@
++From: Prospero Win <prospero-win@invalid>
++Subject: [PATCH] gdi32: keep a window's pixel format with a native opengl32
++
++On Windows a window keeps the pixel format it was given first: setting
++the same format again succeeds and another one fails. Wine's builtin
++opengl32 (win32u) does this itself, but gdi32 hands SetPixelFormat to
++whichever opengl32 is loaded, and Mesa's WGL, loaded natively for the
++PS5's Zink path, refuses every second call on a window. Godot 4 sets the
++format of its main window twice, once in window_create and again in
++_create_context, so its OpenGL renderer stopped at "Failed to create an
++OpenGL window". gdi32 now answers a repeated call from the window's
++current format before reaching the driver.
++---
++diff --git a/dlls/gdi32/opengl.c b/dlls/gdi32/opengl.c
++index 0fbd851..2094da1 100644
++--- a/dlls/gdi32/opengl.c
+++++ b/dlls/gdi32/opengl.c
++@@ -92,6 +92,14 @@ BOOL WINAPI SetPixelFormat( HDC hdc, INT fmt, const PIXELFORMATDESCRIPTOR *pfd )
++         if (!(wglSetPixelFormat = (void *)GetProcAddress( opengl32, "wglSetPixelFormat" )))
++             return FALSE;
++     }
+++    /* As on Windows, a window that already has a pixel format keeps it:
+++     * setting the same one again succeeds, another one fails. Wine's own
+++     * opengl32 does this itself, but a native one such as Mesa's WGL
+++     * refuses any second call, which Godot 4 makes on its main window. */
+++    {
+++        INT current = GetPixelFormat( hdc );
+++        if (current) return current == fmt;
+++    }
++     return wglSetPixelFormat( hdc, fmt, pfd );
++ }
++ 
+diff --git a/wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch b/wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch
+new file mode 100644
+index 0000000..65e856a
+--- /dev/null
++++ b/wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch
+@@ -0,0 +1,58 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sun, 11 Oct 2026 22:00:00 +0200
++Subject: [PATCH] ntdll: Honor WINE_CPU_TOPOLOGY's processor count.
++
++Proton reads WINE_CPU_TOPOLOGY ("<count>:<cpu>,<cpu>,...") to tell a game
++it has fewer processors, which some games need to start or run well;
++upstream Wine does not read it. Take its count when it is between 1 and
++the processors the process has (patch 0881), and report it as
++NumberOfProcessors. The CPU list is not used: the console gives a title
++no affinity control. Say what was taken, or why it was ignored, on
++stderr, which the title keeps in the session log.
++---
++ dlls/ntdll/unix/system.c | 21 +++++++++++++++++++++
++ 1 file changed, 21 insertions(+)
++
++diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
++index a8b5939..253cff5 100644
++--- a/dlls/ntdll/unix/system.c
+++++ b/dlls/ntdll/unix/system.c
++@@ -1786,6 +1786,26 @@ static long ps5_process_cpus( long online )
++ }
++ #endif
++ 
+++/* WINE_CPU_TOPOLOGY, in Proton's form "<count>:<cpu>,<cpu>,...": a game that
+++ * fails or runs worse with many processors is told it has <count>. Only the
+++ * count is used, and it can only lower the number; anything else is ignored. */
+++static long cpu_topology_override( long num )
+++{
+++    const char *env = getenv( "WINE_CPU_TOPOLOGY" );
+++    char *end;
+++    long count;
+++
+++    if (!env || !*env) return num;
+++    count = strtol( env, &end, 10 );
+++    if (end == env || (*end && *end != ':') || count < 1 || count > num)
+++    {
+++        MESSAGE( "wine: WINE_CPU_TOPOLOGY=%s ignored, %ld processors\n", env, num );
+++        return num;
+++    }
+++    MESSAGE( "wine: WINE_CPU_TOPOLOGY=%s, %ld of %ld processors\n", env, count, num );
+++    return count;
+++}
+++
++ void init_cpu_info(void)
++ {
++     long num;
++@@ -1814,6 +1834,7 @@ void init_cpu_info(void)
++     num = 1;
++     FIXME("Detecting the number of processors is not supported.\n");
++ #endif
+++    num = cpu_topology_override( num );
++     peb->NumberOfProcessors = num;
++     init_cpu_model();
++     get_random( &process_cookie, sizeof(process_cookie) );
++-- 
++2.43.0
++
+diff --git a/wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch b/wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch
+new file mode 100644
+index 0000000..e6c6cf4
+--- /dev/null
++++ b/wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch
+@@ -0,0 +1,253 @@
++From e4506eeceb7d5fd4a6cd23f8c2b0e6fb7d7c8889 Mon Sep 17 00:00:00 2001
++From: Manuel Preibisch <manuel.preibisch@gmail.com>
++Date: Fri, 17 Jul 2026 23:51:03 +0200
++Subject: [PATCH] vkd3d-shader/fx: Implement pass assignment for fx_2_0
++
++This allowes for shaders and render states to be assigned inside pass:
++
++```
++technique {
++    pass {
++        PixelShader = compile ps_2_0 PS_Main();
++        VertexShader = compile vs_2_0 VS_Main();
++    }
++}
++```
++
++From the open vkd3d merge request 2145
++(https://gitlab.winehq.org/wine/vkd3d/-/merge_requests/2145), first
++patch only, not merged upstream as of 2026-10-13. D3DX effects that
++compile shaders in a pass (DoDonPachi Resurrection) need it.
++
++---
++ libs/vkd3d/libs/vkd3d-shader/fx.c | 97 +++++++++++++++++++++++++++++++++++-------
++ 1 file changed, 81 insertions(+), 16 deletions(-)
++
++diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
++index 36a0439f..76beb92f 100644
++--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
+++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
++@@ -280,6 +280,7 @@ struct fx_write_context
++     struct vkd3d_bytecode_buffer unstructured;
++     struct vkd3d_bytecode_buffer structured;
++     struct vkd3d_bytecode_buffer objects;
+++    struct vkd3d_bytecode_buffer resources;
++ 
++     struct rb_tree strings;
++     struct list types;
++@@ -287,6 +288,9 @@ struct fx_write_context
++     unsigned int min_technique_version;
++     unsigned int max_technique_version;
++ 
+++    unsigned int current_pass_index;
+++    unsigned int current_state_index;
+++
++     uint32_t technique_count;
++     uint32_t group_count;
++     uint32_t buffer_count;
++@@ -294,6 +298,7 @@ struct fx_write_context
++     uint32_t numeric_variable_count;
++     uint32_t shared_numeric_variable_count;
++     uint32_t object_variable_count;
+++    uint32_t resource_count;
++     uint32_t shared_object_count;
++     uint32_t shader_count;
++     uint32_t parameter_count;
++@@ -1579,7 +1584,7 @@ static uint32_t write_fx_4_type(const struct type_entry *type, struct fx_write_c
++ static void write_fx_4_technique(struct hlsl_ir_var *var, struct fx_write_context *fx)
++ {
++     struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++-    uint32_t name_offset, count = 0;
+++    uint32_t name_offset;
++     struct hlsl_ir_var *pass;
++     uint32_t count_offset;
++ 
++@@ -1588,14 +1593,14 @@ static void write_fx_4_technique(struct hlsl_ir_var *var, struct fx_write_contex
++     count_offset = put_u32(buffer, 0);
++     write_fx_4_annotations(var->annotations, fx);
++ 
++-    count = 0;
+++    fx->current_pass_index = 0;
++     LIST_FOR_EACH_ENTRY(pass, &var->scope->vars, struct hlsl_ir_var, scope_entry)
++     {
++         write_pass(pass, fx);
++-        ++count;
+++        ++fx->current_pass_index;
++     }
++ 
++-    set_u32(buffer, count_offset, count);
+++    set_u32(buffer, count_offset, fx->current_pass_index);
++ }
++ 
++ static void write_techniques(struct hlsl_scope *scope, struct fx_write_context *fx)
++@@ -1811,7 +1816,7 @@ static uint32_t write_fx_2_parameter(const struct hlsl_ir_var *var, struct fx_wr
++ 
++ static void write_fx_2_technique(struct hlsl_ir_var *var, struct fx_write_context *fx)
++ {
++-    uint32_t name_offset, pass_count_offset, annotation_count_offset, count = 0;
+++    uint32_t name_offset, pass_count_offset, annotation_count_offset;
++     struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++     struct hlsl_ir_var *pass;
++ 
++@@ -1822,13 +1827,14 @@ static void write_fx_2_technique(struct hlsl_ir_var *var, struct fx_write_contex
++ 
++     write_fx_2_annotations(var, annotation_count_offset, fx);
++ 
+++    fx->current_pass_index = 0;
++     LIST_FOR_EACH_ENTRY(pass, &var->scope->vars, struct hlsl_ir_var, scope_entry)
++     {
++         write_pass(pass, fx);
++-        ++count;
+++        ++fx->current_pass_index;
++     }
++ 
++-    set_u32(buffer, pass_count_offset, count);
+++    set_u32(buffer, pass_count_offset, fx->current_pass_index);
++ }
++ 
++ /* Effects represent bool values as 1/0, as opposed to ~0u/0 as used by
++@@ -2175,13 +2181,25 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
++     struct hlsl_type *data_type = value->data_type;
++     uint32_t offset;
++ 
++-    /* TODO: only handles numeric types */
+++    /* TODO: only handles numeric and shader types */
++ 
++     offset = put_u32(buffer, hlsl_sm1_base_type(data_type, false, HLSL_SAMPLER_DIM_GENERIC));
++-    put_u32(buffer, D3DXPC_MATRIX_ROWS);
+++
+++    switch (data_type->class)
+++    {
+++        case HLSL_CLASS_PIXEL_SHADER:
+++        case HLSL_CLASS_VERTEX_SHADER:
+++            put_u32(buffer, D3DXPC_OBJECT);
+++            break;
+++
+++        default:
+++            put_u32(buffer, D3DXPC_MATRIX_ROWS);
+++            break;
+++    }
+++
++     put_u32(buffer, 0); /* Name */
++     put_u32(buffer, 0); /* Semantic */
++-    put_u32(buffer, 1); /* Element count */
+++    put_u32(buffer, 0); /* Element count */
++ 
++     put_u32(buffer, entry->args_count); /* Rows */
++     put_u32(buffer, 1); /* Columns */
++@@ -2189,6 +2207,41 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
++     return offset;
++ }
++ 
+++static uint32_t write_fx_2_shader(const struct hlsl_ir_compile *compile, struct fx_write_context *fx)
+++{
+++    struct vkd3d_bytecode_buffer *buffer = &fx->resources;
+++    struct vkd3d_shader_code code;
+++    uint32_t offset, id;
+++
+++    memset(&code, 0, sizeof(code));
+++    compile_shader(compile, fx, &code);
+++
+++    id = fx->object_variable_count++;
+++    ++fx->resource_count;
+++
+++    offset = put_u32(&fx->unstructured, id);
+++
+++    put_u32(buffer, fx->technique_count);
+++    put_u32(buffer, fx->current_pass_index);
+++    put_u32(buffer, UINT32_MAX); /* Element */
+++    put_u32(buffer, fx->current_state_index);
+++    put_u32(buffer, FX_2_ASSIGNMENT_CODE_BLOB);
+++
+++    put_u32(buffer, code.size);
+++    if (code.size)
+++    {
+++        static const uint32_t pad;
+++
+++        bytecode_put_bytes(buffer, code.code, code.size);
+++        if (code.size % 4)
+++            bytecode_put_bytes_unaligned(buffer, &pad, 4 - (code.size % 4));
+++    }
+++
+++    vkd3d_shader_free_shader_code(&code);
+++
+++    return offset;
+++}
+++
++ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
++         struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
++ {
++@@ -2218,6 +2271,14 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
++             }
++             break;
++         }
+++        case HLSL_IR_COMPILE:
+++        {
+++            type = write_fx_2_state_type(entry, fx);
+++            value = write_fx_2_shader(hlsl_ir_compile(value_node), fx);
+++            ++fx->shader_count;
+++
+++            break;
+++        }
++         default:
++             hlsl_fixme(ctx, &var->loc, "Unsupported assignment type for state %s.", entry->name);
++     }
++@@ -2263,11 +2324,11 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
++ 
++     write_fx_2_parameters(&fx);
++     write_techniques(ctx->globals, &fx);
++-    put_u32(structured, fx.object_variable_count - 1);
++-    put_u32(structured, 0); /* Resource count */
+++    put_u32(structured, fx.object_variable_count - fx.resource_count - 1);
+++    put_u32(structured, fx.resource_count);
++ 
++     bytecode_put_bytes(structured, fx.objects.data, fx.objects.size);
++-    /* TODO: resources */
+++    bytecode_put_bytes(structured, fx.resources.data, fx.resources.size);
++ 
++     set_u32(structured, parameter_count, fx.parameter_count);
++     set_u32(structured, object_count, fx.object_variable_count);
++@@ -2283,6 +2344,7 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
++     vkd3d_free(fx.unstructured.data);
++     vkd3d_free(fx.structured.data);
++     vkd3d_free(fx.objects.data);
+++    vkd3d_free(fx.resources.data);
++ 
++     if (!fx.technique_count)
++         hlsl_error(ctx, &ctx->location, VKD3D_SHADER_ERROR_HLSL_MISSING_TECHNIQUE, "No techniques found.");
++@@ -2754,6 +2816,7 @@ static bool replace_state_block_constant(struct hlsl_ctx *ctx, struct hlsl_ir_no
++ 
++     if (!replace_context->values)
++         return false;
+++
++     if (instr->type != HLSL_IR_STATEBLOCK_CONSTANT)
++         return false;
++ 
++@@ -3606,7 +3669,9 @@ static uint32_t write_state_block(struct hlsl_ir_var *var, unsigned int block_in
++         struct fx_write_context *fx)
++ {
++     struct hlsl_state_block *block;
++-    uint32_t i, count = 0;
+++    uint32_t i;
+++
+++    fx->current_state_index = 0;
++ 
++     if (var->state_blocks)
++     {
++@@ -3624,11 +3689,11 @@ static uint32_t write_state_block(struct hlsl_ir_var *var, unsigned int block_in
++             resolve_state_block_values(var, entry, fx);
++ 
++             write_state_assignment(var, entry, fx);
++-            ++count;
+++            ++fx->current_state_index;
++         }
++     }
++ 
++-    return count;
+++    return fx->current_state_index;
++ }
++ 
++ static void write_fx_4_state_object_initializer(struct hlsl_ir_var *var, struct fx_write_context *fx)
++-- 
++2.50.1 (Apple Git-155)
++
+diff --git a/wine/patches/0960-vkd3d-shader-fx-write-sampler-state-initializers-for-fx-2-0.patch b/wine/patches/0960-vkd3d-shader-fx-write-sampler-state-initializers-for-fx-2-0.patch
+new file mode 100644
+index 0000000..d565bb8
+--- /dev/null
++++ b/wine/patches/0960-vkd3d-shader-fx-write-sampler-state-initializers-for-fx-2-0.patch
+@@ -0,0 +1,404 @@
++From 2e489b5dfba8f06eb06030f521146cbfba82cc54 Mon Sep 17 00:00:00 2001
++From: Leonardo Lobato <leo@cliqconsulting.com>
++Date: Tue, 13 Oct 2026 14:46:55 +0200
++Subject: [PATCH] vkd3d-shader/fx: Write sampler state initializers for
++ fx_2_0.
++
++Sampler states and parameter references ("Texture = <tex>;") are written
++the way native effects store them: the states follow the sampler value, and
++each reference is a resource entry naming the parameter.
++---
++ libs/vkd3d/libs/vkd3d-shader/fx.c | 285 +++++++++++++++++++++++++++++------------
++ 1 file changed, 205 insertions(+), 80 deletions(-)
++
++diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
++index 76beb92f..5fdd3635 100644
++--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
+++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
++@@ -291,6 +291,12 @@ struct fx_write_context
++     unsigned int current_pass_index;
++     unsigned int current_state_index;
++ 
+++    /* fx_2_0 resources belong either to a pass state or to a sampler state.
+++     * In the latter case these name the sampler parameter and its element. */
+++    bool writing_sampler_states;
+++    uint32_t sampler_parameter_index;
+++    uint32_t sampler_element_index;
+++
++     uint32_t technique_count;
++     uint32_t group_count;
++     uint32_t buffer_count;
++@@ -1965,74 +1971,150 @@ static bool compile_shader(const struct hlsl_ir_compile *compile, struct fx_writ
++     return ret >= 0;
++ }
++ 
++-static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, struct fx_write_context *fx)
+++static void write_fx_2_state_value(const struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
+++        uint32_t *type, uint32_t *value, struct fx_write_context *fx);
+++static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
+++        struct fx_write_context *fx);
+++static bool state_block_contains_state(const struct hlsl_state_block_entry *entry, unsigned int start_index,
+++        struct hlsl_state_block *block);
+++
+++/* A sampler value is, for each element, a state count followed by that many
+++ * assignments. The assignments of all elements are contiguous, so the types and
+++ * values they point to are written first. */
+++static uint32_t write_fx_2_sampler_initializer(struct hlsl_ir_var *var, struct fx_write_context *fx)
+++{
+++    unsigned int i, j, elements_count = hlsl_get_multiarray_size(var->data_type);
+++    struct vkd3d_bytecode_buffer *buffer = &fx->unstructured;
+++    struct fx_assignment *assignments = NULL;
+++    size_t total = 0, count = 0;
+++    uint32_t *counts, offset;
+++
+++    if (!(counts = hlsl_calloc(fx->ctx, elements_count, sizeof(*counts))))
+++        return 0;
+++
+++    for (i = 0; i < elements_count && var->state_blocks && i < var->state_block_count; ++i)
+++        total += var->state_blocks[i]->count;
+++    if (total && !(assignments = hlsl_calloc(fx->ctx, total, sizeof(*assignments))))
+++    {
+++        vkd3d_free(counts);
+++        return 0;
+++    }
+++
+++    fx->writing_sampler_states = true;
+++    fx->sampler_parameter_index = fx->parameter_count;
+++
+++    for (i = 0; i < elements_count && var->state_blocks && i < var->state_block_count; ++i)
+++    {
+++        struct hlsl_state_block *block = var->state_blocks[i];
+++
+++        fx->sampler_element_index = i;
+++        fx->current_state_index = 0;
+++
+++        for (j = 0; j < block->count; ++j)
+++        {
+++            struct hlsl_state_block_entry *entry = block->entries[j];
+++            struct fx_assignment *assignment = &assignments[count];
+++
+++            /* Skip if property is reassigned later. This will use the last assignment. */
+++            if (state_block_contains_state(entry, j + 1, block))
+++                continue;
+++
+++            resolve_fx_2_state_block_values(var, entry, fx);
+++
+++            assignment->id = entry->name_id;
+++            assignment->lhs_index = entry->lhs_index;
+++            write_fx_2_state_value(var, entry, &assignment->type, &assignment->value, fx);
+++
+++            ++fx->current_state_index;
+++            ++counts[i];
+++            ++count;
+++        }
+++    }
+++
+++    fx->writing_sampler_states = false;
+++
+++    offset = buffer->size;
+++    for (i = 0, count = 0; i < elements_count; ++i)
+++    {
+++        put_u32(buffer, counts[i]);
+++        for (j = 0; j < counts[i]; ++j, ++count)
+++        {
+++            put_u32(buffer, assignments[count].id);
+++            put_u32(buffer, assignments[count].lhs_index);
+++            put_u32(buffer, assignments[count].type);
+++            put_u32(buffer, assignments[count].value);
+++        }
+++    }
+++
+++    vkd3d_free(assignments);
+++    vkd3d_free(counts);
+++
+++    return offset;
+++}
+++
+++static uint32_t write_fx_2_object_initializer(struct hlsl_ir_var *var, struct fx_write_context *fx)
++ {
++     const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
++     unsigned int i, elements_count = hlsl_get_multiarray_size(var->data_type);
++     struct vkd3d_bytecode_buffer *buffer = &fx->objects;
++     uint32_t offset = fx->unstructured.size, id, size;
++-    struct hlsl_ctx *ctx = fx->ctx;
++     struct vkd3d_shader_code code;
++     const void *data;
++ 
+++    if (type->class == HLSL_CLASS_SAMPLER)
+++        return write_fx_2_sampler_initializer(var, fx);
+++
++     for (i = 0; i < elements_count; ++i)
++     {
++-        if (type->class == HLSL_CLASS_SAMPLER)
++-        {
++-            hlsl_fixme(ctx, &var->loc, "Writing fx_2_0 sampler objects initializers is not implemented.");
++-        }
++-        else
++-        {
++-            size = 0;
++-            memset(&code, 0, sizeof(code));
+++        size = 0;
+++        memset(&code, 0, sizeof(code));
++ 
++-            switch (type->class)
+++        switch (type->class)
+++        {
+++            case HLSL_CLASS_STRING:
++             {
++-                case HLSL_CLASS_STRING:
+++                const char *string = var->default_values[i].string ? var->default_values[i].string : "";
+++                size = strlen(string) + 1;
+++                data = string;
+++                break;
+++            }
+++            case HLSL_CLASS_TEXTURE:
+++                break;
+++            case HLSL_CLASS_PIXEL_SHADER:
+++            case HLSL_CLASS_VERTEX_SHADER:
+++                if (var->default_values
+++                        && var->default_values[i].shader
+++                        && compile_shader(var->default_values[i].shader, fx, &code))
++                 {
++-                    const char *string = var->default_values[i].string ? var->default_values[i].string : "";
++-                    size = strlen(string) + 1;
++-                    data = string;
++-                    break;
+++                    size = code.size;
+++                    data = code.code;
++                 }
++-                case HLSL_CLASS_TEXTURE:
++-                    break;
++-                case HLSL_CLASS_PIXEL_SHADER:
++-                case HLSL_CLASS_VERTEX_SHADER:
++-                    if (var->default_values
++-                            && var->default_values[i].shader
++-                            && compile_shader(var->default_values[i].shader, fx, &code))
++-                    {
++-                        size = code.size;
++-                        data = code.code;
++-                    }
++-                    break;
++-                default:
++-                    vkd3d_unreachable();
++-            }
++-            id = fx->object_variable_count++;
++-
++-            put_u32(&fx->unstructured, id);
+++                break;
+++            default:
+++                vkd3d_unreachable();
+++        }
+++        id = fx->object_variable_count++;
++ 
++-            put_u32(buffer, id);
++-            put_u32(buffer, size);
++-            if (size)
++-            {
++-                static const uint32_t pad;
+++        put_u32(&fx->unstructured, id);
++ 
++-                bytecode_put_bytes(buffer, data, size);
++-                if (size % 4)
++-                    bytecode_put_bytes_unaligned(buffer, &pad, 4 - (size % 4));
++-            }
+++        put_u32(buffer, id);
+++        put_u32(buffer, size);
+++        if (size)
+++        {
+++            static const uint32_t pad;
++ 
++-            vkd3d_shader_free_shader_code(&code);
+++            bytecode_put_bytes(buffer, data, size);
+++            if (size % 4)
+++                bytecode_put_bytes_unaligned(buffer, &pad, 4 - (size % 4));
++         }
+++
+++        vkd3d_shader_free_shader_code(&code);
++     }
++ 
++     return offset;
++ }
++ 
++-static uint32_t write_fx_2_initial_value(const struct hlsl_ir_var *var, struct fx_write_context *fx)
+++static uint32_t write_fx_2_initial_value(struct hlsl_ir_var *var, struct fx_write_context *fx)
++ {
++     const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
++     struct hlsl_ctx *ctx = fx->ctx;
++@@ -2181,7 +2263,7 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
++     struct hlsl_type *data_type = value->data_type;
++     uint32_t offset;
++ 
++-    /* TODO: only handles numeric and shader types */
+++    /* TODO: only handles numeric, shader and texture types */
++ 
++     offset = put_u32(buffer, hlsl_sm1_base_type(data_type, false, HLSL_SAMPLER_DIM_GENERIC));
++ 
++@@ -2189,6 +2271,7 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
++     {
++         case HLSL_CLASS_PIXEL_SHADER:
++         case HLSL_CLASS_VERTEX_SHADER:
+++        case HLSL_CLASS_TEXTURE:
++             put_u32(buffer, D3DXPC_OBJECT);
++             break;
++ 
++@@ -2207,62 +2290,87 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
++     return offset;
++ }
++ 
++-static uint32_t write_fx_2_shader(const struct hlsl_ir_compile *compile, struct fx_write_context *fx)
+++/* Writes a resource entry for the state being written, which receives a new
+++ * object id. Returns the value offset that holds that id. */
+++static uint32_t write_fx_2_resource(uint32_t usage, const void *data, uint32_t size, struct fx_write_context *fx)
++ {
++     struct vkd3d_bytecode_buffer *buffer = &fx->resources;
++-    struct vkd3d_shader_code code;
++-    uint32_t offset, id;
++-
++-    memset(&code, 0, sizeof(code));
++-    compile_shader(compile, fx, &code);
++-
++-    id = fx->object_variable_count++;
++-    ++fx->resource_count;
+++    uint32_t id = fx->object_variable_count++;
++ 
++-    offset = put_u32(&fx->unstructured, id);
++-
++-    put_u32(buffer, fx->technique_count);
++-    put_u32(buffer, fx->current_pass_index);
++-    put_u32(buffer, UINT32_MAX); /* Element */
+++    if (fx->writing_sampler_states)
+++    {
+++        put_u32(buffer, UINT32_MAX); /* Technique */
+++        put_u32(buffer, fx->sampler_parameter_index);
+++        put_u32(buffer, fx->sampler_element_index);
+++    }
+++    else
+++    {
+++        put_u32(buffer, fx->technique_count);
+++        put_u32(buffer, fx->current_pass_index);
+++        put_u32(buffer, UINT32_MAX); /* Element */
+++    }
++     put_u32(buffer, fx->current_state_index);
++-    put_u32(buffer, FX_2_ASSIGNMENT_CODE_BLOB);
+++    put_u32(buffer, usage);
++ 
++-    put_u32(buffer, code.size);
++-    if (code.size)
+++    put_u32(buffer, size);
+++    if (size)
++     {
++         static const uint32_t pad;
++ 
++-        bytecode_put_bytes(buffer, code.code, code.size);
++-        if (code.size % 4)
++-            bytecode_put_bytes_unaligned(buffer, &pad, 4 - (code.size % 4));
+++        bytecode_put_bytes(buffer, data, size);
+++        if (size % 4)
+++            bytecode_put_bytes_unaligned(buffer, &pad, 4 - (size % 4));
++     }
+++    ++fx->resource_count;
+++
+++    return put_u32(&fx->unstructured, id);
+++}
+++
+++static uint32_t write_fx_2_shader(const struct hlsl_ir_compile *compile, struct fx_write_context *fx)
+++{
+++    struct vkd3d_shader_code code;
+++    uint32_t offset;
+++
+++    memset(&code, 0, sizeof(code));
+++    compile_shader(compile, fx, &code);
+++
+++    offset = write_fx_2_resource(FX_2_ASSIGNMENT_CODE_BLOB, code.code, code.size, fx);
++ 
++     vkd3d_shader_free_shader_code(&code);
++ 
++     return offset;
++ }
++ 
++-static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
++-        struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
+++/* A state that names another parameter, like "Texture = <tex>;". The effect
+++ * resolves the name when it is loaded. */
+++static uint32_t write_fx_2_parameter_reference(const struct hlsl_ir_var *var,
+++        const struct hlsl_ir_load *load, struct fx_write_context *fx)
+++{
+++    const char *name = load->src.var->name;
+++
+++    if (load->src.path_len)
+++        hlsl_fixme(fx->ctx, &var->loc, "Indexed parameter references are not implemented.");
+++
+++    return write_fx_2_resource(FX_2_ASSIGNMENT_PARAMETER, name, strlen(name) + 1, fx);
+++}
+++
+++/* Writes the type and value of a state to the unstructured data. */
+++static void write_fx_2_state_value(const struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
+++        uint32_t *type, uint32_t *value, struct fx_write_context *fx)
++ {
++     struct vkd3d_bytecode_buffer *unstructured = &fx->unstructured;
++-    struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++-    uint32_t value = 0, type = 0, rhs_offset, type_offset;
++     struct hlsl_ir_node *value_node = entry->args->node;
++     struct hlsl_ctx *ctx = fx->ctx;
++     struct hlsl_ir_constant *c;
++ 
++-    put_u32(buffer, entry->name_id);
++-    put_u32(buffer, entry->lhs_index);
++-    type_offset = put_u32(buffer, 0);
++-    rhs_offset = put_u32(buffer, 0);
+++    *type = *value = 0;
++ 
++     switch (value_node->type)
++     {
++         case HLSL_IR_CONSTANT:
++         {
++-            type = write_fx_2_state_type(entry, fx);
++-            value = unstructured->size;
+++            *type = write_fx_2_state_type(entry, fx);
+++            *value = unstructured->size;
++ 
++             for (int i = 0; i < entry->args_count; ++i)
++             {
++@@ -2273,18 +2381,35 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
++         }
++         case HLSL_IR_COMPILE:
++         {
++-            type = write_fx_2_state_type(entry, fx);
++-            value = write_fx_2_shader(hlsl_ir_compile(value_node), fx);
+++            *type = write_fx_2_state_type(entry, fx);
+++            *value = write_fx_2_shader(hlsl_ir_compile(value_node), fx);
++             ++fx->shader_count;
++ 
++             break;
++         }
+++        case HLSL_IR_LOAD:
+++        {
+++            *type = write_fx_2_state_type(entry, fx);
+++            *value = write_fx_2_parameter_reference(var, hlsl_ir_load(value_node), fx);
+++            break;
+++        }
++         default:
++             hlsl_fixme(ctx, &var->loc, "Unsupported assignment type for state %s.", entry->name);
++     }
+++}
+++
+++static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+++        struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
+++{
+++    struct vkd3d_bytecode_buffer *buffer = &fx->structured;
+++    uint32_t type, value;
++ 
++-    set_u32(buffer, type_offset, type);
++-    set_u32(buffer, rhs_offset, value);
+++    write_fx_2_state_value(var, entry, &type, &value, fx);
+++
+++    put_u32(buffer, entry->name_id);
+++    put_u32(buffer, entry->lhs_index);
+++    put_u32(buffer, type);
+++    put_u32(buffer, value);
++ }
++ 
++ static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
++-- 
++2.50.1 (Apple Git-155)
++
+diff --git a/wine/patches/0961-vkd3d-shader-fx-accept-true-and-false-for-any-fx-2-0-state.patch b/wine/patches/0961-vkd3d-shader-fx-accept-true-and-false-for-any-fx-2-0-state.patch
+new file mode 100644
+index 0000000..7e5a7a8
+--- /dev/null
++++ b/wine/patches/0961-vkd3d-shader-fx-accept-true-and-false-for-any-fx-2-0-state.patch
+@@ -0,0 +1,64 @@
++From e86da5b04ee5a9e4d5157ef8bdfdc9f200dac8d9 Mon Sep 17 00:00:00 2001
++From: Leonardo Lobato <leo@cliqconsulting.com>
++Date: Tue, 13 Oct 2026 19:26:02 +0200
++Subject: [PATCH 961/963] vkd3d-shader/fx: Accept TRUE and FALSE for any fx_2_0
++ state.
++
++Native effects take TRUE and FALSE for every state, including states such as
++AlphaBlendEnable and Lighting that have no list of named values.
++---
++ libs/vkd3d/libs/vkd3d-shader/fx.c | 11 +++++++++--
++ 1 file changed, 9 insertions(+), 2 deletions(-)
++
++diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
++index 5fdd3635..c5d14b79 100644
++--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
+++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
++@@ -2911,6 +2911,8 @@ static bool state_block_contains_state(const struct hlsl_state_block_entry *entr
++ struct replace_state_context
++ {
++     const struct rhs_named_value *values;
+++    /* Names that any state accepts, like TRUE and FALSE in fx_2_0. */
+++    const struct rhs_named_value *common_values;
++     struct hlsl_ir_var *var;
++ };
++ 
++@@ -2939,14 +2941,17 @@ static bool replace_state_block_constant(struct hlsl_ctx *ctx, struct hlsl_ir_no
++     struct hlsl_ir_node *c;
++     unsigned int value;
++ 
++-    if (!replace_context->values)
+++    if (!replace_context->values && !replace_context->common_values)
++         return false;
++ 
++     if (instr->type != HLSL_IR_STATEBLOCK_CONSTANT)
++         return false;
++ 
++     state_constant = hlsl_ir_stateblock_constant(instr);
++-    if (!get_fx_4_state_enum_value(replace_context->values, state_constant->name, &value))
+++    if (!(replace_context->values && get_fx_4_state_enum_value(replace_context->values,
+++            state_constant->name, &value))
+++            && !(replace_context->common_values && get_fx_4_state_enum_value(replace_context->common_values,
+++            state_constant->name, &value)))
++     {
++         hlsl_error(ctx, &replace_context->var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                 "Unrecognized state constant %s.", state_constant->name);
++@@ -3372,6 +3377,7 @@ static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var,
++     entry->name_id = state->id;
++ 
++     replace_context.values = state->values;
+++    replace_context.common_values = bool_values;
++     replace_context.var = var;
++ 
++     /* Turn named constants into actual constants. */
++@@ -3531,6 +3537,7 @@ static void resolve_fx_4_state_block_values(struct hlsl_ir_var *var,
++     entry->name_id = state->id;
++ 
++     replace_context.values = state->values;
+++    replace_context.common_values = NULL;
++     replace_context.var = var;
++ 
++     /* Turn named constants to actual constants. */
++-- 
++2.50.1 (Apple Git-155)
++
+diff --git a/wine/patches/0962-vkd3d-shader-fx-write-null-shader-and-texture-states-for-fx-2-0.patch b/wine/patches/0962-vkd3d-shader-fx-write-null-shader-and-texture-states-for-fx-2-0.patch
+new file mode 100644
+index 0000000..a68aac7
+--- /dev/null
++++ b/wine/patches/0962-vkd3d-shader-fx-write-null-shader-and-texture-states-for-fx-2-0.patch
+@@ -0,0 +1,94 @@
++From b844fc127a1ea6d5934f02e4a510ceb620a8425a Mon Sep 17 00:00:00 2001
++From: Leonardo Lobato <leo@cliqconsulting.com>
++Date: Tue, 13 Oct 2026 19:26:02 +0200
++Subject: [PATCH 962/963] vkd3d-shader/fx: Write NULL shader and texture states
++ for fx_2_0.
++
++"PixelShader = NULL;" was written as an integer state. d3dx9 reads shader
++and texture states as object pointers, so the state now has the object type
++and an object without data, which d3dx9 loads as NULL.
++---
++ libs/vkd3d/libs/vkd3d-shader/fx.c | 60 ++++++++++++++++++++++++++++++++++++++++++
++ 1 file changed, 60 insertions(+)
++
++diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
++index c5d14b79..c4ac220e 100644
++--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
+++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
++@@ -2354,6 +2354,63 @@ static uint32_t write_fx_2_parameter_reference(const struct hlsl_ir_var *var,
++     return write_fx_2_resource(FX_2_ASSIGNMENT_PARAMETER, name, strlen(name) + 1, fx);
++ }
++ 
+++static const struct fx_state *get_fx_2_state(const struct hlsl_state_block_entry *entry,
+++        struct fx_write_context *fx)
+++{
+++    const struct fx_state *states = fx->writing_sampler_states ? fx_2_sampler_states : fx_2_pass_states;
+++    size_t count = fx->writing_sampler_states ? ARRAY_SIZE(fx_2_sampler_states) : ARRAY_SIZE(fx_2_pass_states);
+++
+++    for (size_t i = 0; i < count; ++i)
+++    {
+++        if (states[i].id == entry->name_id)
+++            return &states[i];
+++    }
+++
+++    return NULL;
+++}
+++
+++/* An object state set to NULL, like "PixelShader = NULL;", gets an object
+++ * of the state's type that holds no data. */
+++static bool write_fx_2_null_object_state(const struct hlsl_state_block_entry *entry,
+++        uint32_t *type, uint32_t *value, struct fx_write_context *fx)
+++{
+++    struct vkd3d_bytecode_buffer *unstructured = &fx->unstructured;
+++    const struct fx_state *state = get_fx_2_state(entry, fx);
+++    D3DXPARAMETER_TYPE object_type;
+++    uint32_t id;
+++
+++    if (!state)
+++        return false;
+++
+++    switch (state->type)
+++    {
+++        case FX_VERTEXSHADER:
+++            object_type = D3DXPT_VERTEXSHADER;
+++            break;
+++        case FX_PIXELSHADER:
+++            object_type = D3DXPT_PIXELSHADER;
+++            break;
+++        case FX_TEXTURE:
+++            object_type = D3DXPT_TEXTURE;
+++            break;
+++        default:
+++            return false;
+++    }
+++
+++    *type = put_u32(unstructured, object_type);
+++    put_u32(unstructured, D3DXPC_OBJECT);
+++    put_u32(unstructured, 0); /* Name */
+++    put_u32(unstructured, 0); /* Semantic */
+++    put_u32(unstructured, 0); /* Element count */
+++
+++    id = fx->object_variable_count++;
+++    *value = put_u32(unstructured, id);
+++    put_u32(&fx->objects, id);
+++    put_u32(&fx->objects, 0); /* Size */
+++
+++    return true;
+++}
+++
++ /* Writes the type and value of a state to the unstructured data. */
++ static void write_fx_2_state_value(const struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
++         uint32_t *type, uint32_t *value, struct fx_write_context *fx)
++@@ -2369,6 +2426,9 @@ static void write_fx_2_state_value(const struct hlsl_ir_var *var, struct hlsl_st
++     {
++         case HLSL_IR_CONSTANT:
++         {
+++            if (write_fx_2_null_object_state(entry, type, value, fx))
+++                break;
+++
++             *type = write_fx_2_state_type(entry, fx);
++             *value = unstructured->size;
++ 
++-- 
++2.50.1 (Apple Git-155)
++
+diff --git a/wine/patches/0963-vkd3d-shader-hlsl-compile-ps-1-x-effect-shaders-as-ps-2-0.patch b/wine/patches/0963-vkd3d-shader-hlsl-compile-ps-1-x-effect-shaders-as-ps-2-0.patch
+new file mode 100644
+index 0000000..7b5b54f
+--- /dev/null
++++ b/wine/patches/0963-vkd3d-shader-hlsl-compile-ps-1-x-effect-shaders-as-ps-2-0.patch
+@@ -0,0 +1,35 @@
++From 3e7ced8bb40d3a736882e77f2306689c9b72bfab Mon Sep 17 00:00:00 2001
++From: Leonardo Lobato <leo@cliqconsulting.com>
++Date: Tue, 13 Oct 2026 19:26:03 +0200
++Subject: [PATCH 963/963] vkd3d-shader/hlsl: Compile ps_1_x effect shaders as
++ ps_2_0.
++
++The shader model 1 pixel shader writer cannot sample textures, so effects
++with a ps_1_x pass shader failed to compile:
++
++    PixelShader = compile ps_1_0 main();
++
++Compile these as ps_2_0 instead, which can run anything ps_1_x can.
++---
++ libs/vkd3d/libs/vkd3d-shader/hlsl.y | 5 +++++
++ 1 file changed, 5 insertions(+)
++
++diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++index 673b1395..f80c1da8 100644
++--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++@@ -5802,6 +5802,11 @@ static struct hlsl_block *add_shader_compilation(struct hlsl_ctx *ctx, const cha
++         goto out;
++     }
++ 
+++    /* The ps_1_x writer cannot sample textures; ps_2_0 runs the same shaders. */
+++    if (ctx->profile->type == VKD3D_SHADER_TYPE_EFFECT
+++            && profile_info->type == VKD3D_SHADER_TYPE_PIXEL && profile_info->major_version == 1)
+++        profile_info = hlsl_get_target_info("ps_2_0");
+++
++     for (unsigned int i = 0; i < args->args_count; ++i)
++     {
++         if (args->args[i]->data_type->class == HLSL_CLASS_ERROR)
++-- 
++2.50.1 (Apple Git-155)
++
+diff --git a/wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch b/wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch
+new file mode 100644
+index 0000000..ce2d9ec
+--- /dev/null
++++ b/wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch
+@@ -0,0 +1,89 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 16 Oct 2026 08:50:41 +0200
++Subject: [PATCH] kernelbase: Do not start a debugger in a PS5 title.
++
++A PS5 title is one process and ntdll fails process creation there (patch
++0550), so winedbg never starts. Before CreateProcessW fails,
++start_debugger reads AeDebug and allocates the command line and a copy
++of the environment from the process heap. When the faulting game holds
++that lock in another thread, the crash froze the title instead of ending
++it: Call of Juarez Gunslinger waited on its main heap lock forever. Other
++threads that fault meanwhile wait for the first one on the debugger
++event.
++
++In a title (the starter sets WINE_PS5_NTDLL_DIR, read once at DLL
++attach), UnhandledExceptionFilter still calls the game's own filter, then
++logs the exception and lets the thread's handler terminate the process
++(patch 0896 then leaves through exit()).
++---
++ dlls/kernelbase/debug.c      | 23 +++++++++++++++++++++++
++ dlls/kernelbase/kernelbase.h |  1 +
++ dlls/kernelbase/main.c       |  1 +
++ 3 files changed, 25 insertions(+)
++
++diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
++index 8dbb677..a054e0d 100644
++--- a/dlls/kernelbase/debug.c
+++++ b/dlls/kernelbase/debug.c
++@@ -670,6 +670,19 @@ exit:
++     return ret;
++ }
++ 
+++/* A PS5 title is a single process (ntdll fails process creation there), so
+++ * winedbg never starts. start_debugger's registry and heap work then only
+++ * waits on locks the crashed game may hold: Call of Juarez Gunslinger froze
+++ * on the process heap lock instead of ending. The title's Wine starter sets
+++ * WINE_PS5_NTDLL_DIR; it is read at start, not on the crash path. */
+++static BOOL no_debugger;
+++
+++void init_debugger(void)
+++{
+++    no_debugger = GetEnvironmentVariableW( L"WINE_PS5_NTDLL_DIR", NULL, 0 ) > 0;
+++}
+++
+++
++ /******************************************************************
++  *		start_debugger_atomic
++  *
++@@ -782,6 +795,16 @@ LONG WINAPI UnhandledExceptionFilter( EXCEPTION_POINTERS *epointers )
++             if (ret != EXCEPTION_CONTINUE_SEARCH) return ret;
++         }
++ 
+++        if (no_debugger)
+++        {
+++            char buffer[256];
+++
+++            format_exception_msg( epointers, buffer, sizeof(buffer) );
+++            MESSAGE( "wine: %s (thread %04lx), no debugger, ending the process\n",
+++                     buffer, GetCurrentThreadId() );
+++            return nested ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER;
+++        }
+++
++         if ((GetErrorMode() & SEM_NOGPFAULTERRORBOX) ||
++             !start_debugger_atomic( epointers ) || !NtCurrentTeb()->Peb->BeingDebugged)
++             return nested ? EXCEPTION_CONTINUE_SEARCH : EXCEPTION_EXECUTE_HANDLER;
++diff --git a/dlls/kernelbase/kernelbase.h b/dlls/kernelbase/kernelbase.h
++index e46ca0f..1b08f14 100644
++--- a/dlls/kernelbase/kernelbase.h
+++++ b/dlls/kernelbase/kernelbase.h
++@@ -37,6 +37,7 @@ extern void init_global_data(void);
++ extern void init_startup_info( RTL_USER_PROCESS_PARAMETERS *params );
++ extern void init_locale( HMODULE module );
++ extern void init_console(void);
+++extern void init_debugger(void);
++ extern BOOL is_console_handle( HANDLE );
++ 
++ extern const WCHAR windows_dir[];
++diff --git a/dlls/kernelbase/main.c b/dlls/kernelbase/main.c
++index 8c37e5d..9598c4c 100644
++--- a/dlls/kernelbase/main.c
+++++ b/dlls/kernelbase/main.c
++@@ -49,6 +49,7 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
++         init_locale( hinst );
++         init_startup_info( NtCurrentTeb()->Peb->ProcessParameters );
++         init_console();
+++        init_debugger();
++     }
++     return TRUE;
++ }
+diff --git a/wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch b/wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch
+new file mode 100644
+index 0000000..ed7846b
+--- /dev/null
++++ b/wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch
+@@ -0,0 +1,151 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 16 Oct 2026 09:10:25 +0200
++Subject: [PATCH] win32u: Register the builtin classes without waiting on
++ another thread.
++
++register_builtin_classes() ran its body in a pthread_once, and the body
++takes the loader lock: it loads the classes' cursors through a callback
++into user32, and user32's part loads uxtheme.dll. A thread that held the
++loader lock (in a DllMain) and created its first window waited in the
++once for a thread that held the once and waited for the loader lock.
++
++On the PS5 this hangs Source games at startup: vgui2.dll's static
++initializer calls OleInitialize under the loader lock, while the hosted
++PnP thread creates its COM apartment window during device install.
++
++Now no thread waits: each one registers the classes still missing (one
++that another thread registered first is looked up), and the first one
++runs user32's part.
++---
++ dlls/win32u/class.c | 74 ++++++++++++++++++++++++++++++++-------------
++ 1 file changed, 53 insertions(+), 21 deletions(-)
++
++diff --git a/dlls/win32u/class.c b/dlls/win32u/class.c
++index 3ebef66..b5bcebe 100644
++--- a/dlls/win32u/class.c
+++++ b/dlls/win32u/class.c
++@@ -59,7 +59,7 @@ struct builtin_class_descr
++     INT        extra;     /* window extra bytes */
++     ULONG_PTR  cursor;    /* cursor id */
++     HBRUSH     brush;     /* brush or system color */
++-    ATOM       atom;      /* class atom */
+++    LONG       atom;      /* class atom, set by whichever thread registers it */
++ };
++ 
++ static struct builtin_class_descr builtin_classes[] =
++@@ -875,7 +875,7 @@ INT WINAPI NtUserGetClassName( HWND hwnd, BOOL real, UNICODE_STRING *name )
++     if (real && (fnid = get_window_fnid( hwnd )) && (fnid & 0x7fff) < ARRAY_SIZE(builtin_classes))
++     {
++         get_desktop_window(); /* create the desktop window to trigger builtin class registration */
++-        atom = builtin_classes[fnid & 0x7fff].atom;
+++        atom = ReadAcquire( &builtin_classes[fnid & 0x7fff].atom );
++         return NtUserGetAtomName( atom, name );
++     }
++ 
++@@ -1057,7 +1057,27 @@ WORD get_class_word( HWND hwnd, INT offset )
++ ATOM get_builtin_class_atom( enum ntuser_client_procs proc )
++ {
++     get_desktop_window(); /* create the desktop window to trigger builtin class registration */
++-    return builtin_classes[proc].atom;
+++    return ReadAcquire( &builtin_classes[proc].atom );
+++}
+++
+++/***********************************************************************
+++ *           find_class_atom
+++ *
+++ * The atom of a registered class, without registering the builtin classes.
+++ */
+++static ATOM find_class_atom( HINSTANCE instance, UNICODE_STRING *name )
+++{
+++    struct object_lock lock = OBJECT_LOCK_INIT;
+++    const class_shm_t *class_shm;
+++    NTSTATUS status;
+++    CLASS *class;
+++    ATOM atom = 0;
+++
+++    if (!(class = find_class( instance, name ))) return 0;
+++    while ((status = get_shared_class( class, &lock, &class_shm )) == STATUS_PENDING)
+++        atom = class_shm->info.atom;
+++    release_class_ptr( class );
+++    return status ? 0 : atom;
++ }
++ 
++ /***********************************************************************
++@@ -1071,6 +1091,7 @@ static void register_builtin( enum ntuser_client_procs proc )
++     struct builtin_class_descr *descr = builtin_classes + proc;
++     UNICODE_STRING name, version = { .Length = 0 };
++     WCHAR nameW[64];
+++    ATOM atom;
++     WNDCLASSEXW class =
++     {
++         .cbSize = sizeof(class),
++@@ -1081,7 +1102,10 @@ static void register_builtin( enum ntuser_client_procs proc )
++         .lpfnWndProc = MAKE_WNDPROC( proc ),
++     };
++ 
++-    if (descr->atom) return; /* already registered */
+++    if (ReadAcquire( &descr->atom )) return; /* already registered */
+++    /* 64-bit Windows use sizeof(UINT64) for all processes, while 32-bit Windows use 6 for extra
+++     * bytes size. Civilization II depends on the size being 6, so we use that even in wow64. */
+++    if (proc == NTUSER_WNDPROC_EDIT && (sizeof(void *) == 4 || NtCurrentTeb()->WowTebOffset)) class.cbWndExtra = 6;
++     if (descr->cursor)
++         class.hCursor = LoadImageW( 0, (const WCHAR *)descr->cursor, IMAGE_CURSOR,
++                                     0, 0, LR_SHARED | LR_DEFAULTSIZE );
++@@ -1089,31 +1113,39 @@ static void register_builtin( enum ntuser_client_procs proc )
++     asciiz_to_unicode( nameW, descr->name );
++     RtlInitUnicodeString( &name, nameW );
++ 
++-    if ((descr->atom = NtUserRegisterClassExWOW( &class, &name, &version, NULL, MAKE_FNID(proc), 0, NULL ))) return;
+++    if ((atom = NtUserRegisterClassExWOW( &class, &name, &version, NULL, MAKE_FNID(proc), 0, NULL )))
+++    {
+++        WriteRelease( &descr->atom, atom );
+++        return;
+++    }
++     if (class.hCursor) NtUserDestroyCursor( class.hCursor, 0 );
++-}
++-
++-static void register_builtins(void)
++-{
++-    struct builtin_class_descr *edit_class = builtin_classes + NTUSER_WNDPROC_EDIT;
++-    ULONG ret_len, i;
++-    void *ret_ptr;
++-
++-    /* 64-bit Windows use sizeof(UINT64) for all processes, while 32-bit Windows use 6 for extra
++-     * bytes size. Civilization II depends on the size being 6, so we use that even in wow64. */
++-    if (sizeof(void *) == 4 || NtCurrentTeb()->WowTebOffset) edit_class->extra = 6;
++-
++-    for (i = 0; i < ARRAY_SIZE(builtin_classes); i++) if (builtin_classes[i].name) register_builtin( i );
++-    KeUserModeCallback( NtUserInitBuiltinClasses, NULL, 0, &ret_ptr, &ret_len );
+++    /* another thread registered it after the check above */
+++    if ((atom = find_class_atom( user32_module, &name ))) WriteRelease( &descr->atom, atom );
++ }
++ 
++ /***********************************************************************
++  *           register_builtin_classes
+++ *
+++ * Loading the classes' cursors and user32's part (it loads uxtheme.dll)
+++ * take the loader lock, so no thread waits here for another one: a thread
+++ * that held the loader lock (in a DllMain) while another one held a once
+++ * here and waited for the loader lock would never return. Each thread
+++ * registers the classes still missing, and the first one runs user32's part.
++  */
++ void register_builtin_classes(void)
++ {
++-    static pthread_once_t init_once = PTHREAD_ONCE_INIT;
++-    pthread_once( &init_once, register_builtins );
+++    static LONG registered, user32_init;
+++    ULONG ret_len, i, error;
+++    void *ret_ptr;
+++
+++    if (ReadAcquire( &registered )) return;
+++    error = RtlGetLastWin32Error();  /* a class another thread registered first fails here */
+++
+++    for (i = 0; i < ARRAY_SIZE(builtin_classes); i++) if (builtin_classes[i].name) register_builtin( i );
+++    WriteRelease( &registered, 1 );
+++    RtlSetLastWin32Error( error );
+++    if (!InterlockedExchange( &user32_init, 1 ))
+++        KeUserModeCallback( NtUserInitBuiltinClasses, NULL, 0, &ret_ptr, &ret_len );
++ }
++ 
++ /***********************************************************************
+diff --git a/wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch b/wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
+new file mode 100644
+index 0000000..55f71bb
+--- /dev/null
++++ b/wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
+@@ -0,0 +1,80 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 16 Oct 2026 12:00:00 +0000
++Subject: [PATCH] win32u: Tell windows when a PS5 title's controller comes or goes.
++
++A PS5 title cannot run the plug and play service (patch 0550), which
++tells every top-level window that devices changed (WM_DEVICECHANGE with
++DBT_DEVNODES_CHANGED) when one is added or removed. Some games only look
++for a lost XInput controller again when told: an Unreal Engine 4 game
++whose controller went off kept it lost after it came back.
++
++The title counts each time a controller connects or disconnects
++(pw_wine_pad_changes) and wakes the driver's input fd. ProcessEvents
++then posts WM_DEVICECHANGE with DBT_DEVNODES_CHANGED to the top-level
++windows, once for any number of changes since it last looked. Without
++the title's call, as anywhere but in a title, nothing changes.
++
++From Playden's prospero-win (its patch 0984), placed in this series'
++driver.
++---
++diff --git a/dlls/win32u/ps5drv.c b/dlls/win32u/ps5drv.c
++index a5ddb4f..602b922 100644
++--- a/dlls/win32u/ps5drv.c
+++++ b/dlls/win32u/ps5drv.c
++@@ -52,6 +52,7 @@
++ #include "ntstatus.h"
++ #include "ntgdi_private.h"
++ #include "ntuser_private.h"
+++#include "dbt.h"
++ #include "wine/server.h"
++ #include "wine/debug.h"
++ #ifdef SONAME_LIBVULKAN
++@@ -84,6 +85,7 @@ struct ps5_window
++ static int (*present_frame)( const void *bgra, UINT width, UINT height, UINT stride );
++ static int (*next_input)( struct ps5_input *input );
++ static int (*input_fd)(void);
+++static UINT32 (*pad_changes)(void);
++ 
++ static pthread_mutex_t screen_lock = PTHREAD_MUTEX_INITIALIZER;
++ static UINT screen_width = 800, screen_height = 600;
++@@ -609,6 +611,23 @@ static BOOL dialog_key( HWND hwnd, const struct ps5_input *event )
++     return send;
++ }
++ 
+++/* The title's controller connected or disconnected since the last look
+++ * (pw_wine_pad_changes). Windows then tells every top-level window that
+++ * devices changed, through the plug and play service a title cannot run.
+++ * Some games (Unreal Engine 4) only look for a lost XInput controller
+++ * again when told. */
+++static void notify_pad_changes(void)
+++{
+++    static UINT32 seen;
+++    UINT32 changes;
+++
+++    if (!pad_changes) return;
+++    changes = pad_changes();
+++    if (__atomic_exchange_n( &seen, changes, __ATOMIC_RELAXED ) == changes) return;
+++    TRACE( "controller connected or disconnected (%u): WM_DEVICECHANGE\n", changes );
+++    NtUserPostMessage( HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0 );
+++}
+++
++ static BOOL ps5_ProcessEvents( DWORD mask )
++ {
++     static const DWORD button_flags[3][2] =
++@@ -688,6 +707,7 @@ static BOOL ps5_ProcessEvents( DWORD mask )
++             break;
++         }
++     }
+++    notify_pad_changes();
++     /* The wake pipe is every GUI thread's queue fd, so a byte sets QS_DRIVER
++      * on all their queues while one of them drains it and takes the events;
++      * a byte can also come after its event was taken here. Either way this
++@@ -1021,6 +1041,7 @@ void ps5_install_user_driver(void)
++     present_frame = dlsym( RTLD_DEFAULT, "pw_wine_present" );
++     next_input = dlsym( RTLD_DEFAULT, "pw_wine_next_input" );
++     input_fd = dlsym( RTLD_DEFAULT, "pw_wine_input_fd" );
+++    pad_changes = dlsym( RTLD_DEFAULT, "pw_wine_pad_changes" );
++ #ifdef SONAME_LIBVULKAN
++     release_display = dlsym( RTLD_DEFAULT, "pw_wine_release_display" );
++ #endif
+diff --git a/wine/ps5/pw_wine_sink.c b/wine/ps5/pw_wine_sink.c
+index ae7a283..923b056 100644
+--- a/wine/ps5/pw_wine_sink.c
++++ b/wine/ps5/pw_wine_sink.c
+@@ -28,6 +28,8 @@ static pthread_mutex_t dualsense_lock=PTHREAD_MUTEX_INITIALIZER;
+ static PwDualSenseState dualsense_state;
+ static PwDualSenseOutput dualsense_out;
+ static uint32_t dualsense_out_seen;
++/* How many times a controller connected or disconnected (pw_wine_pad_changes). */
++static uint32_t pad_changes;
+ /* Audio has its own lock: its sink blocks for a grain, which must not hold
+  * up frames or input. */
+ static pthread_mutex_t audio_lock=PTHREAD_MUTEX_INITIALIZER;
+@@ -185,11 +187,22 @@ static int same_pad(const PwWinePad *a,const PwWinePad *b)
+            a->right_trigger==b->right_trigger && a->thumb_lx==b->thumb_lx &&
+            a->thumb_ly==b->thumb_ly && a->thumb_rx==b->thumb_rx && a->thumb_ry==b->thumb_ry;
+ }
++/* A controller came or went: counted, and the driver woken to tell the game's
++ * windows (Wine patch 0984). A full pipe is already readable: nothing is lost. */
++static void pad_changed(void)
++{
++    char byte=1;
++    __atomic_add_fetch(&pad_changes,1,__ATOMIC_RELAXED);
++    pthread_once(&wake_once,create_wake_pipe);
++    if(wake[1]!=-1 && write(wake[1],&byte,1)<0){}
++}
++uint32_t pw_wine_pad_changes(void){return __atomic_load_n(&pad_changes,__ATOMIC_RELAXED);}
+ void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad)
+ {
+     if(index>=PW_WINE_PADS)return;
+     pthread_mutex_lock(&lock);
+     PwWinePad *pad_state=&players[index].state;
++    int changed=(pad!=NULL)!=(pad_state->connected!=0);
+     if(!pad)pad_state->connected=0;
+     else if(!pad_state->connected || !same_pad(pad,pad_state)) {
+         uint32_t packet=pad_state->packet+1;
+@@ -197,6 +210,7 @@ void pw_wine_set_pad_at(uint32_t index,const PwWinePad *pad)
+         pad_state->packet=packet?packet:1;   /* 0 is never a packet */
+     }
+     pthread_mutex_unlock(&lock);
++    if(changed)pad_changed();
+ }
+ void pw_wine_set_pad(const PwWinePad *pad){pw_wine_set_pad_at(0,pad);}
+ int pw_wine_pad_at(uint32_t index,PwWinePad *pad)
+@@ -236,6 +250,7 @@ static int same_dualsense(const PwDualSenseState *a,const PwDualSenseState *b)
+ void pw_wine_set_dualsense(const PwDualSenseState *state)
+ {
+     pthread_mutex_lock(&dualsense_lock);
++    int changed=(state!=NULL)!=(dualsense_state.connected!=0);
+     if(!state)dualsense_state.connected=0;
+     else {
+         uint32_t packet=dualsense_state.packet;
+@@ -244,6 +259,7 @@ void pw_wine_set_dualsense(const PwDualSenseState *state)
+         dualsense_state=*state;dualsense_state.connected=1;dualsense_state.packet=packet;
+     }
+     pthread_mutex_unlock(&dualsense_lock);
++    if(changed)pad_changed();
+ }
+ int pw_wine_dualsense(PwDualSenseState *state)
+ {
+diff --git a/wine/ps5/pw_wine_sink.h b/wine/ps5/pw_wine_sink.h
+index c02f491..3250eae 100644
+--- a/wine/ps5/pw_wine_sink.h
++++ b/wine/ps5/pw_wine_sink.h
+@@ -116,6 +116,11 @@ int pw_wine_input_fd(void);
+ int pw_wine_pad(PwWinePad *pad);
+ /* The rumble a game asked for (XInputSetState); speeds are clamped. */
+ void pw_wine_set_rumble(uint32_t left,uint32_t right);
++/* How many times a controller (a player's, or the DualSense) connected or
++ * disconnected. Each time also wakes the input fd, so the driver tells the
++ * game's windows that a device came or went (WM_DEVICECHANGE), as Windows
++ * does (Wine patch 0984). */
++uint32_t pw_wine_pad_changes(void);
+ /* The same for player index; out of range, no controller is connected
+  * there and its rumble is dropped. */
+ int pw_wine_pad_at(uint32_t index,PwWinePad *pad);
+-- 
+2.43.0
+

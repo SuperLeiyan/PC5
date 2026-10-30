@@ -22,6 +22,9 @@ or later. Parts from elsewhere, each under its own licence:
 | Inter 4.1 | <https://github.com/rsms/inter> | SIL Open Font License 1.1 | `fonts/` (three of its files, unchanged, and `OFL.txt`) |
 | Wine patches of PS5_MihawkOS v3.0.0-alpha-3, by mihawk-99 | <https://github.com/mihawk-99/PS5_MihawkOS> (`wine/patches/`) | LGPL 2.1 or later, as Wine | its patches 0910, 0913, 0914, 0965 and 1170, unchanged but for their context, as prospero-win's Wine patches 0915 and 0917 to 0920 (in `patches/prospero-win/`); patch 0914's free-memory count follows its patch 0912 |
 | NFS Black Box's prospero-win patch 0004, by lavavex | <https://github.com/lavavex/nfs-blackbox-ps5> | LGPL 2.1 or later, as prospero-win | `patches/prospero-win/` (its author kept): the audio driver logs streams whose buffer runs short |
+| Wine patches of PS5_MihawkOS 5.0.1-alpha-5 (a2ce6eb), by mihawk-99 | <https://github.com/mihawk-99/PS5_MihawkOS> (`wine/patches/`) | LGPL 2.1 or later, as Wine | its patches 0953, 2080 and 2081 (as Wine patches 0953 to 0955, their author kept) and 2082 (as 0945, its author kept, placed in this series' NtReadFile), in `patches/prospero-win/` 0067 and 0068: a 32-bit allocation below 4 GiB, faster file opens and reads. Wine patch 0944 (the instructions UMIP refuses) is PC5's own code, after its patch 2102's finding |
+| DXVK patch of PS5_MihawkOS 5.0.1-alpha-5, by mihawk-99 | <https://github.com/mihawk-99/PS5_MihawkOS> (`platform/dxvk/patches/`) | zlib, as DXVK | its patch 0006 as `patches/dxvk/` 0004 (its author kept): a Direct3D 9 reset onto a window that was never hooked doesn't crash |
+| Wine patches of Leo Lobato's prospero-win (1bd9163), as Playden uses them | <https://github.com/leolobato/prospero-win> (`wine/patches/`) | LGPL 2.1 or later, as Wine | its patches 0871, 0956, 0958 to 0963, 0971, 0981 and 0984 (0984 placed in this series' driver), and its `pw_wine_pad_changes` in `wine/ps5/pw_wine_sink.c`, in `patches/prospero-win/` 0066 |
 | PC5 pull request #78, by SuperLeiyan | <https://github.com/bornaradusin/PC5/pull/78> | LGPL 2.1 or later; its DXVK patch zlib, as DXVK | `patches/prospero-win/` 0036 and 0037 (Wine patch 0491) and `patches/dxvk/` 0003, their author kept: a movie's reads answered at their own offset, the touchpad as the Xbox controller's Back, a shared render target that can be sampled |
 | PC5 pull request #171, by SuperLeiyan | <https://github.com/bornaradusin/PC5/pull/171> | LGPL 2.1 or later | `patches/prospero-win/` 0056 to 0059 (their author kept), `title/pc5_tile.c`, `title/pc5_dds.c` and `tools/lapy-title.py`: home screen tiles that are apps of their own |
 | FAudio a3b49d6 and 2ead980, by Ethan Lee, as prospero-win 0b0f0e3 by Leo Lobato backports them | <https://github.com/FNA-XNA/FAudio>, <https://github.com/mpereiraesaa/prospero-win> | zlib, as FAudio | `patches/prospero-win/` 0035 (Wine patch 0972, its author kept): FAudio's resampler stays inside its output buffer |
@@ -32,8 +35,9 @@ from its own folder on the console: its eboot.bin (prospero-win's, LGPL 2.1 or l
 changed only where it names the app's title ID, so that it serves the tile. Their source is
 the app's, in PPSA11018-sources.tar.xz.
 
-PS5_MihawkOS's own code (GPL 3.0) is not in PC5: only the Wine patches above, which are under
-Wine's licence.
+PS5_MihawkOS's own code (GPL 3.0) is not in PC5: only the Wine and DXVK patches above, which
+are under Wine's and DXVK's licences. Nor is Playden's own code (GPL 3.0): only the Wine patches
+of the prospero-win it uses, above.
 
 Game covers are not part of PC5. On the console it downloads them, for the games the player
 installs, from Steam's store, SteamGridDB (with the player's own key), GOG's catalogue,

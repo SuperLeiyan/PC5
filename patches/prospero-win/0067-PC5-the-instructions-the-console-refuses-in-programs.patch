@@ -1,0 +1,287 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 18:01:00 +0000
+Subject: [PATCH 67/67] PC5: the instructions the console refuses in programs (SGDT,
+ SIDT, SLDT, SMSW, STR) are emulated, and a 32-bit game's aligned allocation
+ stays below 4 GiB (Wine patches 0944, 0953)
+
+---
+ PUBLICATION_ALLOWLIST.txt                     |   2 +
+ docs/WINE_PS5_BUILD.md                        |   2 +
+ ...mulate-the-instructions-umip-refuses.patch | 190 ++++++++++++++++++
+ ...cation-stays-below-the-process-limit.patch |  40 ++++
+ 4 files changed, 234 insertions(+)
+ create mode 100644 wine/patches/0944-ntdll-ps5-emulate-the-instructions-umip-refuses.patch
+ create mode 100644 wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index dbbe508..bbb85a9 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -592,6 +592,8 @@ wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+ wine/patches/0942-win32u-ps5-turn-the-mouse-wheel.patch
+ wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
+ wine/patches/0871-server-ps5-park-directory-descriptors.patch
++wine/patches/0944-ntdll-ps5-emulate-the-instructions-umip-refuses.patch
++wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch
+ wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
+ wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch
+ wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index da252e3..60231c5 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -148,6 +148,8 @@ before evaluating a candidate built from that cache.
+ | 0941 | `ntdll`: a general protection fault with the nested-task flag (NT, 0x4000) set in the frame clears it and runs the instruction again, logged the first time. A program that sets NT with `popf` (Far Cry's CPU check in CrySystem.dll) made the next `iretq` back to it fault, from Wine's 64-bit side or the kernel's, reported as a read of FFFFFFFF (Wine bug 33275; Linux and Windows clear NT on entry). No program uses NT, and no fault without it changes |
+ | 0942 | `win32u`: input event 6 turns the mouse wheel, `x` notches away from the player positive (`MOUSEEVENTF_WHEEL` of `x` times `WHEEL_DELTA`): a USB mouse's wheel, or a controller button bound to `mouse_wheel_up` or `mouse_wheel_down`. Before, the title read a USB mouse's wheel and dropped it, and a button couldn't turn it |
+ | 0943 | `ntdll`: a name opened relative to a directory handle (`RootDirectory`) whose descriptor from the in-process server this module can't use (`fstatat`/`openat` failing with `EBADF`, `STATUS_INVALID_HANDLE`) is looked up from the directory's own name, the server's or its NT name's, as patch 0936 enters such a directory; logged the first time. .NET's `FileSystemEnumerator` opens each subfolder that way, and a game's folder with subfolders couldn't be listed (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936 and 0938) |
++| 0944 | `ntdll`: a general protection fault with error code 0 from SGDT, SIDT, SLDT, SMSW or STR, which the console refuses in programs (CR4.UMIP), is emulated in 64-bit and 32-bit code: Linux's values for SGDT, SIDT and SMSW, Windows' for SLDT (0) and STR (0x40), written to the instruction's register or memory operand; logged the first time. A game's anti-tamper or CPU check that ran one ended on an access violation reading `0xffffffffffffffff`. The finding is PS5_MihawkOS's (its 2102) |
++| 0953 | `wow64`: a 32-bit caller's allocation with its own address requirements (an alignment) and no highest address is kept below the 32-bit process's limit, as on Windows; it landed above 4 GiB and the game faulted on the address's low half. From PS5_MihawkOS |
+ | 0956 | `gdi32`: with a native `opengl32` (Mesa), setting a window's pixel format again to the one it has succeeds instead of failing: Godot 4 sets it twice and stopped with "Failed to create an OpenGL window". From Playden's prospero-win |
+ | 0958 | `ntdll`: `WINE_CPU_TOPOLOGY`'s processor count (as Proton reads it) is reported as `NumberOfProcessors` when it is between 1 and the CPUs the process has (0881); logged. From Playden's prospero-win |
+ | 0959-0963 | `vkd3d-shader`: fx_2_0 effects compile with pass assignments, sampler state initializers, `true`/`false` for any state, null shader and texture states, and ps_1_x shaders as ps_2_0, so D3DX9 effects from source build. From Playden's prospero-win |
+diff --git a/wine/patches/0944-ntdll-ps5-emulate-the-instructions-umip-refuses.patch b/wine/patches/0944-ntdll-ps5-emulate-the-instructions-umip-refuses.patch
+new file mode 100644
+index 0000000..5dcbeee
+--- /dev/null
++++ b/wine/patches/0944-ntdll-ps5-emulate-the-instructions-umip-refuses.patch
+@@ -0,0 +1,190 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 18:00:00 +0000
++Subject: [PATCH] ntdll: Emulate the descriptor-table instructions UMIP refuses on PS5.
++
++The console runs the CPU with CR4.UMIP and leaves the fault to the
++program: SGDT, SIDT, SLDT, SMSW and STR raise a general protection fault
++with error code 0 in user mode. Windows runs them, and Linux emulates
++SGDT, SIDT and SMSW (arch/x86/kernel/umip.c), so a game's anti-tamper or
++CPU check that runs one (sgdt [rsp]) works on a PC and on the console
++ended on an access violation reading 0xffffffffffffffff. The fault is now
++first decoded here, in 64-bit or 32-bit code (prefixes, REX, ModRM, SIB,
++displacement, RIP-relative), and what the instruction would have stored
++is written to its register or memory operand: Linux's values for SGDT,
++SIDT and SMSW, Windows' for SLDT (0) and STR (0x40); the program goes on
++after it. A destination that can't be written raises that write's
++access violation. FS and GS operands and 16-bit addressing fault as
++before. The first one is logged ("wine-ps5: sgdt at ... emulated").
++
++The finding is PS5_MihawkOS's (its patch 2102); this decoder is a new,
++small one written for this series.
++---
++diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
++index 97f3d66..69706ec 100644
++--- a/dlls/ntdll/unix/signal_x86_64.c
+++++ b/dlls/ntdll/unix/signal_x86_64.c
++@@ -2912,6 +2912,146 @@ static BOOL pw_repair_guest_fs( struct thread_data *data, ucontext_t *sigcontext
++ }
++ #endif
++ 
+++#ifdef __PROSPERO__
+++/***********************************************************************
+++ *           ps5_umip_emulate
+++ *
+++ * The console runs the CPU with CR4.UMIP and leaves the fault to the program: SGDT, SIDT, SLDT,
+++ * SMSW and STR raise #GP(0) in user mode, where Windows runs them and Linux emulates SGDT, SIDT
+++ * and SMSW (arch/x86/kernel/umip.c). A game's anti-tamper or CPU check that runs one ended on an
+++ * access violation reading 0xffffffffffffffff. The instruction is decoded here, in 64-bit or 32-bit
+++ * code, and what it would have stored is written: Linux's values for SGDT, SIDT and SMSW, Windows'
+++ * for SLDT (0) and STR (0x40); the program goes on after it. 1 when emulated, 0 when the fault is
+++ * something else, -1 when the destination can't be written (rec is then that write's access
+++ * violation, as the instruction would have raised). The first one is logged.
+++ */
+++static int ps5_umip_emulate( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
+++{
+++    enum { SGDT, SIDT, SMSW, SLDT, STR };
+++    static const char *const names[] = { "sgdt", "sidt", "smsw", "sldt", "str" };
+++    static LONG logged;
+++    __typeof__(&RAX_sig(sigcontext)) gpr[16] =
+++    {
+++        &RAX_sig(sigcontext), &RCX_sig(sigcontext), &RDX_sig(sigcontext), &RBX_sig(sigcontext),
+++        &RSP_sig(sigcontext), &RBP_sig(sigcontext), &RSI_sig(sigcontext), &RDI_sig(sigcontext),
+++        &R8_sig(sigcontext), &R9_sig(sigcontext), &R10_sig(sigcontext), &R11_sig(sigcontext),
+++        &R12_sig(sigcontext), &R13_sig(sigcontext), &R14_sig(sigcontext), &R15_sig(sigcontext),
+++    };
+++    const BOOL is64 = CS_sig(sigcontext) == cs64_sel;
+++    const ULONG64 rip = is64 ? (ULONG64)RIP_sig(sigcontext) : (DWORD)RIP_sig(sigcontext);
+++    BYTE code[15], data[10];
+++    SIZE_T len = virtual_uninterrupted_read_memory( (const void *)(ULONG_PTR)rip, code, sizeof(code) );
+++    unsigned int i = 0, rex = 0, opsize16 = 0, addr_prefix = 0, kind, mod, reg, rm, size;
+++    ULONG64 value, address = 0;
+++
+++    for (;; i++)   /* prefixes: DS, ES, SS and CS have base 0; FS and GS are left to fault */
+++    {
+++        if (i >= len) return 0;
+++        if (code[i] == 0x66) opsize16 = 1;
+++        else if (code[i] == 0x67) addr_prefix = 1;
+++        else if (code[i] != 0x26 && code[i] != 0x2e && code[i] != 0x36 && code[i] != 0x3e) break;
+++    }
+++    if (is64 && (code[i] & 0xf0) == 0x40) rex = code[i++];
+++    if (i + 3 > len || code[i] != 0x0f || code[i + 1] > 0x01) return 0;
+++    mod = code[i + 2] >> 6;
+++    reg = (code[i + 2] >> 3) & 7;
+++    rm = code[i + 2] & 7;
+++    if (code[i + 1] == 0x01)
+++    {
+++        if (reg == 0 && mod != 3) kind = SGDT;
+++        else if (reg == 1 && mod != 3) kind = SIDT;
+++        else if (reg == 4) kind = SMSW;
+++        else return 0;
+++    }
+++    else if (reg == 0) kind = SLDT;
+++    else if (reg == 1) kind = STR;
+++    else return 0;
+++    i += 3;
+++
+++    if (mod != 3)
+++    {
+++        unsigned int base = rm, index = 16, scale = 0;
+++        BOOL has_base = TRUE, rip_relative = FALSE;
+++        LONG64 disp = 0;
+++
+++        if (!is64 && addr_prefix) return 0;   /* 16-bit addressing */
+++        if (rm == 4)
+++        {
+++            if (i >= len) return 0;
+++            scale = code[i] >> 6;
+++            index = ((code[i] >> 3) & 7) | (rex & 2 ? 8 : 0);
+++            if (index == 4) index = 16;   /* none */
+++            base = code[i] & 7;
+++            i++;
+++            if (mod == 0 && base == 5) has_base = FALSE;
+++        }
+++        else if (mod == 0 && rm == 5)
+++        {
+++            has_base = FALSE;
+++            rip_relative = is64;
+++        }
+++        if (has_base) base |= rex & 1 ? 8 : 0;
+++        if (mod == 1)
+++        {
+++            if (i + 1 > len) return 0;
+++            disp = (signed char)code[i];
+++            i += 1;
+++        }
+++        else if (mod == 2 || !has_base)
+++        {
+++            if (i + 4 > len) return 0;
+++            disp = (int)(code[i] | code[i + 1] << 8 | code[i + 2] << 16 | (unsigned int)code[i + 3] << 24);
+++            i += 4;
+++        }
+++        address = disp;
+++        if (has_base) address += (ULONG64)*gpr[base];
+++        if (index < 16) address += (ULONG64)*gpr[index] << scale;
+++        if (rip_relative) address += rip + i;
+++        if (!is64 || addr_prefix) address = (DWORD)address;
+++    }
+++
+++    switch (kind)
+++    {
+++    case SGDT:
+++    case SIDT:
+++        /* limit 0, then the base Linux gives */
+++        value = kind == SGDT ? 0xfffffffffffe0000ull : 0xffffffffffff0000ull;
+++        data[0] = data[1] = 0;
+++        memcpy( data + 2, &value, is64 ? 8 : 4 );
+++        size = is64 ? 10 : 6;
+++        break;
+++    case SMSW: value = 0x80050033; size = 2; break;   /* PE MP ET NE WP AM PG, as Linux */
+++    case SLDT: value = 0; size = 2; break;
+++    default:   value = 0x40; size = 2; break;         /* Windows' task register */
+++    }
+++
+++    if (mod == 3)
+++    {
+++        __typeof__(&RAX_sig(sigcontext)) to = gpr[rm | (rex & 1 ? 8 : 0)];
+++        if (opsize16) *to = (*to & ~0xffffull) | (value & 0xffff);
+++        else if (rex & 8) *to = value;
+++        else *to = (DWORD)value;
+++    }
+++    else
+++    {
+++        if (kind != SGDT && kind != SIDT) memcpy( data, &value, 2 );
+++        if (virtual_uninterrupted_write_memory( (void *)(ULONG_PTR)address, data, size ))
+++        {
+++            rec->ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+++            rec->NumberParameters = 2;
+++            rec->ExceptionInformation[0] = EXCEPTION_WRITE_FAULT;
+++            rec->ExceptionInformation[1] = address;
+++            return -1;
+++        }
+++    }
+++    RIP_sig(sigcontext) = rip + i;
+++    if (!InterlockedExchange( &logged, 1 ))
+++        MESSAGE( "wine-ps5: %s at %p emulated (the console refuses it in programs, UMIP; %u-bit code); "
+++                 "later ones are not logged\n", names[kind], (void *)(ULONG_PTR)rip, is64 ? 64 : 32 );
+++    return 1;
+++}
+++#endif
+++
++ /**********************************************************************
++  *		segv_handler
++  *
++@@ -2963,6 +3103,16 @@ static void __attribute__((used)) segv_handler( int signal, siginfo_t *siginfo,
++                 leave_handler( data, sigcontext );
++                 return;
++             }
+++            if (TRAP_sig(sigcontext) == TRAP_x86_PROTFLT && !err)
+++            {
+++                const int umip = ps5_umip_emulate( sigcontext, &rec );
+++                if (umip > 0)
+++                {
+++                    leave_handler( data, sigcontext );
+++                    return;
+++                }
+++                if (umip < 0) break;
+++            }
++ #endif
++             if (!err && (rec.ExceptionCode = is_privileged_instr( &context.c ))) break;
++             if ((err & 7) == 2 && handle_interrupt( data, sigcontext, &rec, &context )) return;
+diff --git a/wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch b/wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch
+new file mode 100644
+index 0000000..e51f1cc
+--- /dev/null
++++ b/wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch
+@@ -0,0 +1,40 @@
++From fe8b506f807854e2f52e287bfc0d4b11e5b9289b Mon Sep 17 00:00:00 2001
++From: Mihawk <163614687+mihawk-99@users.noreply.github.com>
++Date: Wed, 7 Oct 2026 20:47:51 -0400
++Subject: [PATCH] wow64: PS5: a 32-bit allocation stays below the process's
++ limit.
++
++A 32-bit caller's own address requirements (an alignment, say) came
++through with no highest address, so the 64-bit side had no limit for
++them; wow64 added the process's limit only when there were no
++requirements at all. Upstream's search finds low memory first anyway.
++The console's allocator prefers its reserved area above 4 GiB: in a
++32-bit game 51 aligned allocations (NtAllocateVirtualMemoryEx with one
++requirement) landed at 0x10xxxxxxxx, the game kept the low half of the
++address, and its first write faulted at 0x43400000 (PS5_Proton
++2026-10-07; record removed from the tree; in git history).
++
++No highest address is now the 32-bit process's own limit, as on
++Windows.
++---
++ dlls/wow64/virtual.c | 4 ++++
++ 1 file changed, 4 insertions(+)
++
++diff --git a/dlls/wow64/virtual.c b/dlls/wow64/virtual.c
++index b4778a8..ad50ee0 100644
++--- a/dlls/wow64/virtual.c
+++++ b/dlls/wow64/virtual.c
++@@ -120,6 +120,10 @@ static NTSTATUS mem_extended_parameters_32to64( MEM_EXTENDED_PARAMETER **ret_par
++         req->LowestStartingAddress = ULongToPtr( req32->LowestStartingAddress );
++         req->HighestEndingAddress  = ULongToPtr( req32->HighestEndingAddress );
++         req->Alignment             = req32->Alignment;
+++        /* PS5: no highest address is the 32-bit process's own limit, as on Windows. Upstream's search finds low
+++         * memory first anyway; the console's prefers its area above 4 GiB, and a 32-bit game's aligned
+++         * allocations landed there, truncated (PS5_Proton, 2026-10-07). */
+++        if (!req->HighestEndingAddress && set_limit) req->HighestEndingAddress = (void *)highest_user_address;
++     }
++     else if (set_limit)
++     {
++-- 
++2.56.0
++
+-- 
+2.43.0
+

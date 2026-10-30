@@ -1,0 +1,589 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 18:02:00 +0000
+Subject: [PATCH 68/68] PC5: faster file loading: small reads served from a piece
+ read ahead, a file's folder resolved once, the folders a game resolved kept
+ (Wine patches 0945, 0954, 0955)
+
+---
+ PUBLICATION_ALLOWLIST.txt                     |   3 +
+ docs/WINE_PS5_BUILD.md                        |   3 +
+ ...ntdll-ps5-read-ahead-for-small-reads.patch | 182 ++++++++++++++
+ ...olve-an-opened-file-s-directory-once.patch | 104 ++++++++
+ ...p-the-directories-a-process-resolved.patch | 234 ++++++++++++++++++
+ 5 files changed, 526 insertions(+)
+ create mode 100644 wine/patches/0945-ntdll-ps5-read-ahead-for-small-reads.patch
+ create mode 100644 wine/patches/0954-server-ps5-resolve-an-opened-file-s-directory-once.patch
+ create mode 100644 wine/patches/0955-ntdll-ps5-keep-the-directories-a-process-resolved.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index bbb85a9..b8cb4fe 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -593,7 +593,10 @@ wine/patches/0942-win32u-ps5-turn-the-mouse-wheel.patch
+ wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
+ wine/patches/0871-server-ps5-park-directory-descriptors.patch
+ wine/patches/0944-ntdll-ps5-emulate-the-instructions-umip-refuses.patch
++wine/patches/0945-ntdll-ps5-read-ahead-for-small-reads.patch
+ wine/patches/0953-wow64-ps5-a-32-bit-allocation-stays-below-the-process-limit.patch
++wine/patches/0954-server-ps5-resolve-an-opened-file-s-directory-once.patch
++wine/patches/0955-ntdll-ps5-keep-the-directories-a-process-resolved.patch
+ wine/patches/0956-gdi32-keep-a-window-s-pixel-format-with-a-native-opengl32.patch
+ wine/patches/0958-ntdll-honor-wine-cpu-topology-s-processor-count.patch
+ wine/patches/0959-vkd3d-shader-fx-implement-pass-assignment-for-fx-2-0.patch
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 60231c5..277ffde 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -149,7 +149,10 @@ before evaluating a candidate built from that cache.
+ | 0942 | `win32u`: input event 6 turns the mouse wheel, `x` notches away from the player positive (`MOUSEEVENTF_WHEEL` of `x` times `WHEEL_DELTA`): a USB mouse's wheel, or a controller button bound to `mouse_wheel_up` or `mouse_wheel_down`. Before, the title read a USB mouse's wheel and dropped it, and a button couldn't turn it |
+ | 0943 | `ntdll`: a name opened relative to a directory handle (`RootDirectory`) whose descriptor from the in-process server this module can't use (`fstatat`/`openat` failing with `EBADF`, `STATUS_INVALID_HANDLE`) is looked up from the directory's own name, the server's or its NT name's, as patch 0936 enters such a directory; logged the first time. .NET's `FileSystemEnumerator` opens each subfolder that way, and a game's folder with subfolders couldn't be listed (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936 and 0938) |
+ | 0944 | `ntdll`: a general protection fault with error code 0 from SGDT, SIDT, SLDT, SMSW or STR, which the console refuses in programs (CR4.UMIP), is emulated in 64-bit and 32-bit code: Linux's values for SGDT, SIDT and SMSW, Windows' for SLDT (0) and STR (0x40), written to the instruction's register or memory operand; logged the first time. A game's anti-tamper or CPU check that ran one ended on an access violation reading `0xffffffffffffffff`. The finding is PS5_MihawkOS's (its 2102) |
++| 0945 | `ntdll`: on PS5, a synchronous read of 64 KiB or less from a regular file is served from a 512 KiB piece read at once (four a process, by device and inode, checked with `fstat`; this process's writes and size changes forget them). The console's kernel reads exactly what is asked, so 4 KiB reads came at 88 MB/s. From PS5_MihawkOS (its 2082) |
+ | 0953 | `wow64`: a 32-bit caller's allocation with its own address requirements (an alignment) and no highest address is kept below the 32-bit process's limit, as on Windows; it landed above 4 GiB and the game faulted on the address's low half. From PS5_MihawkOS |
++| 0954 | `server`: on PS5, an opened file's directory is resolved with `realpath` once and kept (64 entries, checked by device and inode), so an open costs two system calls instead of one a path component. From PS5_MihawkOS (its 2080) |
++| 0955 | `ntdll`: on PS5, the directories a process resolved are kept by their upper-cased Windows path (1024 slots) and a lookup starts from the longest one, checked with one `fstatat`; a directory's case sensitivity is not asked (the console's disk is). From PS5_MihawkOS (its 2081) |
+ | 0956 | `gdi32`: with a native `opengl32` (Mesa), setting a window's pixel format again to the one it has succeeds instead of failing: Godot 4 sets it twice and stopped with "Failed to create an OpenGL window". From Playden's prospero-win |
+ | 0958 | `ntdll`: `WINE_CPU_TOPOLOGY`'s processor count (as Proton reads it) is reported as `NumberOfProcessors` when it is between 1 and the CPUs the process has (0881); logged. From Playden's prospero-win |
+ | 0959-0963 | `vkd3d-shader`: fx_2_0 effects compile with pass assignments, sampler state initializers, `true`/`false` for any state, null shader and texture states, and ps_1_x shaders as ps_2_0, so D3DX9 effects from source build. From Playden's prospero-win |
+diff --git a/wine/patches/0945-ntdll-ps5-read-ahead-for-small-reads.patch b/wine/patches/0945-ntdll-ps5-read-ahead-for-small-reads.patch
+new file mode 100644
+index 0000000..95523dd
+--- /dev/null
++++ b/wine/patches/0945-ntdll-ps5-read-ahead-for-small-reads.patch
+@@ -0,0 +1,182 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Mihawk <163614687+mihawk-99@users.noreply.github.com>
++Date: Sun, 25 Oct 2026 12:00:00 +0000
++Subject: [PATCH] ntdll: PS5: read ahead for small reads.
++
++The console's kernel reads exactly what is asked: a large file read in
++4 KiB pieces came at 88 MB/s cold, in 1 MiB pieces at 830 MB/s, and
++FreeBSD's per-file read-ahead (F_READAHEAD) changed nothing. A program
++reads with its C runtime's 4 KiB buffer: a 2D game read its 1.43 GB of
++archives at 35 us a read, 13 s of its load.
++
++A synchronous read of 64 KiB or less from a regular file is now served
++from a 512 KiB piece of the file read at once: four pieces a process, by
++device and inode, so a file opened again reads from the same piece. Each
++read checks the file with fstat, and another size or modification time
++reads the piece again; this process's own writes and size changes forget
++every piece. The file pointer is left where read() leaves it.
++
++From PS5_MihawkOS (its patch 2082), placed in this series' NtReadFile.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++index aa3d058..b8c4319 100644
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -5665,6 +5665,10 @@ NTSTATUS WINAPI NtQueryInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
++ /******************************************************************************
++  *              NtSetInformationFile   (NTDLL.@)
++  */
+++#ifdef __PROSPERO__
+++static void read_ahead_forget(void);
+++#endif
+++
++ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
++                                       void *ptr, ULONG len, FILE_INFORMATION_CLASS class )
++ {
++@@ -5672,6 +5676,9 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
++     unsigned int status = STATUS_SUCCESS;
++ 
++     TRACE( "(%p,%p,%p,0x%08x,0x%08x)\n", handle, io, ptr, len, class );
+++#ifdef __PROSPERO__
+++    if (class == FileEndOfFileInformation || class == FileAllocationInformation) read_ahead_forget();
+++#endif
++ 
++     switch (class)
++     {
++@@ -6513,6 +6520,93 @@ static unsigned int set_pending_write( HANDLE device )
++ /******************************************************************************
++  *              NtReadFile   (NTDLL.@)
++  */
+++#ifdef __PROSPERO__
+++/* Reading ahead for small reads. The console's kernel reads exactly what is asked: a large file read 4 KiB at a time came
+++ * at 88 MB/s cold, the same file in 1 MiB pieces at 830 MB/s, and FreeBSD's per-file
+++ * read-ahead (F_READAHEAD) changed nothing. A program reads with its C runtime's 4 KiB
+++ * buffer: a 2D game read 1.43 GB of archives at 35 us a 4 KiB read, 13 s of its load.
+++ *
+++ * A synchronous read of 64 KiB or less of a regular file is served from a 512 KiB piece of the file read at once; four
+++ * pieces a process, by device and inode, so a file opened again reads from the same piece. Each read checks the file
+++ * with fstat: another size or modification time (another process wrote it) reads the piece again. This process's own
+++ * writes and size changes (NtWriteFile, NtWriteFileGather, NtSetInformationFile) forget every piece. */
+++enum { READ_AHEAD_PIECES = 4, READ_AHEAD_SIZE = 512 * 1024, READ_AHEAD_SMALL = 64 * 1024 };
+++struct read_ahead
+++{
+++    dev_t            dev;
+++    ino_t            ino;
+++    off_t            size;
+++    struct timespec  mtime;
+++    off_t            start;      /* where data starts in the file */
+++    size_t           length;     /* bytes in data */
+++    unsigned int     used;
+++    char            *data;       /* READ_AHEAD_SIZE bytes, kept */
+++};
+++static struct read_ahead read_aheads[READ_AHEAD_PIECES];
+++static unsigned int read_ahead_clock;
+++static pthread_mutex_t read_ahead_mutex = PTHREAD_MUTEX_INITIALIZER;
+++
+++static void read_ahead_forget(void)
+++{
+++    unsigned int i;
+++    mutex_lock( &read_ahead_mutex );
+++    for (i = 0; i < READ_AHEAD_PIECES; i++) read_aheads[i].length = 0, read_aheads[i].dev = 0, read_aheads[i].ino = 0;
+++    mutex_unlock( &read_ahead_mutex );
+++}
+++
+++/* length bytes at pos of fd into buffer through a piece: the bytes copied (0 at the end of the file), or -1 when the
+++ * piece cannot serve it (the caller reads as before). */
+++static int read_ahead_read( int fd, void *buffer, ULONG length, off_t pos )
+++{
+++    struct read_ahead *piece = NULL;
+++    struct stat st;
+++    unsigned int i;
+++    int copied = -1;
+++
+++    if (fstat( fd, &st ) == -1 || !S_ISREG( st.st_mode ) || pos < 0) return -1;
+++    if (pos >= st.st_size) return 0;
+++    mutex_lock( &read_ahead_mutex );
+++    for (i = 0; i < READ_AHEAD_PIECES; i++)
+++        if (read_aheads[i].data && read_aheads[i].dev == st.st_dev && read_aheads[i].ino == st.st_ino)
+++        {
+++            piece = &read_aheads[i];
+++            break;
+++        }
+++    if (piece && (piece->size != st.st_size || piece->mtime.tv_sec != st.st_mtim.tv_sec ||
+++                  piece->mtime.tv_nsec != st.st_mtim.tv_nsec))
+++        piece->length = 0;   /* written since: read again */
+++    if (!piece)
+++    {
+++        unsigned int oldest = 0;
+++        for (i = 1; i < READ_AHEAD_PIECES; i++)
+++            if (!read_aheads[i].data || (read_aheads[oldest].data && read_aheads[i].used < read_aheads[oldest].used))
+++                oldest = i;
+++        piece = &read_aheads[oldest];
+++        if (!piece->data && !(piece->data = malloc( READ_AHEAD_SIZE ))) goto done;
+++        piece->length = 0;
+++    }
+++    if (pos < piece->start || pos + (off_t)length > piece->start + (off_t)piece->length)
+++    {
+++        ssize_t got;
+++        while ((got = pread( fd, piece->data, READ_AHEAD_SIZE, pos )) == -1 && errno == EINTR) ;
+++        if (got < 0) { piece->length = 0; goto done; }
+++        piece->start = pos;
+++        piece->length = got;
+++        piece->dev = st.st_dev;
+++        piece->ino = st.st_ino;
+++        piece->size = st.st_size;
+++        piece->mtime = st.st_mtim;
+++    }
+++    piece->used = ++read_ahead_clock;
+++    copied = min( (off_t)length, piece->start + (off_t)piece->length - pos );
+++    if (copied < 0) copied = 0;
+++    memcpy( buffer, piece->data + (pos - piece->start), copied );
+++done:
+++    mutex_unlock( &read_ahead_mutex );
+++    return copied;
+++}
+++#endif
+++
++ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_user,
++                             IO_STATUS_BLOCK *io, void *buffer, ULONG length,
++                             LARGE_INTEGER *offset, ULONG *key )
++@@ -6549,6 +6643,22 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
++             status = STATUS_INVALID_PARAMETER;
++             goto done;
++         }
+++#ifdef __PROSPERO__
+++        if (!async_read && length && length <= READ_AHEAD_SMALL)
+++        {
+++            const BOOL at_pointer = !offset || offset->QuadPart == FILE_USE_FILE_POINTER_POSITION;
+++            const off_t pos = at_pointer ? lseek( unix_handle, 0, SEEK_CUR ) : offset->QuadPart;
+++            const int got = pos < 0 ? -1 : read_ahead_read( unix_handle, buffer, length, pos );
+++
+++            if (got >= 0)
+++            {
+++                lseek( unix_handle, pos + got, SEEK_SET );   /* the file pointer, as read() leaves it */
+++                total = got;
+++                status = total ? STATUS_SUCCESS : STATUS_END_OF_FILE;
+++                goto done;
+++            }
+++        }
+++#endif
++ 
++         if (offset && offset->QuadPart != FILE_USE_FILE_POINTER_POSITION)
++         {
++@@ -6811,6 +6921,9 @@ NTSTATUS WINAPI NtWriteFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, v
++            handle, event, apc, apc_user, io, buffer, length, offset, key );
++ 
++     if (!io) return STATUS_ACCESS_VIOLATION;
+++#ifdef __PROSPERO__
+++    read_ahead_forget();   /* what this process writes is read again */
+++#endif
++ 
++     status = server_get_unix_fd( handle, FILE_WRITE_DATA, &unix_handle, &needs_close, &type, &options );
++     if (status == STATUS_ACCESS_DENIED)
++@@ -7032,6 +7145,9 @@ NTSTATUS WINAPI NtWriteFileGather( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
++ 
++     if (length % page_size) return STATUS_INVALID_PARAMETER;
++     if (!io) return STATUS_ACCESS_VIOLATION;
+++#ifdef __PROSPERO__
+++    read_ahead_forget();   /* what this process writes is read again */
+++#endif
++ 
++     status = server_get_unix_fd( file, FILE_WRITE_DATA, &unix_handle, &needs_close, &type, &options );
++     if (status) return status;
+diff --git a/wine/patches/0954-server-ps5-resolve-an-opened-file-s-directory-once.patch b/wine/patches/0954-server-ps5-resolve-an-opened-file-s-directory-once.patch
+new file mode 100644
+index 0000000..518b678
+--- /dev/null
++++ b/wine/patches/0954-server-ps5-resolve-an-opened-file-s-directory-once.patch
+@@ -0,0 +1,104 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Mihawk <163614687+mihawk-99@users.noreply.github.com>
++Date: Sun, 25 Oct 2026 05:00:00 -0400
++Subject: [PATCH] server: PS5: resolve an opened file's directory once.
++
++Every open made the server resolve the file's whole path with realpath(),
++one system call for each component, about 15 us each on the console, and
++a game's files are a dozen components deep. A 2D game opens its
++two resource archives thousands of times while it loads, at 250-275 us an
++open (isaac-load-trace-2026-10-25-01: 5,934 opens).
++
++The directory part is now resolved once and kept, with its device and
++inode, in a 64-entry table; an open checks the file with lstat (a symbolic
++link takes realpath, as before) and the directory with stat (it must be
++the same device and inode as when it was resolved), then adds the name to
++the kept directory: two system calls.
++---
++diff --git a/server/fd.c b/server/fd.c
++index 3e24956..76843a8 100644
++--- a/server/fd.c
+++++ b/server/fd.c
++@@ -2028,12 +2028,82 @@ void set_fd_user( struct fd *fd, const struct fd_ops *user_ops, struct object *u
++     fd->user   = user;
++ }
++ 
+++#ifdef __PROSPERO__
+++/* realpath() checks every component of the path with its own system call, about 15 us each on the console, and a game's
+++ * files are 12 or more components deep (/data/ps5proton/prefixes/<prefix>/dosdevices/c:/users/...): most of the 190 us
+++ * every open cost (isaac-load-fix1-2026-10-25-01: 24,000 opens). The directory part is now resolved once and kept,
+++ * with its device and inode, in a small table; an open checks the file itself (lstat: a symbolic link takes the full
+++ * path) and the directory (stat: the same device and inode as when it was resolved) and adds the name to the kept
+++ * directory: two system calls. Anything unusual (no slash, a name of . or .., a directory that moved) takes realpath. */
+++enum { PS5_RESOLVED_DIRS = 64 };
+++static struct { char *dir, *resolved; dev_t dev; ino_t ino; unsigned int used; } ps5_resolved[PS5_RESOLVED_DIRS];
+++static unsigned int ps5_resolved_clock;
+++
+++static char *ps5_realpath_fast( const char *path )
+++{
+++    char dir[PATH_MAX], resolved[PATH_MAX], *result;
+++    const char *slash = strrchr( path, '/' ), *base;
+++    struct stat st, dir_st;
+++    unsigned int i, slot = 0;
+++    size_t dir_len;
+++
+++    if (!slash || path[0] != '/') return NULL;
+++    base = slash + 1;
+++    dir_len = slash - path;
+++    if (!*base || !strcmp( base, "." ) || !strcmp( base, ".." ) || !dir_len || dir_len >= sizeof(dir)) return NULL;
+++    if (lstat( path, &st ) == -1 || S_ISLNK( st.st_mode )) return NULL;
+++    memcpy( dir, path, dir_len );
+++    dir[dir_len] = 0;
+++    if (stat( dir, &dir_st ) == -1) return NULL;
+++    for (i = 0; i < PS5_RESOLVED_DIRS; i++)
+++    {
+++        if (ps5_resolved[i].dir && !strcmp( ps5_resolved[i].dir, dir ))
+++        {
+++            if (ps5_resolved[i].dev == dir_st.st_dev && ps5_resolved[i].ino == dir_st.st_ino) break;
+++            free( ps5_resolved[i].dir );   /* moved: resolved again below */
+++            free( ps5_resolved[i].resolved );
+++            ps5_resolved[i].dir = ps5_resolved[i].resolved = NULL;
+++            i = PS5_RESOLVED_DIRS;
+++            break;
+++        }
+++    }
+++    if (i == PS5_RESOLVED_DIRS)
+++    {
+++        if (!realpath( dir, resolved )) return NULL;
+++        for (i = 1; i < PS5_RESOLVED_DIRS; i++)
+++            if (!ps5_resolved[i].dir || (ps5_resolved[slot].dir && ps5_resolved[i].used < ps5_resolved[slot].used)) slot = i;
+++        free( ps5_resolved[slot].dir );
+++        free( ps5_resolved[slot].resolved );
+++        ps5_resolved[slot].dir = strdup( dir );
+++        ps5_resolved[slot].resolved = strdup( resolved );
+++        if (!ps5_resolved[slot].dir || !ps5_resolved[slot].resolved)
+++        {
+++            free( ps5_resolved[slot].dir );
+++            free( ps5_resolved[slot].resolved );
+++            ps5_resolved[slot].dir = ps5_resolved[slot].resolved = NULL;
+++            return NULL;
+++        }
+++        ps5_resolved[slot].dev = dir_st.st_dev;
+++        ps5_resolved[slot].ino = dir_st.st_ino;
+++        i = slot;
+++    }
+++    ps5_resolved[i].used = ++ps5_resolved_clock;
+++    if (!(result = malloc( strlen( ps5_resolved[i].resolved ) + strlen( base ) + 2 ))) return NULL;
+++    sprintf( result, "%s/%s", strcmp( ps5_resolved[i].resolved, "/" ) ? ps5_resolved[i].resolved : "", base );
+++    return result;
+++}
+++#endif
+++
++ /* resolve a path into memory the server's own allocator owns; realpath with
++  * a NULL buffer allocates inside the C library instead */
++ static char *realpath_dup( const char *path )
++ {
++     char resolved[PATH_MAX];
+++#ifdef __PROSPERO__
+++    char *fast = ps5_realpath_fast( path );
++ 
+++    if (fast) return fast;
+++#endif
++     return realpath( path, resolved ) ? strdup( resolved ) : NULL;
++ }
++ 
+diff --git a/wine/patches/0955-ntdll-ps5-keep-the-directories-a-process-resolved.patch b/wine/patches/0955-ntdll-ps5-keep-the-directories-a-process-resolved.patch
+new file mode 100644
+index 0000000..646b35c
+--- /dev/null
++++ b/wine/patches/0955-ntdll-ps5-keep-the-directories-a-process-resolved.patch
+@@ -0,0 +1,234 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: Mihawk <163614687+mihawk-99@users.noreply.github.com>
++Date: Sun, 25 Oct 2026 06:00:00 -0400
++Subject: [PATCH] ntdll: PS5: keep the directories a process resolved, and do
++ not ask a file system's case.
++
++A name whose case differs from the disk's is resolved one component at a
++time, and each component cost the console several system calls of about
++15 us: the name as written, then the file system's case (openat, fstatfs,
++close), then the directory's names, then the same again for a reparse
++point. A 2D game asks, in lower case, whether each resource of
++each installed mod exists, 47,000 names at about 400 us each, almost all
++in directories that are not there (isaac-load-trace-2026-10-25-02).
++
++get_dir_case_sensitivity now answers case-sensitive without asking: the
++console's disk is, and on a case-insensitive drive the name as written is
++found before the question is asked. lookup_unix_name keeps the directories
++it resolves by their upper-cased Windows path (1024 slots, started again
++when three quarters are used) and starts from the longest one of a path,
++checked with one fstatat (still a directory, the same device and inode);
++only what follows is resolved, and a missing name below it is answered by
++the directory's kept names (patch 2077).
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++index fbed4e9..624e39c 100644
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -1380,6 +1380,12 @@ static BOOLEAN get_dir_case_sensitivity_stat( int root_fd, const char *dir )
++  */
++ static BOOLEAN get_dir_case_sensitivity( int root_fd, const char *dir )
++ {
+++#ifdef __PROSPERO__
+++    /* Asked for every name not found as written: openat, fstatfs and close, three system calls of about 15 us each on
+++     * the console. Its disk is case-sensitive; on a case-insensitive drive (a USB stick) the name as written is found
+++     * by the stat before this is asked, so case-sensitive is the right answer everywhere. */
+++    return TRUE;
+++#endif
++ #if defined(HAVE_GETATTRLIST) && defined(ATTR_VOL_CAPABILITIES) && \
++     defined(VOL_CAPABILITIES_FORMAT) && defined(VOL_CAP_FMT_CASE_SENSITIVE)
++     int case_sensitive = get_dir_case_sensitivity_attr( root_fd, dir );
++@@ -3948,6 +3954,150 @@ static NTSTATUS resolve_reparse_point( int fd, int root_fd, OBJECT_ATTRIBUTES *a
++  *
++  * Helper for nt_to_unix_file_name
++  */
+++#ifdef __PROSPERO__
+++/* The directories a process has resolved, by the Windows path that named them, case-insensitively. A name is resolved
+++ * one component at a time when its case differs from the disk's, and every component costs system calls of about 15 us
+++ * on the console: a 2D game asks, in lower case, whether each resource of each installed mod exists
+++ * (c:\users\mihawk\games\...\mods\<mod>\resources\music\...), 47,000 names at about 400 us each, almost all in
+++ * directories that do not exist (isaac-load-trace-2026-10-25-02). A lookup now starts from the longest directory of its
+++ * path kept here, checked with one fstatat (still a directory, the same device and inode), and resolves only what
+++ * follows; a missing name below it is answered by that directory's kept names (dir_listing_find). A directory resolved
+++ * the slow way is kept. 1024 slots; when three quarters are used the table starts again. */
+++enum { DIR_PREFIXES = 1024 };
+++struct dir_prefix
+++{
+++    unsigned int  hash;
+++    unsigned int  key_len;
+++    char         *key;       /* the unix base, a 1 byte, then the upper-cased Windows path, as bytes */
+++    char         *resolved;  /* the unix path after the base, as on disk */
+++    dev_t         dev;
+++    ino_t         ino;
+++};
+++static struct dir_prefix dir_prefixes[DIR_PREFIXES];
+++static unsigned int dir_prefix_count;
+++static pthread_mutex_t dir_prefix_mutex = PTHREAD_MUTEX_INITIALIZER;
+++
+++/* key for the unix base (base_len bytes) and the Windows path (len WCHARs), upper-cased; NULL when it does not fit */
+++static char *dir_prefix_key( const char *base, int base_len, const WCHAR *path, int len, unsigned int *key_len,
+++                             unsigned int *hash )
+++{
+++    char *key = malloc( base_len + 1 + len * sizeof(WCHAR) );
+++    unsigned int h = 2166136261u, i;
+++    int j;
+++
+++    if (!key) return NULL;
+++    memcpy( key, base, base_len );
+++    key[base_len] = 1;
+++    for (j = 0; j < len; j++)
+++    {
+++        const WCHAR upper = ntdll_towupper( path[j] );
+++        memcpy( key + base_len + 1 + j * sizeof(WCHAR), &upper, sizeof(WCHAR) );
+++    }
+++    *key_len = base_len + 1 + len * sizeof(WCHAR);
+++    for (i = 0; i < *key_len; i++) h = (h ^ (unsigned char)key[i]) * 16777619u;
+++    *hash = h;
+++    return key;
+++}
+++
+++static void dir_prefix_clear(void)
+++{
+++    unsigned int i;
+++    for (i = 0; i < DIR_PREFIXES; i++)
+++    {
+++        free( dir_prefixes[i].key );
+++        free( dir_prefixes[i].resolved );
+++    }
+++    memset( dir_prefixes, 0, sizeof(dir_prefixes) );
+++    dir_prefix_count = 0;
+++}
+++
+++static void dir_prefix_add( int root_fd, const char *unix_name, int base_len, int pos, const WCHAR *path, int len )
+++{
+++    unsigned int key_len, hash, slot;
+++    struct stat st;
+++    char *key;
+++
+++    if (fstatat( root_fd, unix_name, &st, 0 ) == -1 || !S_ISDIR( st.st_mode )) return;
+++    if (!(key = dir_prefix_key( unix_name, base_len, path, len, &key_len, &hash ))) return;
+++    mutex_lock( &dir_prefix_mutex );
+++    if (dir_prefix_count >= DIR_PREFIXES * 3 / 4) dir_prefix_clear();
+++    for (slot = hash & (DIR_PREFIXES - 1); dir_prefixes[slot].key; slot = (slot + 1) & (DIR_PREFIXES - 1))
+++        if (dir_prefixes[slot].hash == hash && dir_prefixes[slot].key_len == key_len &&
+++            !memcmp( dir_prefixes[slot].key, key, key_len )) break;
+++    if (dir_prefixes[slot].key)
+++    {
+++        free( dir_prefixes[slot].key );
+++        free( dir_prefixes[slot].resolved );
+++    }
+++    else dir_prefix_count++;
+++    dir_prefixes[slot].key = key;
+++    dir_prefixes[slot].key_len = key_len;
+++    dir_prefixes[slot].hash = hash;
+++    dir_prefixes[slot].resolved = strdup( unix_name + base_len );
+++    dir_prefixes[slot].dev = st.st_dev;
+++    dir_prefixes[slot].ino = st.st_ino;
+++    if (!dir_prefixes[slot].resolved)
+++    {
+++        free( key );
+++        memset( &dir_prefixes[slot], 0, sizeof(dir_prefixes[slot]) );
+++        dir_prefix_count--;
+++    }
+++    mutex_unlock( &dir_prefix_mutex );
+++}
+++
+++/* The longest directory of name (name_len WCHARs, components separated by backslashes) kept for this base
+++ * (unix_name up to pos): written after the base, with its length (bytes after the base) in *resolved_len, and how many
+++ * WCHARs of name it covers, the separator after it included; 0 when none. */
+++static int dir_prefix_find( int root_fd, char **buffer, int *unix_len, int pos, const WCHAR *name, int name_len,
+++                            int *resolved_len )
+++{
+++    int end;
+++
+++    for (end = name_len - 2; end > 0; end--)   /* a component always follows: the loop after this has one to resolve */
+++    {
+++        unsigned int key_len, hash, slot;
+++        char *key, *resolved = NULL;
+++        dev_t dev = 0;
+++        ino_t ino = 0;
+++        struct stat st;
+++        int length;
+++
+++        if (name[end] != '\\') continue;
+++        if (!(key = dir_prefix_key( *buffer, pos, name, end, &key_len, &hash ))) return 0;
+++        mutex_lock( &dir_prefix_mutex );
+++        for (slot = hash & (DIR_PREFIXES - 1); dir_prefixes[slot].key; slot = (slot + 1) & (DIR_PREFIXES - 1))
+++            if (dir_prefixes[slot].hash == hash && dir_prefixes[slot].key_len == key_len &&
+++                !memcmp( dir_prefixes[slot].key, key, key_len ))
+++            {
+++                resolved = strdup( dir_prefixes[slot].resolved );
+++                dev = dir_prefixes[slot].dev;
+++                ino = dir_prefixes[slot].ino;
+++                break;
+++            }
+++        mutex_unlock( &dir_prefix_mutex );
+++        free( key );
+++        if (!resolved) continue;
+++        length = strlen( resolved );
+++        if (pos + length + MAX_DIR_ENTRY_LEN + 3 > *unix_len)
+++        {
+++            char *grown = realloc( *buffer, pos + length + 2 * MAX_DIR_ENTRY_LEN + 3 );
+++            if (!grown) { free( resolved ); return 0; }
+++            *buffer = grown;
+++            *unix_len = pos + length + 2 * MAX_DIR_ENTRY_LEN + 3;
+++        }
+++        memcpy( *buffer + pos, resolved, length + 1 );
+++        free( resolved );
+++        if (!fstatat( root_fd, *buffer, &st, 0 ) && S_ISDIR( st.st_mode ) && st.st_dev == dev && st.st_ino == ino)
+++        {
+++            *resolved_len = length;
+++            return end + 1;
+++        }
+++        (*buffer)[pos] = 0;   /* moved or gone: resolved the slow way, and kept again */
+++    }
+++    return 0;
+++}
+++#endif
+++
++ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_STRING *nt_name,
++                                   unsigned int nt_pos, char **buffer, int unix_len, int pos,
++                                   UINT disposition, BOOL open_reparse, BOOL is_unix, unsigned int reparse_count )
++@@ -4008,6 +4158,29 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
++ 
++     /* now do it component by component */
++ 
+++#ifdef __PROSPERO__
+++    {
+++        const int key_base = pos;
+++        const WCHAR *const key_name = name;
+++        int covered, resolved_len;
+++
+++        unix_name[pos] = 0;
+++        if (!is_unix && (covered = dir_prefix_find( root_fd, buffer, &unix_len, pos, name, name_len, &resolved_len )))
+++        {
+++            unix_name = *buffer;
+++            pos += resolved_len;
+++            name += covered;
+++            name_len -= covered;
+++            nt_pos += covered;
+++        }
+++        else unix_name = *buffer;
+++#define PS5_KEEP_DIR() do { if (!is_unix && name_len) dir_prefix_add( root_fd, unix_name, key_base, pos, key_name, \
+++                                                                    next - key_name - 1 ); } while (0)
+++#else
+++#define PS5_KEEP_DIR() do { } while (0)
+++    {
+++#endif
+++
++     while (name_len)
++     {
++         const WCHAR *end, *next;
++@@ -4088,9 +4261,12 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
++         if (status != STATUS_SUCCESS) break;
++ 
++         pos += strlen( unix_name + pos );
+++        PS5_KEEP_DIR();
++         nt_pos += next - name;
++         name = next;
++     }
+++    }
+++#undef PS5_KEEP_DIR
++ 
++     return status;
++ }
+-- 
+2.43.0
+

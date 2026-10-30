@@ -453,8 +453,15 @@ controller's speaker.
 | 231 | Install games from USB with PC5 and other homebrew or game dumps on the drive | the list shows at once, without them | `PC5 usb folders=…` |
 | 232 | A game in a USB 2.0 port (front USB-A on the original PS5) › △ Play from USB | refused: too slow, plug it into a port on the back; Install still works | `PC5 problem install …: The drive reads at …` |
 | 233 | The same game in a back port › △ Play from USB | it plays | `PC5 install id=… usb=1` |
-| 234 | Settings › Game maintenance › FTP server On | the row shows ftp://<console's address>:2125 | `PC5 ftp on address=…:2125 root=…/INSTALL` |
+| 234 | Settings › Network › FTP server On | the row shows ftp://<console's address>:2125 | `PC5 ftp on address=…:2125 root=…/INSTALL` |
 | 235 | FileZilla from a PC to that address, drag a game's folder in | it lands in INSTALL; a few seconds after it finishes, PC5 asks to install it | `PC5 ftp received …`, `PC5 ftp uploads=… install folder games=1` |
 | 236 | Leave PC5 during a transfer, open it again, resume in FileZilla | the transfer resumes and finishes | |
 | 237 | Splinter Cell: Conviction's system check | it finds the sound device (and 2 GB of video memory) | `dxdiag` (with `+dxdiag`): `szHardwareID` asked for and given |
 | 238 | Heroes of Might and Magic: Olden Era › Start Game › a mode | its maps load (Story_maps listed), no "invalid handle" | `wine-ps5: L"Story_maps" looked up in directory … by its name, not its descriptor: status 0` |
+| 239 | Settings › Network › Username and Password set, then FileZilla with them, and with a wrong password | the right ones log in; a wrong one is refused ("530 Wrong username or password"), three wrong ones disconnect | `PC5 ftp login refused user=…` |
+| 240 | A Godot 4 game on OpenGL (MegaMan X Regenesis) | it opens its window, no "Failed to create an OpenGL window" | |
+| 241 | LEGO The Lord of the Rings, and other games that crashed reading FFFFFFFF | they get past it | `wine-ps5: sgdt at … emulated (the console refuses it in programs, UMIP …)` |
+| 242 | A game's loading screens (one that loaded slowly before, a 2D game with many small files) | they load faster than in 2.0.2 | |
+| 243 | A game playing on the controller: turn the controller off, then on again | the game sees it again (an Unreal Engine 4 game too) | |
+| 244 | A game that crashes (one that froze on its crash before, Call of Juarez Gunslinger) | it closes and PC5 shows what went wrong, no freeze | |
+| 245 | A Source engine game | it starts, no hang at the start | |
