@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-/* PC5's FTP server's platform on the console (pc5_ftp.h): TCP through libSceNet, as
- * pc5_net_ps5.c connects, with prospero-win's ps5log wrappers for waiting. */
+/* PC5's FTP server's and browser page's platform on the console (pc5_ftp.h, pc5_web.h): TCP
+ * through libSceNet, as pc5_net_ps5.c connects, with prospero-win's ps5log wrappers for waiting. */
 #include "pc5_ftp.h"
+#include "pc5_web.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -136,4 +137,5 @@ void pc5_ftp_ps5_init(void (*log)(const char *line))
 {
     const Pc5FtpOps ops = { ps5_listen, ps5_accept, ps5_address, ps5_lan_ip, ps5_send, ps5_recv, ps5_close, log };
     pc5_ftp_init(&ops);
+    pc5_web_init(&ops);
 }

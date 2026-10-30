@@ -465,3 +465,9 @@ controller's speaker.
 | 243 | A game playing on the controller: turn the controller off, then on again | the game sees it again (an Unreal Engine 4 game too) | |
 | 244 | A game that crashes (one that froze on its crash before, Call of Juarez Gunslinger) | it closes and PC5 shows what went wrong, no freeze | |
 | 245 | A Source engine game | it starts, no hang at the start | |
+| 246 | Settings › Network › Web page On, open the address it shows on a phone | the page opens: PC5's version, free space, the games and the logs | `PC5 web on address=…:8125 install=…/INSTALL` |
+| 247 | Settings › Network › Username and Password set, open the page again | the browser asks for them; wrong ones are refused, the right ones open it | `PC5 web login refused user=…` for a wrong one |
+| 248 | On a PC's browser: Send a game › Choose a folder, a game's installed folder | each file is sent with the bar moving; a few seconds after the last, PC5 asks to install it | `PC5 web received …`, `PC5 uploads ftp=… web=… install folder games=1` |
+| 249 | A game's Launch options on the page: type `-windowed`, Save, start the game | the game starts with it; the file is beside its program | `PC5 web wrote launch.txt for …`, the profile's arguments end with `-windowed` |
+| 250 | A game's Newest log, and a log under Logs | both download as zips that open | `PC5 web sent …zip` |
+| 251 | Leave PC5 while the page sends a game | the page says where it stopped; no `.pc5part` file is left in INSTALL | `PC5 web received … cut-short` |

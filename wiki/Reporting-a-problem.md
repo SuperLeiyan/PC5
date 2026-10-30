@@ -80,7 +80,7 @@ When a newer PC5 is out, **△** first offers it: the problem may already be fix
 
 ### Copying the log off the console
 
-Copy the zip from `/data/prospero-win/logs/` with the tool you use to move files to and from the console (an FTP server payload, for example). Drag it into the issue form's **Log** field.
+Download the zip from PC5's [web page](Web-page) (its **Logs**), or copy it from `/data/prospero-win/logs/` with the tool you use to move files to and from the console (an FTP server payload, for example). Drag it into the issue form's **Log** field.
 
 PC5 1.6.0 and older kept logs as `.log` files (with `-earlier` and `-start` parts) rather than zips. Attach all of them if that is what you have.
 
