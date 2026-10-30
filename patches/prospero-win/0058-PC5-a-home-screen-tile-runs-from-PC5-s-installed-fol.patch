@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SuperLeiyan <SuperLeiyan@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 13:00:00 +0000
+Subject: [PATCH 58/58] PC5: a home screen tile runs from PC5's installed
+ folder
+
+A tile was to be a copy of PC5's app under its own title id. Its files
+can't be hard links to PC5's: a title has no link(), and on the console
+a payload's link() on /data makes nothing (shsrv's ln, 2026-10-29). A whole
+copy is 1.1 GB a tile. So a tile holds only what the console starts (its
+eboot.bin, sce_module/libc.prx, lapy.elf for its id, sce_sys and
+pc5-tile.json), and its pc5-tile.json names PC5's installed folder as its
+runtime (title/pc5_tile.h).
+
+Once /data is granted, pc5_tile_runtime reads that from the tile's own
+app0 and, when the folder has Wine, makes it the last of the runtime
+roots: Wine and its modules, the Windows template, Mono, Zink, the fonts
+and PC5's files are looked for there, where the tile has none. A tile's
+sandbox instance is found by its pc5-tile.json, as it has no Wine of its
+own, and tile mode reads the game from the tile's own pc5-tile.json.
+Every other title, PC5 itself among them, has no tile runtime: as before.
+
+The log says it: "PC5 tile runtime=<folder> game=<id>", or why not.
+---
+ native/wine64_main.c | 42 +++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index 7c433cd..034bdb1 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -91,7 +91,11 @@ static const char *title_id_from = "built-in";
+  * was left behind, so once /data is granted the one that holds the runtime
+  * is looked for (find_sandbox_app0); _000 until then. */
+ static char sandbox_app0[64] = PW_SANDBOX_APP0;
+-static const char *const runtime_roots[] = { "/app0", sandbox_app0 };
++/* A PC5 home screen tile's runtime: PC5's installed folder, which its pc5-tile.json names
++ * (pc5_tile_runtime). The tile holds only what the console starts; its Wine and PC5's
++ * files are read from there. "" for any other title. */
++static char tile_runtime[128];
++static const char *const runtime_roots[] = { "/app0", sandbox_app0, tile_runtime };
+ 
+ /* Before anything else: /app0 is not visible once /data is granted. */
+ static void find_title_id(void)
+@@ -775,7 +779,11 @@ static void find_sandbox_app0(void)
+ 
+         snprintf(candidate, sizeof(candidate), "/mnt/sandbox/%s_%03u/app0", title_id, i);
+         snprintf(ntdll, sizeof(ntdll), "%s" PW_WINE64_RUNTIME "/ntdll.prx", candidate);
+-        if (stat(ntdll, &st) == 0) {
++        int found = stat(ntdll, &st) == 0;
++        /* A PC5 home screen tile's has no Wine of its own: its pc5-tile.json, then. */
++        snprintf(ntdll, sizeof(ntdll), "%s/pc5-tile.json", candidate);
++        found = found || stat(ntdll, &st) == 0;
++        if (found) {
+             if (strcmp(candidate, sandbox_app0)) PS5LOG_LOG("PW_WINE64 sandbox app0=%s", candidate);
+             memcpy(sandbox_app0, candidate, sizeof(sandbox_app0));
+             return;
+@@ -1010,6 +1018,7 @@ static const char *pc5_app_root(void)
+     for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+         char fonts[160];
+         struct stat st;
++        if (!runtime_roots[i][0]) continue;
+         snprintf(fonts, sizeof(fonts), "%s/pc5/fonts.bin", runtime_roots[i]);
+         if (stat(fonts, &st) == 0) return runtime_roots[i];
+     }
+@@ -1037,7 +1046,7 @@ static void pc5_tile_mode(void)
+     uint64_t begun = now_ns(), next_frame = 0;
+ 
+     if (launch.mode == PW_WINE_LAUNCH_GAME || launch.cycle || launch.start[0] || !app) return;
+-    found = pc5_tile_read(app, game, error, sizeof(error));
++    found = pc5_tile_read(sandbox_app0, game, error, sizeof(error));
+     if (!found) return;
+     if (found < 0) {
+         PS5LOG_LOG("PC5 tile refused app=%s: %s", app, error);
+@@ -1102,6 +1111,29 @@ static void pc5_tile_mode(void)
+     launch.exit_after = 1;
+ }
+ 
++/* A PC5 home screen tile that runs from PC5's folder: that folder becomes the last of the
++ * runtime roots, where Wine, its modules and PC5's files are looked for. Called once
++ * /data is granted and the tile's sandbox instance is known. */
++static void pc5_tile_runtime(void)
++{
++    char game[PC5_ID], runtime[PC5_PATH], error[PC5_ERROR], ntdll[PC5_PATH + 64];
++    struct stat st;
++
++    if (pc5_tile_read_all(sandbox_app0, game, runtime, sizeof(runtime), error, sizeof(error)) != 1 || !runtime[0])
++        return;
++    if (strlen(runtime) >= sizeof(tile_runtime) - 1) {
++        PS5LOG_LOG("PC5 tile runtime too long: %s", runtime);
++        return;
++    }
++    snprintf(ntdll, sizeof(ntdll), "%s" PW_WINE64_RUNTIME "/ntdll.prx", runtime);
++    if (stat(ntdll, &st)) {
++        PS5LOG_LOG("PC5 tile runtime=%s has no Wine (%s): is PC5 still there?", runtime, ntdll);
++        return;
++    }
++    memcpy(tile_runtime, runtime, strlen(runtime) + 1);
++    PS5LOG_LOG("PC5 tile runtime=%s game=%s", tile_runtime, game);
++}
++
+ /* Returns only when PC5 can't show its screens (its files missing, or no
+  * screen): prospero-win's own launcher is shown then. */
+ static void pc5_launcher(void)
+@@ -1430,6 +1462,7 @@ int main(int argc, char **argv)
+     }
+     (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
+ #ifdef PW_PC5
++    pc5_tile_runtime();   /* a tile's Wine and PC5's files: PC5's folder */
+     pc5_tile_mode();   /* a tile that is an app of its own: its game, without PC5's screens */
+ #endif
+     (void)pw_diagnostics_open(library_root, PW_BUILD_ID,
+@@ -1495,6 +1528,7 @@ int main(int argc, char **argv)
+             unsigned copied = 0;
+             for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+                 char provider[512];
++                if (!runtime_roots[i][0]) continue;
+                 int length = snprintf(provider, sizeof(provider), "%s/win/mesa-zink/%s", runtime_roots[i],
+                     game->app.architecture == PW_APP_ARCH_PE32 ? "i386-windows" : "x86_64-windows");
+                 if (length < 0 || (size_t)length >= sizeof(provider)) { provider_status = PW_ERR_LIMIT; break; }
+@@ -1557,6 +1591,7 @@ int main(int argc, char **argv)
+             for (size_t i = 0; cpu_count && installed < 0 &&
+                                i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+                 char source[256];
++                if (!runtime_roots[i][0]) continue;
+                 snprintf(source, sizeof(source), "%s" PW_WINE64_PE_RUNTIME "/wow64native.dll",
+                          runtime_roots[i]);
+                 installed = pw_wine_prefix_cpu_install(prefix, source, "wow64native.dll");
+@@ -1616,6 +1651,7 @@ int main(int argc, char **argv)
+ 
+     for (size_t i = 0; i < sizeof(runtime_roots) / sizeof(runtime_roots[0]); i++) {
+         struct stat st;
++        if (!runtime_roots[i][0]) continue;
+         snprintf(ntdll_dir, sizeof(ntdll_dir), "%s" PW_WINE64_RUNTIME, runtime_roots[i]);
+         snprintf(ntdll_path, sizeof(ntdll_path), "%s/ntdll.prx", ntdll_dir);
+         if (stat(ntdll_path, &st) == 0) break;
+-- 
+2.43.0
+

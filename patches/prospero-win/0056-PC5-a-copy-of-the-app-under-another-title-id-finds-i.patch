@@ -1,0 +1,330 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SuperLeiyan <SuperLeiyan@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 09:00:00 +0000
+Subject: [PATCH 56/56] PC5: a copy of the app under another title id finds its
+ own sandbox
+
+The title id was the one the eboot was built with (PW_TITLE_ID), and the
+sandbox view of app0 that holds the Wine runtime once /data is granted was
+looked for under it: /mnt/sandbox/<PW_TITLE_ID>_00N/app0. A copy of the app
+registered under another id, as a PC5 home screen tile is, runs in
+/mnt/sandbox/<its id>_00N instead, so it found no runtime ("pc5 files
+missing from the app") and fell back to the plain launcher. On a console a
+copy of PC5 as PPSA99437, with a Lapy helper made for that id, did just
+that: /data was granted, the runtime was not found.
+
+The title now reads its id first, while /app0 is still visible: the titleId
+of /app0/sce_sys/param.json (pw_title_id_read), the id the console
+registered the folder with. The sandbox path, the search for the sandbox
+instance, the restart through the sandbox eboot and the log identity use
+it. When param.json cannot be read the built-in id is used, as before. The
+log names it: "PW_WINE64 title id=<id> from=param.json|built-in".
+
+The reader is a header (native/pw_title_id.h) included by wine64_main.c and
+its host test, so the eboot's source list in tools/build_native.sh is left
+as it is.
+---
+ Makefile                  |  3 +-
+ PUBLICATION_ALLOWLIST.txt |  2 +
+ native/pw_title_id.h      | 88 +++++++++++++++++++++++++++++++++++++++
+ native/wine64_main.c      | 26 +++++++++++-
+ tests/test_pw_title_id.c  | 85 +++++++++++++++++++++++++++++++++++++
+ 5 files changed, 201 insertions(+), 3 deletions(-)
+ create mode 100644 native/pw_title_id.h
+ create mode 100644 tests/test_pw_title_id.c
+
+diff --git a/Makefile b/Makefile
+index 85dc0da..01ea311 100644
+--- a/Makefile
++++ b/Makefile
+@@ -121,6 +121,7 @@ $(eval $(call test_rule,test_pw_videoout_tile,tests/test_pw_videoout_tile.c src/
+ $(eval $(call test_rule,test_pw_pad_ps5,tests/test_pw_pad_ps5.c native/pw_pad_ps5.c src/pw_pad.c,-DPW_PAD_PS5_HOST_TEST))
+ $(eval $(call test_rule,test_pw_players_ps5,tests/test_pw_players_ps5.c native/pw_players_ps5.c native/pw_pad_ps5.c src/pw_pad.c,-DPW_PAD_PS5_HOST_TEST))
+ $(eval $(call test_rule,test_pw_data_mount,tests/test_pw_data_mount.c native/pw_data_mount.c,-DPW_DATA_MOUNT_HOST_TEST))
++$(eval $(call test_rule,test_pw_title_id,tests/test_pw_title_id.c,-D_DEFAULT_SOURCE))
+ PW_DATA_MOUNT_TEST_FLAGS := -DPW_DATA_MOUNT_HOST_TEST -DPW_DATA_MOUNT_PATH='"/tmp/pw_dm_data"' -DPW_DATA_MOUNT_WAIT_MS=200 -DPW_DATA_MOUNT_POLL_MS=50
+ $(eval $(call test_rule,test_pw_data_mount_native,tests/test_pw_data_mount_native.c native/pw_data_mount.c,$(PW_DATA_MOUNT_TEST_FLAGS)))
+ PW_LAPY_ELEVATION_TEST_FLAGS := -DPW_LAPY_HELPER_PATH='"/tmp/pw_lapy_test_helper"'
+@@ -152,7 +153,7 @@ TESTS := test_pw_qpc_clock test_pw_key_shared test_pw_diagnostics test_pw_x86_ho
+ 	test_pw_x86_engine test_pw_x86_chaining test_pw_x86_residency test_pw_x86_global_residency test_pw_x86_reencode test_pw_x86_smc test_pw_x86_fault_markers test_pw_x86_lazyflags \
+ 	test_pw_guest_call test_pw_x87 test_pw_x87_native test_pw_audio_ps5 test_pw_audio_mix test_pw_agc_submit_lifecycle \
+ 	test_pw_videoout_layout test_pw_videoout_tile test_pw_pad_ps5 test_pw_players_ps5 test_pw_data_mount \
+-	test_pw_data_mount_native test_pw_lapy_elevation \
++	test_pw_data_mount_native test_pw_lapy_elevation test_pw_title_id \
+ 	test_vk_present_interval test_vk_radv_profile
+ 
+ # The Python suites drive the built DBT tools and check the contracts the
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index a58b28d..d138cd2 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -31,6 +31,7 @@ native/pw_audio_ps5.h
+ native/lapy_elevation_protocol.h
+ native/pw_lapy_elevation.c
+ native/pw_lapy_elevation.h
++native/pw_title_id.h
+ native/pw_pad_ps5.c
+ native/pw_pad_ps5.h
+ native/pw_players_ps5.c
+@@ -148,6 +149,7 @@ tools/build_wine_runtime.sh
+ tools/validate_wine_runtime.py
+ docs/WINE_RUNTIME_MANIFEST.schema.json
+ tests/test_pw_sse_matrix.py
++tests/test_pw_title_id.c
+ tests/test_test_reachability.py
+ data/box86_opcode_catalog.json
+ docs/BOX86_OPCODE_CATALOG.md
+diff --git a/native/pw_title_id.h b/native/pw_title_id.h
+new file mode 100644
+index 0000000..7249d63
+--- /dev/null
++++ b/native/pw_title_id.h
+@@ -0,0 +1,88 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef PW_TITLE_ID_FILE_H
++#define PW_TITLE_ID_FILE_H
++/* The title id an app folder was registered with: the "titleId" of its
++ * sce_sys/param.json. One build of the title then serves copies of the app
++ * under other ids (PC5's home screen tiles).
++ *
++ * Header only, included by wine64_main.c and its host test: the eboot's
++ * source list in tools/build_native.sh stays as it is. */
++#include <fcntl.h>
++#include <stddef.h>
++#include <string.h>
++#include <unistd.h>
++
++/* Four capital letters, five digits and the terminating NUL. */
++#define PW_TITLE_ID_SIZE 10
++/* The largest param.json read; a real one is about 1 KiB. */
++#define PW_TITLE_ID_FILE_MAX 65536
++
++static inline int pw_title_id_valid(const char *s)
++{
++    for (int i = 0; i < 4; i++)
++        if (s[i] < 'A' || s[i] > 'Z') return 0;
++    for (int i = 4; i < 9; i++)
++        if (s[i] < '0' || s[i] > '9') return 0;
++    return 1;
++}
++
++static inline int pw_title_id_space(char c)
++{
++    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
++}
++
++/* The first "titleId": "<id>" in text that is a title id (PPSA12345). 0, or
++ * -1 with out empty when there is none. */
++static inline int pw_title_id_parse(const char *text, size_t length, char out[PW_TITLE_ID_SIZE])
++{
++    static const char key[] = "\"titleId\"";
++    const size_t key_length = sizeof(key) - 1;
++
++    out[0] = 0;
++    if (!text) return -1;
++    for (size_t at = 0; at + key_length <= length; at++) {
++        size_t i;
++        if (memcmp(text + at, key, key_length)) continue;
++        i = at + key_length;
++        while (i < length && pw_title_id_space(text[i])) i++;
++        if (i >= length || text[i] != ':') continue;
++        i++;
++        while (i < length && pw_title_id_space(text[i])) i++;
++        /* A quote, nine characters and a quote. */
++        if (i + 11 > length || text[i] != '"' || text[i + 10] != '"' || !pw_title_id_valid(text + i + 1)) continue;
++        memcpy(out, text + i + 1, PW_TITLE_ID_SIZE - 1);
++        out[PW_TITLE_ID_SIZE - 1] = 0;
++        return 0;
++    }
++    return -1;
++}
++
++/* The same from the file at path. 0, or -1 with out empty when the file
++ * can't be read, is larger than PW_TITLE_ID_FILE_MAX or holds no id. */
++static inline int pw_title_id_read(const char *path, char out[PW_TITLE_ID_SIZE])
++{
++    /* Static: the title reads this once, before its threads start. */
++    static char text[PW_TITLE_ID_FILE_MAX + 1];
++    size_t length = 0;
++    int fd;
++
++    out[0] = 0;
++    if (!path || (fd = open(path, O_RDONLY)) < 0) return -1;
++    for (;;) {
++        ssize_t got = read(fd, text + length, sizeof(text) - length);
++        if (got < 0) {
++            close(fd);
++            return -1;
++        }
++        if (got == 0) break;
++        length += (size_t)got;
++        if (length == sizeof(text)) {   /* larger than any param.json */
++            close(fd);
++            return -1;
++        }
++    }
++    close(fd);
++    return pw_title_id_parse(text, length, out);
++}
++
++#endif
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index 1dd65ef..212531a 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -32,6 +32,7 @@
+ #include "../src/pw_script_input.h"
+ #include "../src/pw_wine_launch.h"
+ #include "pw_data_mount.h"
++#include "pw_title_id.h"
+ #include "pw_audio_ps5.h"
+ #include "pw_pad_ps5.h"
+ #include "pw_players_ps5.h"
+@@ -77,11 +78,30 @@
+ /* Its 64-bit PE modules, among them the WoW64 CPU backends. */
+ #define PW_WINE64_PE_RUNTIME "/win/wine/lib/wine/x86_64-windows"
+ #define PW_SANDBOX_APP0 "/mnt/sandbox/" PW_TITLE_ID "_000/app0"
++/* The id this process runs as: the titleId of its own app0's param.json,
++ * read before /data is granted (find_title_id), or PW_TITLE_ID when that
++ * can't be read. A copy of the app under another id (a PC5 home screen tile)
++ * then finds its own sandbox, not the one of the id it was built with. */
++#define PW_TITLE_PARAM "/app0/sce_sys/param.json"
++static char title_id[PW_TITLE_ID_SIZE] = PW_TITLE_ID;
++static const char *title_id_from = "built-in";
+ /* The console counts the sandbox instance up (_001, ...) when an earlier one
+  * was left behind, so once /data is granted the one that holds the runtime
+  * is looked for (find_sandbox_app0); _000 until then. */
+ static char sandbox_app0[64] = PW_SANDBOX_APP0;
+ static const char *const runtime_roots[] = { "/app0", sandbox_app0 };
++
++/* Before anything else: /app0 is not visible once /data is granted. */
++static void find_title_id(void)
++{
++    char id[PW_TITLE_ID_SIZE];
++
++    if (pw_title_id_read(PW_TITLE_PARAM, id) == 0) {
++        memcpy(title_id, id, sizeof(title_id));
++        title_id_from = "param.json";
++    }
++    snprintf(sandbox_app0, sizeof(sandbox_app0), "/mnt/sandbox/%s_000/app0", title_id);
++}
+ /* The title's data: profiles/, input/, prefix/ and prefixes/<name>. */
+ #ifndef PW_WINE64_ROOT_DATA
+ #define PW_WINE64_ROOT_DATA "/data/prospero-win"            /* when /data is granted */
+@@ -751,7 +771,7 @@ static void find_sandbox_app0(void)
+         char candidate[sizeof(sandbox_app0)], ntdll[sizeof(sandbox_app0) + 64];
+         struct stat st;
+ 
+-        snprintf(candidate, sizeof(candidate), "/mnt/sandbox/" PW_TITLE_ID "_%03u/app0", i);
++        snprintf(candidate, sizeof(candidate), "/mnt/sandbox/%s_%03u/app0", title_id, i);
+         snprintf(ntdll, sizeof(ntdll), "%s" PW_WINE64_RUNTIME "/ntdll.prx", candidate);
+         if (stat(ntdll, &st) == 0) {
+             if (strcmp(candidate, sandbox_app0)) PS5LOG_LOG("PW_WINE64 sandbox app0=%s", candidate);
+@@ -1308,10 +1328,12 @@ int main(int argc, char **argv)
+     int status, video_status = PW_ERR_STATE, pad_status = PW_ERR_STATE, hid_status = PW_ERR_STATE;
+     uint64_t close_requested = 0, combo_ticks = 0, started = now_ns();
+ 
++    find_title_id();   /* while /app0 is still visible */
+     ps5log_config_defaults(&log_config);
+     if (ps5log_load_config(ps5log_default_conf_paths, ps5log_default_conf_path_count,
+                            &log_config, NULL) == 0)
+-        ps5log_init(&log_config, PW_TITLE_ID, PW_APP_NAME, now_ns());
++        ps5log_init(&log_config, title_id, PW_APP_NAME, now_ns());
++    PS5LOG_LOG("PW_WINE64 title id=%s from=%s built=%s", title_id, title_id_from, PW_TITLE_ID);
+     pw_hid_ps5_preload(hid_log);   /* before the /data grant changes the title's credentials */
+     if (open_library() != 0) {
+         PS5LOG_LOG("PW_WINE64 startup blocked reason=data-helper-incomplete");
+diff --git a/tests/test_pw_title_id.c b/tests/test_pw_title_id.c
+new file mode 100644
+index 0000000..e816f3d
+--- /dev/null
++++ b/tests/test_pw_title_id.c
+@@ -0,0 +1,85 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#include "../native/pw_title_id.h"
++
++#include <assert.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++static int parse(const char *text, char out[PW_TITLE_ID_SIZE])
++{
++    return pw_title_id_parse(text, strlen(text), out);
++}
++
++static void test_parse(void)
++{
++    char id[PW_TITLE_ID_SIZE];
++
++    /* As PC5 and the PS5 Forwarder Format write it, the id near the end. */
++    assert(!parse("{\n  \"conceptId\": \"99437\",\n  \"contentId\": \"UP0000-PPSA99437_00-PC5TILE000000000\",\n"
++                  "  \"titleId\": \"PPSA99437\",\n  \"versionFileUri\": \"\"\n}\n", id) &&
++           !strcmp(id, "PPSA99437"));
++    /* Without spaces, with tabs and CRLF. */
++    assert(!parse("{\"titleId\":\"PPSA11018\"}", id) && !strcmp(id, "PPSA11018"));
++    assert(!parse("{\r\n\t\"titleId\"\t:\r\n\t\"CUSA00001\"\r\n}", id) && !strcmp(id, "CUSA00001"));
++    /* A key that only starts the same, then the real one. */
++    assert(!parse("{\"titleIdOld\": \"PPSA00001\", \"titleId\": \"PPSA00002\"}", id) && !strcmp(id, "PPSA00002"));
++    /* The id inside another value isn't the title's. */
++    assert(parse("{\"contentId\": \"UP0000-PPSA99437_00-X\"}", id) == -1 && !id[0]);
++    /* Not an id: lower case, too short, too long, letters among the digits, not a string. */
++    assert(parse("{\"titleId\": \"ppsa11018\"}", id) == -1 && !id[0]);
++    assert(parse("{\"titleId\": \"PPSA1101\"}", id) == -1);
++    assert(parse("{\"titleId\": \"PPSA110180\"}", id) == -1);
++    assert(parse("{\"titleId\": \"PPSA1101X\"}", id) == -1);
++    assert(parse("{\"titleId\": 11018}", id) == -1);
++    /* A bad one first, a good one after it. */
++    assert(!parse("{\"titleId\": \"bad\", \"titleId\": \"PPSA99200\"}", id) && !strcmp(id, "PPSA99200"));
++    /* Cut short anywhere: never read past the end. */
++    {
++        static const char whole[] = "{\"titleId\": \"PPSA99437\"}";
++        /* The closing quote is the 23rd character: any shorter has no id. */
++        for (size_t n = 0; n <= sizeof(whole) - 1; n++) {
++            char *copy = malloc(n ? n : 1);
++            memcpy(copy, whole, n);
++            int r = pw_title_id_parse(copy, n, id);
++            assert(n >= 23 ? (r == 0 && !strcmp(id, "PPSA99437")) : (r == -1 && !id[0]));
++            free(copy);
++        }
++    }
++    assert(pw_title_id_parse(NULL, 0, id) == -1 && !id[0]);
++    assert(pw_title_id_parse("", 0, id) == -1 && !id[0]);
++}
++
++static void test_read(void)
++{
++    char dir[] = "/tmp/pw_title_id.XXXXXX", path[64], id[PW_TITLE_ID_SIZE];
++    FILE *file;
++
++    assert(mkdtemp(dir));
++    snprintf(path, sizeof(path), "%s/param.json", dir);
++    assert(pw_title_id_read(path, id) == -1 && !id[0]);   /* missing */
++    file = fopen(path, "w");
++    assert(file);
++    fputs("{\n  \"titleId\": \"PPSA99437\"\n}\n", file);
++    fclose(file);
++    assert(!pw_title_id_read(path, id) && !strcmp(id, "PPSA99437"));
++    /* Larger than any param.json: refused, not cut. */
++    file = fopen(path, "w");
++    assert(file);
++    for (int i = 0; i < PW_TITLE_ID_FILE_MAX / 16 + 1; i++) fputs("                ", file);
++    fputs("{\"titleId\": \"PPSA99437\"}", file);
++    fclose(file);
++    assert(pw_title_id_read(path, id) == -1 && !id[0]);
++    unlink(path);
++    rmdir(dir);
++    assert(pw_title_id_read(NULL, id) == -1 && !id[0]);
++}
++
++int main(void)
++{
++    test_parse();
++    test_read();
++    puts("title id tests passed");
++    return 0;
++}
+-- 
+2.43.0
+

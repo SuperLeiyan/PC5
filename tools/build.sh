@@ -555,7 +555,7 @@ EOF_SOURCES
     # (pic1): the background at 4K as BC7 in a DDS (tools/make-dds.c), as the shell reads it.
     mkdir -p "$B/art"
     python3 "$here/art/make-art.py" "$B/art" --background-4k "$B/art/background-4k.ppm" >/dev/null
-    cc -std=c11 -O2 -o "$B/art/make-dds" "$here/tools/make-dds.c" -lm
+    cc -std=c11 -O2 -o "$B/art/make-dds" "$here/tools/make-dds.c" "$here/title/pc5_dds.c" -lm
     "$B/art/make-dds" "$B/art/background-4k.ppm" "$app/sce_sys/pic0.dds" >/dev/null
     cp "$app/sce_sys/pic0.dds" "$app/sce_sys/pic1.dds"
     # The music the home screen plays while PC5's tile is chosen (ATRAC9), when there is one.
@@ -611,6 +611,9 @@ EOF_SOURCES
         [[ $(head -c 80 "$dll" | tail -c 16) == "Wine builtin DLL" ]] ||
             { echo "build.sh: $dll lost Wine's builtin mark" >&2; return 1; }
     done < <(find "$app" -type f \( -name 'xaudio2_*.dll' -o -name 'xactengine*.dll' \) -print0)
+    # The tiles PC5 makes as apps of their own change the title ID in a copy of lapy.elf
+    # (title/pc5_tile.c): it must be where PC5 looks for it.
+    python3 "$here/tools/lapy-title.py" "$app/lapy.elf" PPSA99437
     stage "zipping the app"
     python3 "$here/tools/make-app.py" "$app" "$release/$TITLE.zip" --repo "$here" --pw "$PW"
     # Wine Mono's source (300 MB) is released beside the app, as it came: a file of its own.

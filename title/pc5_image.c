@@ -244,6 +244,11 @@ int pc5_cover_compose(const Pc5Image *src, Pc5Image *cover)
     return crop_to(src, PC5_COVER_WIDTH, PC5_COVER_HEIGHT, cover);
 }
 
+int pc5_icon_compose(const Pc5Image *src, Pc5Image *icon)
+{
+    return crop_to(src, PC5_ICON_SIZE, PC5_ICON_SIZE, icon);
+}
+
 int pc5_background_compose(const Pc5Image *src, Pc5Image *background)
 {
     *background = (Pc5Image){ 0 };

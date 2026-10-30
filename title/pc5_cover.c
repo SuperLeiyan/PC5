@@ -269,7 +269,8 @@ int pc5_cover_queries(const Pc5CoverHint *hint, char queries[3][PC5_NAME])
 /* ---- the search ------------------------------------------------------------------- */
 
 typedef enum Plan {
-    PLAN_STEAM_APP, PLAN_STEAM, PLAN_GRIDDB_GAME, PLAN_GRIDDB_COVERS, PLAN_GRIDDB_HEROES, PLAN_GOG, PLAN_PCGAMINGWIKI,
+    PLAN_STEAM_APP, PLAN_STEAM, PLAN_GRIDDB_GAME, PLAN_GRIDDB_COVERS, PLAN_GRIDDB_HEROES, PLAN_GRIDDB_SQUARES, PLAN_GOG,
+    PLAN_PCGAMINGWIKI,
     PLAN_WIKIDATA, PLAN_WIKIDATA_APPS, PLAN_DONE
 } Plan;
 
@@ -288,8 +289,18 @@ static Plan plan(const Pc5CoverSearch *search, int step, int *query)
     if ((search->query_count > 0 || search->hint.steam_appid) && !(off & PC5_PICTURES_STEAMGRIDDB) &&
         search->hint.steamgriddb_key[0]) {
         order[n] = PLAN_GRIDDB_GAME; queries[n++] = 0;
-        order[n] = PLAN_GRIDDB_COVERS; queries[n++] = 0;
-        order[n] = PLAN_GRIDDB_HEROES; queries[n++] = 0;
+        if (search->hint.icons) {
+            order[n] = PLAN_GRIDDB_SQUARES; queries[n++] = 0;
+        } else {
+            order[n] = PLAN_GRIDDB_COVERS; queries[n++] = 0;
+            order[n] = PLAN_GRIDDB_HEROES; queries[n++] = 0;
+        }
+    }
+    /* Square pictures: only SteamGridDB has them; Steam above told it the game. */
+    if (search->hint.icons) {
+        if (step >= n) return PLAN_DONE;
+        *query = queries[step];
+        return order[step];
     }
     if (search->query_count > 0 && !(off & PC5_PICTURES_GOG)) { order[n] = PLAN_GOG; queries[n++] = 0; }
     if (search->query_count > 0 && !(off & PC5_PICTURES_PCGAMINGWIKI)) { order[n] = PLAN_PCGAMINGWIKI; queries[n++] = 0; }
@@ -756,6 +767,44 @@ static void griddb_heroes(Pc5CoverSearch *search, const Pc5Http *http)
     }
 }
 
+/* Its square pictures, for the game's tile: the first four, as SteamGridDB ranks them, each a
+ * choice of its own (a cover's url is where it is, so they never stand for a cover). */
+static void griddb_squares(Pc5CoverSearch *search, const Pc5Http *http)
+{
+    char path[512], picture[PC5_PATH];
+    Pc5Buf answer = { 0 };
+    Pc5Json json;
+
+    if (!search->griddb_game && !search->griddb_app) {
+        search->requests--;
+        return;
+    }
+    if (griddb_path(search, "grids", "512x512%2C1024x1024", path, sizeof(path))) return;
+    if (!griddb_ask(search, http, path, &json, &answer)) {
+        search->answered++;
+        uint32_t data = pc5_json_get(&json, 0, "data");
+        for (uint32_t i = 0, taken = 0; taken < GRIDDB_PICTURES; i++) {
+            uint32_t grid = pc5_json_item(&json, data, i);
+            if (!grid) break;
+            int width = (int)pc5_json_number(&json, pc5_json_get(&json, grid, "width"), 0),
+                height = (int)pc5_json_number(&json, pc5_json_get(&json, grid, "height"), 0);
+            if (width != height ||
+                pc5_json_text(&json, pc5_json_get(&json, grid, "url"), picture, sizeof(picture)) ||
+                strncmp(picture, "https://", 8))
+                continue;
+            /* Ahead of the store's covers, which only told SteamGridDB the game. */
+            add_choice(search, source_names[SOURCE_GRIDDB], search->griddb_title, picture, NULL, search->griddb_app,
+                       search->griddb_score + 100 - (int)taken * 2);
+            for (int c = 0; c < search->count; c++)
+                if (!strcmp(search->choices[c].url, picture))
+                    pc5_copy(search->choices[c].icon, sizeof(search->choices[c].icon), picture);
+            taken++;
+        }
+        pc5_json_free(&json);
+    }
+    pc5_buf_free(&answer);
+}
+
 static int by_score(const void *a, const void *b)
 {
     const Pc5CoverChoice *x = a, *y = b;
@@ -789,6 +838,7 @@ int pc5_cover_search_step(Pc5CoverSearch *search, const Pc5Http *http)
     case PLAN_GRIDDB_GAME: griddb_game(search, http); break;
     case PLAN_GRIDDB_COVERS: griddb_covers(search, http); break;
     case PLAN_GRIDDB_HEROES: griddb_heroes(search, http); break;
+    case PLAN_GRIDDB_SQUARES: griddb_squares(search, http); break;
     case PLAN_WIKIDATA: wikidata_find(search, http, search->queries[query]); break;
     case PLAN_WIKIDATA_APPS: wikidata_apps(search, http); break;
     default: break;
@@ -897,6 +947,18 @@ int pc5_background_fetch(const char *url, uint32_t steam_appid, const Pc5Http *h
     return status;
 }
 
+int pc5_icon_fetch(const Pc5CoverChoice *choice, const Pc5Http *http, Pc5Image *icon)
+{
+    Pc5Image picture = { 0 };
+    int status;
+
+    *icon = (Pc5Image){ 0 };
+    if (!choice->icon[0] || download_picture(http, choice->icon, &picture)) return -1;
+    status = pc5_icon_compose(&picture, icon);
+    pc5_image_free(&picture);
+    return status;
+}
+
 int pc5_background_read(const char *path, Pc5Image *background)
 {
     Pc5Image picture = { 0 };
@@ -940,7 +1002,7 @@ int pc5_cover_own(const char *dir, const char *const *names, char *out, size_t s
 void pc5_cover_tidy(const char *dir)
 {
     static const char *const names[] = { "cover-original.jpg", "cover-original.png", "cover.bin.part",
-                                         "background.bin.part" };
+                                         "background.bin.part", "icon.bin.part" };
     char path[PC5_PATH];
 
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
@@ -950,7 +1012,7 @@ void pc5_cover_tidy(const char *dir)
 void pc5_cover_delete_all(const char *dir)
 {
     static const char *const names[] = { "cover.bin", "background.bin", "background.txt", "background-none.txt",
-                                         "background-tries.txt" };
+                                         "background-tries.txt", "icon.bin" };
     char path[PC5_PATH];
 
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)

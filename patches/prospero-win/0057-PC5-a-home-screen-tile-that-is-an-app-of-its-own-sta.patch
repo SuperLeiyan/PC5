@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SuperLeiyan <SuperLeiyan@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 11:00:00 +0000
+Subject: [PATCH 57/57] PC5: a home screen tile that is an app of its own
+ starts its game itself
+
+A tile can now be a copy of PC5's app under its own title id (patch 0056)
+with pc5-tile.json beside its eboot naming one game (title/pc5_tile.h). On
+the tile's own start, no arguments, as the home screen starts it, the
+title reads that file and readies the game as PC5's screens ready one
+before they start it (pc5_tile_prepare_step): what a stopped install or
+uninstall left is finished, the game found and checked, .NET's runtime
+copied the first time, its profile written again from PC5's notes and
+settings. PC5's loading screen shows when that takes half a second. The
+title then goes on in the same process as that game, started from a tile
+(profile=<id> exit=1): no LoadExec, so one Lapy request, and the game
+closes to the home screen (close_title_to_home).
+
+When the game can't start, PC5's screens open with it as a forwarder's
+game (launch.start), and say why. A restart of the title (a cycle, a game,
+a forwarder's --rom) and PC5 itself, which has no pc5-tile.json, are as
+before.
+
+The log says it: "PC5 tile game=<id> app=<app>", "PC5 tile game=<id>
+ready ms=<n>", or "PC5 tile game=<id> can't start: <why>".
+---
+ native/wine64_main.c | 91 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 91 insertions(+)
+
+diff --git a/native/wine64_main.c b/native/wine64_main.c
+index 212531a..7c433cd 100644
+--- a/native/wine64_main.c
++++ b/native/wine64_main.c
+@@ -49,6 +49,8 @@
+ #include "pc5_console.h"
+ #include "pc5_game.h"
+ #include "pc5_library.h"
++#include "pc5_matrix.h"
++#include "pc5_tile.h"
+ #include "../wine/ps5/pw_pc5_hud.h"
+ #endif
+ 
+@@ -1014,6 +1016,92 @@ static const char *pc5_app_root(void)
+     return NULL;
+ }
+ 
++/* A home screen tile that is an app of its own (pc5_tile.h): a copy of PC5's app with
++ * pc5-tile.json beside its eboot. On the tile's own start (no arguments: not a restart of
++ * this title) its game is readied as PC5's screens ready one, behind PC5's loading screen
++ * once that takes half a second, and this process goes on as that game, started from a
++ * tile: no restart, so one Lapy request, and closing the game closes the tile
++ * (close_title_to_home). When the game can't start, PC5's screens say why, as they do for a
++ * forwarder's game (launch.start), and closing that game closes the tile too. Called with
++ * the library open, before the session is named. */
++static void pc5_tile_mode(void)
++{
++    static Pc5TilePrep prep;
++    static PwVideoOutPs5 video;
++    static char profile_word[PW_WINE_LAUNCH_ID_MAX + 16], exit_word[] = "exit=1";
++    char game[PC5_ID], error[PC5_ERROR];
++    const char *app = pc5_app_root();
++    Pc5Matrix *matrix = NULL;
++    int found, status, video_status = PW_ERR_STATE, matrix_failed = 0;
++    uint32_t copy_logged = 0;
++    uint64_t begun = now_ns(), next_frame = 0;
++
++    if (launch.mode == PW_WINE_LAUNCH_GAME || launch.cycle || launch.start[0] || !app) return;
++    found = pc5_tile_read(app, game, error, sizeof(error));
++    if (!found) return;
++    if (found < 0) {
++        PS5LOG_LOG("PC5 tile refused app=%s: %s", app, error);
++        return;
++    }
++    PS5LOG_LOG("PC5 tile game=%s app=%s", game, app);
++    pc5_tile_prepare_begin(&prep, library_root, app, game);
++    while (!(status = pc5_tile_prepare_step(&prep, 30))) {
++        uint64_t now = now_ns();
++        const uint32_t *pixels;
++
++        if (prep.copying && prep.runtime.done / 500u + 1u != copy_logged) {
++            copy_logged = prep.runtime.done / 500u + 1u;
++            PS5LOG_LOG("PC5 tile dotnet runtime %u of %u", (unsigned)prep.runtime.done, (unsigned)prep.runtime.total);
++        }
++        /* The loading screen once readying takes long: .NET's runtime copied the first time, or
++         * a stopped uninstall finished (the game's id in it until its name is known). */
++        if (matrix_failed || now - begun < PW_WINE64_SPINNER_DELAY_MS * 1000000ull || now < next_frame) continue;
++        if (!matrix) {
++            Pc5Fonts fonts;
++            char path[PC5_PATH];
++            memset(&fonts, 0, sizeof(fonts));
++            snprintf(path, sizeof(path), "%s/pc5/fonts.bin", app);
++            if (pc5_fonts_load(&fonts, path)) PS5LOG_LOG("PC5 tile loading screen without its fonts: %s", path);
++            matrix = pc5_matrix_create(&fonts, prep.title, (uint32_t)(now / 1000000u) * 2654435761u);
++            pc5_fonts_free(&fonts);
++            video_status = matrix ? pw_videoout_ps5_open(&video) : PW_ERR_STATE;
++            if (!matrix || video_status != PW_OK) {
++                PS5LOG_LOG("PC5 tile loading screen unavailable matrix=%d video=%s", matrix != NULL,
++                           pw_result_name(video_status));
++                matrix_failed = 1;
++                continue;
++            }
++        }
++        next_frame = now + PC5_MATRIX_STEP_MS * 1000000ull;
++        if ((pixels = pc5_matrix_step(matrix))) {
++            const PwPresentFrame frame = { (const uint8_t *)pixels, PC5_MATRIX_WIDTH, PC5_MATRIX_HEIGHT,
++                                           PC5_MATRIX_WIDTH * 4, PW_PRESENT_BGRX8 };
++            (void)pw_videoout_ps5_present_scaled(&video, &frame, PW_PRESENT_SCALE_FIT, 0);
++        }
++    }
++    pc5_matrix_destroy(matrix);
++    if (video_status == PW_OK) pw_videoout_ps5_close(&video);   /* the game opens its own */
++    pc5_tile_prepare_end(&prep);
++    if (status > 0) {
++        char *words[] = { profile_word, exit_word };
++        load_catalog();   /* its profile, as just written */
++        snprintf(profile_word, sizeof(profile_word), "profile=%s", game);
++        (void)pw_wine_launch_parse(2, words, catalog, catalog_count, &launch);
++        if (launch.mode == PW_WINE_LAUNCH_GAME && launch.app && launch.exit_after) {
++            PS5LOG_LOG("PC5 tile game=%s ready ms=%llu", game, (unsigned long long)((now_ns() - begun) / 1000000u));
++            return;
++        }
++        snprintf(error, sizeof(error), "its profile was refused");
++    } else {
++        snprintf(error, sizeof(error), "%s", prep.error);
++    }
++    PS5LOG_LOG("PC5 tile game=%s can't start: %s", game, error);
++    memset(&launch, 0, sizeof(launch));
++    launch.mode = PW_WINE_LAUNCH_LAUNCHER;
++    snprintf(launch.start, sizeof(launch.start), "%s", game);
++    launch.exit_after = 1;
++}
++
+ /* Returns only when PC5 can't show its screens (its files missing, or no
+  * screen): prospero-win's own launcher is shown then. */
+ static void pc5_launcher(void)
+@@ -1341,6 +1429,9 @@ int main(int argc, char **argv)
+         return 1;
+     }
+     (void)pw_wine_launch_parse(argc, argv, catalog, catalog_count, &launch);
++#ifdef PW_PC5
++    pc5_tile_mode();   /* a tile that is an app of its own: its game, without PC5's screens */
++#endif
+     (void)pw_diagnostics_open(library_root, PW_BUILD_ID,
+                               launch.app ? launch.app->id : "launcher", launch.cycle);
+     PS5LOG_LOG("PW_WINE64 args argc=%d mode=%s profile=%s cycle=%u refused=%u tile=%s exit_after=%u", argc,
+-- 
+2.43.0
+

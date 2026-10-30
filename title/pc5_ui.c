@@ -4,6 +4,7 @@
 #include "pc5_backgrounds.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
+#include "pc5_tile.h"
 #include "pc5_image.h"
 #include "pc5_library.h"
 #include "pc5_logs.h"
@@ -146,7 +147,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
 typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
     GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_CPU_SHARING,
-    GR_COVER, GR_BACKGROUND, GR_HOME,
+    GR_COVER, GR_BACKGROUND, GR_HOME, GR_ICON,
     GR_PROGRAM, GR_UPDATE, GR_UNINSTALL
 } GameRow;
 enum { GAME_ROWS = 6, GAME_PAGES = 4, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3 };
@@ -174,6 +175,7 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         rows[n++] = GR_COVER;
         rows[n++] = GR_BACKGROUND;
         rows[n++] = GR_HOME;
+        rows[n++] = GR_ICON;
         break;
     case GP_MANAGE:
         rows[n++] = GR_PROGRAM;
@@ -1213,7 +1215,8 @@ static void background_follow(Pc5Ui *ui)
 
 /* ---- a game's cover or background, chosen by hand --------------------------------------------- */
 
-enum { PICK_COVER, PICK_BACKGROUND };
+enum { PICK_COVER, PICK_BACKGROUND, PICK_ICON };
+static const char *const pick_kinds[] = { "cover", "background", "icon" };
 
 /* What the picture at is: -1 the game's own now, 0 to count - 1 a choice found, count the
  * last: the card made from the game's icon and name, or (a background) none: a backdrop made
@@ -1240,7 +1243,7 @@ static void picture_close(Pc5Ui *ui)
 /* Back to the game's menu, on the picker's row. */
 static void picture_leave(Pc5Ui *ui)
 {
-    GameRow row = ui->pick_kind == PICK_COVER ? GR_COVER : GR_BACKGROUND;
+    GameRow row = ui->pick_kind == PICK_COVER ? GR_COVER : ui->pick_kind == PICK_ICON ? GR_ICON : GR_BACKGROUND;
     picture_close(ui);
     game_menu_at(ui, row);
     go(ui, S_GAME_MENU);
@@ -1249,6 +1252,9 @@ static void picture_leave(Pc5Ui *ui)
 /* Where the game keeps its picture of the kind. */
 static int pick_path(Pc5Ui *ui, const Pc5Game *game, char *out, size_t size)
 {
+    if (ui->pick_kind == PICK_ICON)
+        return game->prefix[0] && strcmp(game->prefix, "default")
+                   ? pc5_format(out, size, "%s/prefixes/%s/pc5/icon.bin", ui->root, game->prefix) : -1;
     return ui->pick_kind == PICK_COVER ? cover_path(ui, game, out, size)
                                        : pc5_background_path(ui->root, game->prefix, out, size);
 }
@@ -1268,6 +1274,11 @@ static void pick_search(Pc5Ui *ui, const Pc5Game *game)
         hint_for_game(ui, game, &hint);
         hint.picture_only = 0;
     }
+    /* Square pictures for its tile: SteamGridDB's, the player's own cover being a cover. */
+    if (ui->pick_kind == PICK_ICON) {
+        hint.icons = 1;
+        hint.picture[0] = 0;
+    }
     pc5_cover_search_start(ui->pick, &hint);
     go(ui, S_PICTURE_SEARCH);
 }
@@ -1279,7 +1290,8 @@ static void picture_open(Pc5Ui *ui, const Pc5Game *game, int kind)
     if (!game->pc5 || !game->prefix[0] || !strcmp(game->prefix, "default")) {
         message(ui, 0, "PC5 didn't install this game",
                 kind == PICK_COVER ? "Its cover can only be changed as in Covers on the wiki: a picture of your own."
-                                   : "Its background can only be changed as in Covers on the wiki: a picture of your own.",
+                : kind == PICK_ICON ? "Only a game PC5 installed has a tile picture."
+                                    : "Its background can only be changed as in Covers on the wiki: a picture of your own.",
                 S_GAME_MENU);
         return;
     }
@@ -1291,7 +1303,7 @@ static void picture_open(Pc5Ui *ui, const Pc5Game *game, int kind)
     ui->pick_kind = kind;
     ui->pick_query[0] = 0;
     ui->pick_now = !pick_path(ui, game, path, sizeof(path)) && pc5_is_file(path);
-    say(ui, "PC5 picture kind=%s game=%s now=%d", kind == PICK_COVER ? "cover" : "background", game->id, ui->pick_now);
+    say(ui, "PC5 picture kind=%s game=%s now=%d", pick_kinds[kind], game->id, ui->pick_now);
     pick_search(ui, game);
 }
 
@@ -1300,10 +1312,12 @@ static void picture_open(Pc5Ui *ui, const Pc5Game *game, int kind)
 static void pick_searched(Pc5Ui *ui)
 {
     Pc5CoverSearch *pick = ui->pick;
-    if (ui->pick_kind == PICK_BACKGROUND) {
+    if (ui->pick_kind == PICK_BACKGROUND || ui->pick_kind == PICK_ICON) {
         int n = 0;
         for (int i = 0; i < pick->count; i++)
-            if (pick->choices[i].background[0] || pick->choices[i].steam_appid) pick->choices[n++] = pick->choices[i];
+            if (ui->pick_kind == PICK_ICON ? pick->choices[i].icon[0] != 0
+                                           : pick->choices[i].background[0] || pick->choices[i].steam_appid)
+                pick->choices[n++] = pick->choices[i];
         pick->count = n;
     }
     ui->pick_count = ui->pick_now + pick->count + 1;
@@ -1331,6 +1345,18 @@ static void none_preview(Pc5Ui *ui, const Pc5Game *game, Pc5Image *out)
     pc5_free(screen);
 }
 
+/* The tile picture made from the game's cover (pc5_home_icon), as its tile has it without one. */
+static void icon_from_cover(Pc5Ui *ui, const Pc5Game *game, Pc5Image *out)
+{
+    char path[PC5_PATH];
+    Pc5Image cover = { 0 };
+    uint32_t tint = C_DEFAULT_TINT;
+
+    if (cover_path(ui, game, path, sizeof(path)) || pc5_cover_load(path, &cover, &tint)) cover = (Pc5Image){ 0 };
+    if (pc5_home_icon(cover.px ? &cover : NULL, tint & 0xffffffu, out)) *out = (Pc5Image){ 0 };
+    pc5_image_free(&cover);
+}
+
 static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
 {
     char path[PC5_PATH];
@@ -1347,9 +1373,9 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
             ui->pick_now = 0;
         } else if (entry < pick->count) {
             const Pc5CoverChoice *choice = &pick->choices[entry];
-            failed = ui->pick_kind == PICK_COVER
-                         ? pc5_cover_fetch(choice, &ui->platform.http, &ui->pick_image)
-                         : pc5_background_fetch(choice->background, choice->steam_appid, &ui->platform.http, &ui->pick_image);
+            failed = ui->pick_kind == PICK_COVER ? pc5_cover_fetch(choice, &ui->platform.http, &ui->pick_image)
+                     : ui->pick_kind == PICK_ICON ? pc5_icon_fetch(choice, &ui->platform.http, &ui->pick_image)
+                     : pc5_background_fetch(choice->background, choice->steam_appid, &ui->platform.http, &ui->pick_image);
             if (!failed) {
                 if (ui->pick_kind == PICK_COVER) ui->pick_tint = pc5_image_tint(&ui->pick_image);
                 break;
@@ -1359,6 +1385,7 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
             pick->count--;
         } else {
             if (ui->pick_kind == PICK_COVER) card_for(ui, game, &ui->pick_image, &ui->pick_tint);
+            else if (ui->pick_kind == PICK_ICON) icon_from_cover(ui, game, &ui->pick_image);
             else none_preview(ui, game, &ui->pick_image);
             break;
         }
@@ -1373,6 +1400,21 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
         if (!image_copy(&copy, &ui->pick_image)) pc5_picture_make(&ui->pick_picture, &copy);
     }
     ui->dirty = 1;
+}
+
+/* The game's tile, an app of its own, gets the pictures just changed: its icon0.png and
+ * background, in its folder and in the console's copies. A forwarder tile is left as it was. */
+static void tile_art_refresh(Pc5Ui *ui, const Pc5Game *game)
+{
+    char dir[PC5_PATH], tile_game[PC5_ID], runtime[PC5_PATH], error[PC5_ERROR];
+
+    if (!ui->config.tiles_root || !ui->tile[0] || pc5_join(dir, sizeof(dir), ui->config.tiles_root, ui->tile) ||
+        pc5_tile_read_all(dir, tile_game, runtime, sizeof(runtime), error, sizeof(error)) != 1 ||
+        strcmp(tile_game, game->id) || !runtime[0])
+        return;
+    int status = pc5_tile_art(dir, ui->tile, ui->root, game->prefix, runtime, ui->config.user, error, sizeof(error));
+    say(ui, "PC5 tile art tile=%s game=%s status=%d%s%s", ui->tile, game->id, status, status ? " why=" : "",
+        status ? error : "");
 }
 
 /* The picture shown becomes the game's, in place of the one it had: a cover, a background, or
@@ -1400,6 +1442,10 @@ static void pick_use(Pc5Ui *ui, const Pc5Game *game)
             ui->bg_id[0] = 0;   /* a backdrop made from the cover is made again */
             ui->bg_key[0] = 0;
         }
+    } else if (!failed && ui->pick_kind == PICK_ICON) {
+        /* The last: made from its cover, which the tile is when it has no picture of its own. */
+        if (entry >= ui->pick->count) failed = pc5_exists(path) && unlink(path);
+        else failed = !ui->pick_image.px || pc5_cover_save(path, &ui->pick_image, 0);
     } else if (!failed) {
         /* The worker, waiting while the picker is open, is stopped first: it doesn't save over
          * this. It looks at the other games again when the library next shows. */
@@ -1416,16 +1462,18 @@ static void pick_use(Pc5Ui *ui, const Pc5Game *game)
         if (!pc5_format(note, sizeof(note), "%s/background-tries.txt", dir)) unlink(note);
         ui->bg_id[0] = 0;   /* looked at again: the file changed */
     }
-    say(ui, "PC5 picture saved kind=%s game=%s entry=%d of=%d failed=%d", ui->pick_kind == PICK_COVER ? "cover" : "background",
-        game->id, entry, ui->pick->count, failed);
+    say(ui, "PC5 picture saved kind=%s game=%s entry=%d of=%d failed=%d", pick_kinds[ui->pick_kind], game->id, entry,
+        ui->pick->count, failed);
     if (failed) {
-        message(ui, 0, ui->pick_kind == PICK_COVER ? "The cover wasn't changed" : "The background wasn't changed",
-                entry < ui->pick->count || ui->pick_kind == PICK_BACKGROUND || ui->pick_image.px
+        message(ui, 0, ui->pick_kind == PICK_COVER ? "The cover wasn't changed"
+                       : ui->pick_kind == PICK_ICON ? "The tile picture wasn't changed" : "The background wasn't changed",
+                entry < ui->pick->count || ui->pick_kind != PICK_COVER || ui->pick_image.px
                     ? "PC5 can't write to the game's folder in /data/prospero-win/prefixes."
                     : "PC5 couldn't make the card from the game's icon and name.",
                 S_PICTURE);
         return;
     }
+    tile_art_refresh(ui, game);
     picture_leave(ui);
 }
 
@@ -2089,7 +2137,7 @@ static void game_menu_open(Pc5Ui *ui, const char *id)
 /* The game's home screen tile: made, or taken away when it has one. */
 static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
 {
-    char error[PC5_ERROR] = "", body[600];
+    char error[PC5_ERROR] = "", body[1600];
 
     if (!ui->config.tiles_root || !ui->config.tile_template) {
         message(ui, 0, "Home screen tiles aren't available", "This copy of PC5 has no tile program.", S_GAME_MENU);
@@ -2107,6 +2155,33 @@ static void home_toggle(Pc5Ui *ui, const Pc5Game *game)
         message(ui, 1, "Taken off the home screen",
                 "The tile's folder is deleted. If the tile is still on the home screen, delete it there.", S_GAME_MENU);
         return;
+    }
+    /* An app of its own (pc5_tile.h) that runs the game from PC5's installed folder, when
+     * PC5 finds that folder; otherwise a forwarder that starts PC5 with the game. */
+    {
+        Pc5UpgradeConfig find = { ui->platform.http, ui->app, ui->root, ui->config.drives, ui->config.user,
+                                  ui->platform.log, ui->platform.context };
+        char folder[PC5_PATH] = "", other[PC5_PATH] = "";
+        int found = ui->app[0] ? pc5_upgrade_find(&find, folder, sizeof(folder), other, sizeof(other)) : -1;
+        if (!found) {
+            Pc5TileMake make = { ui->config.tiles_root, folder, ui->root, game->id, game->prefix, game->title,
+                                 ui->config.user };
+            int made = pc5_tile_make(&make, ui->tile, error, sizeof(error));
+            say(ui, "PC5 home tile app id=%s runtime=%s made=%d tile=%s%s%s", game->id, folder, made, ui->tile,
+                error[0] ? " why=" : "", error);
+            if (made != PC5_TILE_MADE) {
+                message(ui, 0, "The tile wasn't made", error, S_GAME_MENU);
+                return;
+            }
+            snprintf(body, sizeof(body),
+                     "Its tile, %s, appears on the home screen once you close PC5 and ShadowMountPlus finds it in %s. "
+                     "It is the game's own app: it starts the game straight away, and leaving the game goes back to "
+                     "the home screen. It runs from PC5's folder, %s: keep PC5 there.", ui->tile,
+                     ui->config.tiles_root, folder);
+            message(ui, 1, "Added to the home screen", body, S_GAME_MENU);
+            return;
+        }
+        say(ui, "PC5 home tile forwarder id=%s: PC5's folder %s", game->id, found == -2 ? "is there twice" : "not found");
     }
     if (pc5_home_add(ui->config.tiles_root, ui->config.tile_template, ui->root, game->id, game->prefix, game->title,
                      ui->tile, error, sizeof(error))) {
@@ -2295,6 +2370,18 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         pc5_remove_end(&ui->remove);
         /* The API keys, its file made for the player when there is none. */
         pc5_api_key(ui->root, PC5_STEAMGRIDDB_KEY, ui->griddb_key, sizeof(ui->griddb_key));
+        /* Tiles that run from PC5's folder get this PC5's program, should it have changed
+         * (an update) or moved: a tile's program and its runtime must match. */
+        if (ui->config.tiles_root && ui->app[0]) {
+            Pc5UpgradeConfig find = { ui->platform.http, ui->app, ui->root, ui->config.drives, ui->config.user,
+                                      ui->platform.log, ui->platform.context };
+            char folder[PC5_PATH] = "", other[PC5_PATH] = "";
+            if (!pc5_upgrade_find(&find, folder, sizeof(folder), other, sizeof(other))) {
+                int refreshed = pc5_tile_refresh(ui->config.tiles_root, folder, ui->root, ui->config.user,
+                                                 ui->platform.log, ui->platform.context);
+                if (refreshed) say(ui, "PC5 tiles refreshed=%d runtime=%s", refreshed, folder);
+            }
+        }
         {
             char id[PC5_ID];
             int offset = 0;
@@ -2777,8 +2864,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             } else if (row == GR_BUTTONS) {
                 ui->pad_row = ui->pad_top = 0;
                 go(ui, S_BUTTONS);
-            } else if (row == GR_COVER || row == GR_BACKGROUND) {
-                picture_open(ui, game, row == GR_COVER ? PICK_COVER : PICK_BACKGROUND);
+            } else if (row == GR_COVER || row == GR_BACKGROUND || row == GR_ICON) {
+                picture_open(ui, game, row == GR_COVER ? PICK_COVER : row == GR_ICON ? PICK_ICON : PICK_BACKGROUND);
             } else if (row == GR_PROGRAM) {
                 if (!game->pc5) message(ui, 0, "PC5 didn't install this game",
                                         "Its program is set in its prospero-win profile.", S_GAME_MENU);
@@ -2821,7 +2908,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         } else if ((k & PC5_KEY_TRIANGLE) && ui->platform.keyboard_open) {
             int rc = ui->platform.keyboard_open(ui->platform.context,
                                                 ui->pick_kind == PICK_COVER ? "Search for covers by name"
-                                                                            : "Search for backgrounds by name",
+                                                : ui->pick_kind == PICK_ICON ? "Search for tile pictures by name"
+                                                                             : "Search for backgrounds by name",
                                                 ui->pick_query[0] ? ui->pick_query : game->title);
             say(ui, "PC5 keyboard open rc=%d", rc);
             if (rc >= 0) go(ui, S_PICTURE_TYPING);
@@ -3756,6 +3844,11 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         *text = "Another of those found, search by another name, or none";
         *value = more;
         break;
+    case GR_ICON:
+        *label = "Tile picture";
+        *text = "Its home screen tile's picture: a square one found online, or one made from its cover";
+        *value = more;
+        break;
     case GR_HOME:
         if (ui->tile[0]) snprintf(about, about_size, "Its tile, %.40s, starts the game", ui->tile);
         *label = "Home screen tile";
@@ -4518,9 +4611,9 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
     int index = pc5_library_find(&ui->library, ui->launch_id);
     if (index < 0 || !ui->pick) return;
     const Pc5Game *game = &ui->library.games[index];
-    int cover = ui->pick_kind == PICK_COVER, entry = pick_entry(ui, ui->pick_at);
+    int cover = ui->pick_kind == PICK_COVER, icon = ui->pick_kind == PICK_ICON, entry = pick_entry(ui, ui->pick_at);
     float w = 1600, h = 880, x = (W - w) / 2, y = (H - h) / 2;
-    float pw = cover ? 420 : 960, ph = cover ? 630 : 540, px = x + 72, py = y + 90;
+    float pw = cover ? 420 : icon ? 540 : 960, ph = cover ? 630 : 540, px = x + 72, py = y + 90;
     char line[300];
 
     dim(c, 160);
@@ -4545,15 +4638,16 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
 
     float tx = px + pw + 64, tw = x + w - 72 - tx, ty = y + 150;
     ty += 64 * (float)pc5_text_wrap(c, &ui->fonts, PC5_FACE_TITLE, (int)tx, (int)ty, (int)tw, 2, 64, C_TEXT, game->title, 0);
-    pc5_text(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ty, C_DIM, cover ? "Its cover" : "Its background", (int)tw, 0);
+    pc5_text(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ty, C_DIM, cover ? "Its cover" : icon ? "Its tile picture" : "Its background", (int)tw, 0);
     ty += 90;
     const char *what = "", *detail = "";
     if (ui->pick_fetching) what = "";
-    else if (entry < 0) what = cover ? "The cover it has now" : "The background it has now";
+    else if (entry < 0) what = cover ? "The cover it has now" : icon ? "The tile picture it has now" : "The background it has now";
     else if (entry < ui->pick->count) {
-        what = cover ? "A cover found online" : "A background found online";
+        what = cover ? "A cover found online" : icon ? "A square picture found online" : "A background found online";
         detail = ui->pick->choices[entry].title;
-    } else what = cover ? "Made from the game's icon and name" : "None: a backdrop made from its cover";
+    } else what = cover ? "Made from the game's icon and name"
+                  : icon ? "Made from its cover" : "None: a backdrop made from its cover";
     ty += 50 * (float)pc5_text_wrap(c, &ui->fonts, PC5_FACE_LABEL, (int)tx, (int)ty, (int)tw, 2, 50, C_TEXT, what, 0);
     if (detail[0]) ty += 42 * (float)pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ty, (int)tw, 2, 42, C_DIM, detail, 0);
     ty += 40;
@@ -4561,6 +4655,8 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
         char none[200];
         if (ui->pick_query[0])
             snprintf(none, sizeof(none), "Nothing found for \xe2\x80\x9c%s\xe2\x80\x9d.", ui->pick_query);
+        else if (icon && !ui->griddb_key[0])
+            snprintf(none, sizeof(none), "Square pictures come from SteamGridDB: put your key in api_keys.txt (Covers on the wiki).");
         else
             snprintf(none, sizeof(none), "Nothing found for its name.");
         ty += 40 * (float)pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ty, (int)tw, 2, 40, C_WARN, none, 0);
@@ -4571,7 +4667,7 @@ static void picture_screen(Pc5Ui *ui, Pc5Canvas *c)
     Hint list[4];
     int n = 0;
     list[n++] = (Hint){ accept_glyph(ui), "Use this" };
-    if (ui->pick_count > 1) list[n++] = (Hint){ G_L1R1, cover ? "Other covers" : "Other backgrounds" };
+    if (ui->pick_count > 1) list[n++] = (Hint){ G_L1R1, cover ? "Other covers" : icon ? "Other pictures" : "Other backgrounds" };
     if (ui->platform.keyboard_open) list[n++] = (Hint){ G_TRIANGLE, "Search by name" };
     list[n++] = (Hint){ back_glyph(ui), "Back" };
     hints(ui, c, (int)px, (int)(y + h - 48), list, n);
@@ -4701,7 +4797,8 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         const char *where = "on Steam, GOG and others";
         if (ui->pick_query[0]) snprintf(line, sizeof(line), "\xe2\x80\x9c%s\xe2\x80\x9d, %s", ui->pick_query, where);
         else snprintf(line, sizeof(line), "%c%s", where[0] - 32, where + 1);
-        busy_dialog(ui, c, ui->pick_kind == PICK_COVER ? "Looking for covers" : "Looking for backgrounds", line, 1);
+        busy_dialog(ui, c, ui->pick_kind == PICK_COVER ? "Looking for covers"
+                           : ui->pick_kind == PICK_ICON ? "Looking for tile pictures" : "Looking for backgrounds", line, 1);
         break;
     }
     case S_PICTURE:
