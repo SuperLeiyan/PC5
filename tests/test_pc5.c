@@ -7608,6 +7608,28 @@ static void test_msi(void)
           "listed; Visual C++ and a package outside the redistributables' folders left out");
     CHECK(!pc5_redist_pending(game_root, "physx-game", game, NULL, 0) &&
           pc5_redist_install(game_root, "physx-game", game, NULL, NULL) == 0, "once: not again");
+
+    /* PhysX's runtime copied into a game's Windows by hand (as from a PC): registered as its
+     * setup program would, once; a prefix without it is left as it is. */
+    path(file, sizeof(file), "%s/prefixes/physx-hand/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX/Engine/v2.8.1/PhysXCore.dll",
+         game_root);
+    write_text(file, "MZ");
+    path(file, sizeof(file), "%s/prefixes/physx-hand/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX/Common/cudart32_65.dll",
+         game_root);
+    write_text(file, "MZ");
+    path(file, sizeof(file), "%s/prefixes/physx-hand/system.reg", game_root);
+    write_text(file, "WINE REGISTRY Version 2\n#arch=win64\n");
+    CHECK(pc5_physx_register(game_root, "physx-hand", NULL, NULL) == 3, "registered, and Common in PATH");
+    CHECK(file_holds_text(file, "[Software\\\\Wow6432Node\\\\Ageia Technologies]\n\"PhysXCore Path\"=\"C:\\\\Program Files (x86)"
+                                "\\\\NVIDIA Corporation\\\\PhysX\\\\Engine\"\n") &&
+          file_holds_text(file, "[Software\\\\Ageia Technologies]\n"), "both registry views");
+    path(file, sizeof(file), "%s/prefixes/physx-hand/pc5/path.txt", game_root);
+    CHECK(file_holds_text(file, "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common\n"), "Common in PATH");
+    CHECK(pc5_physx_register(game_root, "physx-hand", NULL, NULL) == 0, "once");
+    path(file, sizeof(file), "%s/prefixes/physx-none/system.reg", game_root);
+    write_text(file, "WINE REGISTRY Version 2\n");
+    CHECK(pc5_physx_register(game_root, "physx-none", NULL, NULL) == 0 && !file_holds_text(file, "Ageia"),
+          "no PhysX: nothing");
 }
 
 static void test_steam(void)

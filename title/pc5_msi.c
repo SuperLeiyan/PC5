@@ -1542,3 +1542,59 @@ int pc5_redist_install(const char *root, const char *prefix, const char *game_di
     pc5_free(found);
     return failed ? -1 : installed;
 }
+
+/* ---- the PhysX runtime's registration ------------------------------------------------------- */
+
+static int file_has(const char *path, const char *text)
+{
+    Pc5Buf data = { 0 };
+    int has = !pc5_read_file(path, &data, 64u << 20) && !pc5_buf_terminate(&data) &&
+              contains_ci((const char *)data.data, text);
+    pc5_buf_free(&data);
+    return has;
+}
+
+int pc5_physx_register(const char *root, const char *prefix, void (*log)(void *context, const char *line),
+                       void *context)
+{
+    static const char engine_win[] = "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Engine";
+    static const char common_win[] = "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common";
+    char prefix_dir[PC5_PATH], engine[PC5_PATH], common[PC5_PATH], path[PC5_PATH];
+    int changed = 0;
+
+    if (pc5_format(prefix_dir, sizeof(prefix_dir), "%s/prefixes/%s", root, prefix) ||
+        pc5_format(engine, sizeof(engine), "%s/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX/Engine", prefix_dir) ||
+        pc5_format(common, sizeof(common), "%s/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX/Common", prefix_dir) ||
+        !pc5_is_dir(engine))
+        return 0;
+    /* PhysXLoader finds the engine by HKLM\Software\Ageia Technologies' "PhysXCore Path" (a
+     * 32-bit game: Wow6432Node's), then its version's folder: a setup program's custom action
+     * writes it, which PC5 doesn't run, and a runtime copied in by hand has none. */
+    if (pc5_format(path, sizeof(path), "%s/system.reg", prefix_dir) == 0 && !file_has(path, "\"PhysXCore Path\"")) {
+        Pc5Buf text = { 0 };
+        int failed = 0;
+        for (int view = 0; view < 2 && !failed; view++)
+            failed = pc5_buf_puts(&text, view ? "\n[Software\\\\Wow6432Node\\\\Ageia Technologies]\n"
+                                              : "\n[Software\\\\Ageia Technologies]\n") ||
+                     pc5_buf_puts(&text, "\"PhysXCore Path\"=\"") || reg_quote(&text, engine_win) ||
+                     pc5_buf_puts(&text, "\"\n");
+        if (!failed && !append_text(path, &text)) changed |= 1;
+        pc5_buf_free(&text);
+    }
+    /* The engine's PhysXCore.dll imports the CUDA runtime from PhysX\Common, which the setup
+     * program puts in PATH. */
+    if (pc5_is_dir(common) && pc5_format(path, sizeof(path), "%s/pc5/path.txt", prefix_dir) == 0 &&
+        !file_has(path, common_win)) {
+        Pc5Buf line = { 0 };
+        char folder[PC5_PATH];
+        if (!pc5_format(folder, sizeof(folder), "%s/pc5", prefix_dir) && !pc5_mkdirs(folder) &&
+            !pc5_buf_printf(&line, "%s\n", common_win) && !append_text(path, &line))
+            changed |= 2;
+        pc5_buf_free(&line);
+    }
+    if (changed)
+        say_line(log, context, "PC5 physx registered%s%s", changed & 1 ? " PhysXCore Path" : "",
+                 changed & 2 ? " Common in PATH" : "");
+    return changed;
+}
+

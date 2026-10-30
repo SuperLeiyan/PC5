@@ -40,6 +40,13 @@ int pc5_redist_pending(const char *root, const char *prefix, const char *game_di
 int pc5_redist_install(const char *root, const char *prefix, const char *game_dir,
                        void (*log)(void *context, const char *line), void *context);
 
+/* PhysX's runtime in the game's Windows (Program Files (x86)\NVIDIA Corporation\PhysX\Engine,
+ * from a package or copied in by hand) registered as its setup program would: "PhysXCore Path"
+ * in both registry views when system.reg has none, and PhysX\Common in PATH. What changed (1 the
+ * registry, 2 PATH), 0 for nothing. */
+int pc5_physx_register(const char *root, const char *prefix, void (*log)(void *context, const char *line),
+                       void *context);
+
 /* For the tests: a Windows Installer condition, with the properties of 64-bit Windows 7 and
  * those given ("NAME=value" lines): 1 true, 0 false; text that can't be read is true. */
 int pc5_msi_condition(const char *condition, const char *properties);

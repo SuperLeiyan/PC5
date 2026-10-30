@@ -4234,6 +4234,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 say(ui, "PC5 redist %s installed=%d", ui->launch_id, installed);
                 ui->redist_state = 2;
             }
+            if (own) pc5_physx_register(ui->root, ui->launch_id, redist_log, ui);
             /* Steam: a program in Steam's DRM wrapper can't start without it; Steam's library
              * gets the emulator in its place, or back, as the game's menu says. */
             if (own && !pc5_game_program(ui->root, ui->launch_id, program, sizeof(program))) {

@@ -18,7 +18,7 @@ No. PC5 itself only goes online to find covers and to check for a newer version.
 No. Covers come from public sources with no account and no key, and PC5 doesn't run any store's launcher. A game made for Steam plays offline with a [Steam emulator](Playing-games#games-made-for-steam) in place of Steam.
 
 **A game says PhysX is missing. What do I do?**
-Nothing, usually: if the game carries NVIDIA's PhysX System Software (in `_CommonRedist`, `Redist` or `PhysX`), PC5 installs it the first time the game starts. If the game doesn't carry it, put NVIDIA's PhysX System Software installer (`PhysX_*_SystemSoftware.exe` or `.msi`) in a `Redist` folder in the game's folder (with the [File manager](File-manager)), and start the game again.
+Nothing, usually: if the game carries NVIDIA's PhysX System Software (in `_CommonRedist`, `Redist` or `PhysX`), PC5 installs it the first time the game starts. If the game doesn't carry it, put NVIDIA's PhysX System Software installer (`PhysX_*_SystemSoftware.exe` or `.msi`) in a `Redist` folder in the game's folder (with the [File manager](File-manager)), and start the game again. If that doesn't work either, copy the PhysX folders from a Windows PC that has PhysX installed: `C:\Program Files (x86)\NVIDIA Corporation\PhysX` (its `Engine` and `Common` folders) to the same place in the game's Windows, `/data/prospero-win/prefixes/<game>/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX`. PC5 registers them as PhysX's installer would the next time the game starts.
 
 **How many games can PC5 hold?**
 Up to 128, as long as the console has the space.
