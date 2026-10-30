@@ -7,8 +7,8 @@ Subject: [PATCH 65/65] PC5: a name in a folder opened by its handle is looked up
 ---
  PUBLICATION_ALLOWLIST.txt                     |  1 +
  docs/WINE_PS5_BUILD.md                        |  1 +
- ...e-up-in-a-root-directory-by-its-name.patch | 57 +++++++++++++++++++
- 3 files changed, 59 insertions(+)
+ ...e-up-in-a-root-directory-by-its-name.patch | 59 +++++++++++++++++++
+ 3 files changed, 61 insertions(+)
  create mode 100644 wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
 
 diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
@@ -37,10 +37,10 @@ index 8698717..03cde17 100644
  ## Allocator
 diff --git a/wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch b/wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
 new file mode 100644
-index 0000000..a7dca02
+index 0000000..58018d9
 --- /dev/null
 +++ b/wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,59 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: prospero-win <prospero-win@invalid>
 +Date: Fri, 30 Oct 2026 17:00:00 +0000
@@ -61,7 +61,7 @@ index 0000000..a7dca02
 +diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
 +--- a/dlls/ntdll/unix/file.c
 ++++ b/dlls/ntdll/unix/file.c
-+@@ -4072,6 +4072,33 @@ static NTSTATUS nt_to_unix_file_name( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
++@@ -4072,6 +4072,35 @@ static NTSTATUS nt_to_unix_file_name( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
 +             status = lookup_unix_name( root_fd, attr, nt_name, 0, &unix_name, unix_len,
 +                                        1, disposition, open_reparse, FALSE, 0 );
 +             if (needs_close) close( root_fd );
@@ -70,6 +70,7 @@ index 0000000..a7dca02
 ++             * looked up in it (EBADF), as patch 0936 found for listing it: the name is
 ++             * looked up from the directory's own, the one the server opened it with or
 ++             * its NT name's, as a name without a root directory is. */
+++#ifdef __PROSPERO__
 ++            if (status == STATUS_INVALID_HANDLE)
 ++            {
 ++                static LONG logged;
@@ -92,6 +93,7 @@ index 0000000..a7dca02
 ++                         debugstr_us(attr->ObjectName), debugstr_a(root_name), (int)status );
 ++                free( root_name );
 ++            }
+++#endif
 +         }
 +     }
 +     else if (status == STATUS_OBJECT_TYPE_MISMATCH) status = STATUS_BAD_DEVICE_TYPE;
