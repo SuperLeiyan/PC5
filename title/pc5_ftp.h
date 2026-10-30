@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* PC5: an FTP server for PC5's INSTALL folder, so a game can be sent from a PC (FileZilla,
  * Windows Explorer) and installed as PC5 offers. Plain FTP, passive mode only (PASV, EPSV),
- * any user name and password; a client sees only the INSTALL folder, as "/", and nothing
- * outside it. It runs while PC5 is open (Settings › Game maintenance › FTP server). The
+ * with the username and password set (pc5_ftp_login; none set: any); a client sees only the
+ * INSTALL folder, as "/", and nothing outside it. It runs while PC5 is open (Settings ›
+ * Network › FTP server). The
  * sockets come from the platform: the console's (pc5_ftp_ps5.c) or the host's in the tests. */
 #ifndef PC5_FTP_H
 #define PC5_FTP_H
@@ -11,7 +12,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-enum { PC5_FTP_PORT = 2125, PC5_FTP_SESSIONS = 8 };
+enum { PC5_FTP_PORT = 2125, PC5_FTP_SESSIONS = 8, PC5_FTP_LOGIN = 64 };
 
 typedef struct Pc5FtpOps {
     /* A TCP socket listening on every address at port (0: any free one), or -1. */
@@ -45,6 +46,8 @@ int pc5_ftp_start(const char *root, uint16_t port, char *error, size_t size);
 /* Stops it, its clients disconnected (within about a second). */
 void pc5_ftp_stop(void);
 void pc5_ftp_status(Pc5FtpStatus *status);
+/* The username and password a client must give ("" or NULL: any), from the next login on. */
+void pc5_ftp_login(const char *user, const char *password);
 
 /* For the tests: a client's path (absolute, or relative to cwd, "/" the root) as the server
  * sees it, ".." never above the root: 0, or -1 when it is too long. */

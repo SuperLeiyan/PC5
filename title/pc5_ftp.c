@@ -27,6 +27,8 @@ typedef struct Session {
     char cwd[PC5_PATH];             /* as the client sees it: "/", "/Neon Drift" */
     char rename_from[PC5_PATH];     /* RNFR's, until RNTO */
     uint64_t rest;                  /* REST's offset for the next RETR or STOR */
+    char user[PC5_FTP_LOGIN];       /* USER's, until PASS */
+    int logged_in, failures;
     uint8_t *buffer;
 } Session;
 
@@ -38,6 +40,7 @@ static struct {
     int running, stopping, listener;
     char root[PC5_PATH];
     char address[48];
+    char user[PC5_FTP_LOGIN], password[PC5_FTP_LOGIN];   /* "": any */
     int sessions, transfers;
     unsigned uploads;
     uint64_t last_ms;
@@ -390,6 +393,31 @@ static void store(Session *s, const char *arg, int append)
     count(&ftp.transfers, -1);
 }
 
+/* 1 when user and password are the ones set (pc5_ftp_login); "" set: any is right. */
+static int login_right(const char *user, const char *password)
+{
+    pthread_mutex_lock(&ftp.lock);
+    int right = (!ftp.user[0] || !strcmp(user, ftp.user)) && (!ftp.password[0] || !strcmp(password, ftp.password));
+    pthread_mutex_unlock(&ftp.lock);
+    return right;
+}
+
+static int login_needed(void)
+{
+    pthread_mutex_lock(&ftp.lock);
+    int needed = ftp.user[0] || ftp.password[0];
+    pthread_mutex_unlock(&ftp.lock);
+    return needed;
+}
+
+void pc5_ftp_login(const char *user, const char *password)
+{
+    pthread_mutex_lock(&ftp.lock);
+    pc5_copy(ftp.user, sizeof(ftp.user), user ? user : "");
+    pc5_copy(ftp.password, sizeof(ftp.password), password ? password : "");
+    pthread_mutex_unlock(&ftp.lock);
+}
+
 static void session_command(Session *s, char *command, char *arg, int *quit)
 {
     char seen[PC5_PATH], real[PC5_PATH], text[PC5_PATH * 2];
@@ -398,9 +426,26 @@ static void session_command(Session *s, char *command, char *arg, int *quit)
     for (char *c = command; *c; c++)
         if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
 #define IS(name) (!strcmp(command, name))
-    if (IS("USER")) reply(s, "331 Any password will do");
-    else if (IS("PASS")) reply(s, "230 Welcome: this is PC5's INSTALL folder");
-    else if (IS("SYST")) reply(s, "215 UNIX Type: L8");
+    if (IS("USER")) {
+        pc5_copy(s->user, sizeof(s->user), arg);
+        s->logged_in = 0;
+        reply(s, "331 And the password");
+    } else if (IS("PASS")) {
+        if (login_right(s->user, arg)) {
+            s->logged_in = 1;
+            s->failures = 0;
+            reply(s, "230 Welcome: this is PC5's INSTALL folder");
+        } else {
+            s->logged_in = 0;
+            say("PC5 ftp login refused user=%s", s->user);
+            usleep(1000000);   /* slows guessing */
+            reply(s, "530 Wrong username or password (they are in PC5: Settings, Network)");
+            if (++s->failures >= 3) *quit = 1;
+        }
+    } else if (!s->logged_in && !IS("QUIT") && !IS("FEAT") && !IS("SYST") && !IS("OPTS") && !IS("NOOP") &&
+               !IS("AUTH")) {
+        reply(s, "530 Log in first");
+    } else if (IS("SYST")) reply(s, "215 UNIX Type: L8");
     else if (IS("FEAT")) {
         static const char features[] = "211-Features:\r\n UTF8\r\n EPSV\r\n PASV\r\n SIZE\r\n MDTM\r\n REST STREAM\r\n"
                                        "211 End\r\n";
@@ -550,18 +595,14 @@ static void *listen_thread(void *arg)
         }
         s->control = client;
         s->passive = -1;
+        s->logged_in = !login_needed();
         pc5_copy(s->cwd, sizeof(s->cwd), "/");
-        pthread_t thread;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        if (pthread_create(&thread, &attr, session_thread, s)) {
+        if (pc5_thread_start(NULL, session_thread, s, 1)) {
             ftp.ops.close(client);
             pc5_free(s->buffer);
             pc5_free(s);
             count(&ftp.sessions, -1);
         }
-        pthread_attr_destroy(&attr);
     }
     return NULL;
 }
@@ -599,7 +640,7 @@ int pc5_ftp_start(const char *root, uint16_t port, char *error, size_t size)
     ftp.uploads = 0;
     ftp.last_ms = now_ms();
     pthread_mutex_unlock(&ftp.lock);
-    if (pthread_create(&ftp.thread, NULL, listen_thread, NULL)) {
+    if (pc5_thread_start(&ftp.thread, listen_thread, NULL, 0)) {
         ftp.ops.close(ftp.listener);
         ftp.listener = -1;
         return pc5_format(error, size, "PC5 can't start it."), -1;

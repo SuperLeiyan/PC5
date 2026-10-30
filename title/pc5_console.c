@@ -261,7 +261,7 @@ static void sound_play(const char *name, int percent)
     pc5_buf_free(&file);
     sound_volume = percent;
     atomic_store(&sound_stop, 0);
-    sound_started = !pthread_create(&sound_thread, NULL, play_sound, NULL);
+    sound_started = !pc5_thread_start(&sound_thread, play_sound, NULL, 0);
     if (!sound_started) pc5_sound_free(&startup_sound);
 }
 

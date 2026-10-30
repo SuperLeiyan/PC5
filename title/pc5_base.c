@@ -26,6 +26,19 @@ typedef struct Pc5Block {
     size_t mapped;    /* bytes mapped, 0 for the heap */
 } Pc5Block;
 
+int pc5_thread_start(pthread_t *thread, void *(*main)(void *), void *arg, int detached)
+{
+    pthread_attr_t attributes;
+    pthread_t own;
+    int rc = pthread_attr_init(&attributes);
+    if (rc) return rc;
+    pthread_attr_setstacksize(&attributes, PC5_THREAD_STACK);
+    if (detached) pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    rc = pthread_create(thread ? thread : &own, &attributes, main, arg);
+    pthread_attr_destroy(&attributes);
+    return rc;
+}
+
 void *pc5_alloc(size_t size)
 {
     Pc5Block *block;

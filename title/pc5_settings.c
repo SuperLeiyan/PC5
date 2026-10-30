@@ -114,6 +114,19 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
             if (sound[0] && !strchr(sound, '/')) pc5_copy(settings->startup_sound, sizeof(settings->startup_sound), sound);
             continue;
         }
+        /* The username and password: the rest of the line, as typed. */
+        if (!strncmp(line, "remote_user", 11) || !strncmp(line, "remote_password", 15)) {
+            const char *v = strchr(line, '=');
+            int user = line[7] == 'u';
+            char *to = user ? settings->remote_user : settings->remote_password;
+            size_t size = user ? sizeof(settings->remote_user) : sizeof(settings->remote_password);
+            if (!v) continue;
+            for (v++; *v == ' ' || *v == '\t'; v++) {
+            }
+            pc5_copy(to, size, v);
+            for (size_t n = strlen(to); n && (to[n - 1] == '\r' || to[n - 1] == ' ' || to[n - 1] == '\t'); n--) to[n - 1] = 0;
+            continue;
+        }
         if (sscanf(line, " %31[a-z_] = %31[a-z0-9-]", name, value) != 2) continue;
         if (!strcmp(name, "fps")) settings->fps = on_off(value, settings->fps);
         else if (!strcmp(name, "frame_time")) settings->frame_time = on_off(value, settings->frame_time);
@@ -137,6 +150,7 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
         else if (!strcmp(name, "check_updates")) settings->check_updates = on_off(value, settings->check_updates);
         else if (!strcmp(name, "keep_logs")) settings->keep_logs = on_off(value, settings->keep_logs);
         else if (!strcmp(name, "ftp_server")) settings->ftp_server = on_off(value, settings->ftp_server);
+        else if (!strcmp(name, "web_page")) settings->web_page = on_off(value, settings->web_page);
         else if (!strcmp(name, "startup_volume")) settings->startup_volume = volume(value, settings->startup_volume);
         else if (!strncmp(name, "pictures_", 9)) {
             for (int i = 0; i < PC5_PICTURE_SOURCES; i++) {
@@ -152,7 +166,7 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
 
 int pc5_settings_save(const char *root, const Pc5Settings *settings)
 {
-    char path[PC5_PATH], text[1400];
+    char path[PC5_PATH], text[1800];
     int length;
 
     if (pc5_format(path, sizeof(path), "%s/pc5", root) || pc5_mkdirs(path) ||
@@ -163,7 +177,7 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
                       "fps = %s\nframe_time = %s\ncpu_usage = %s\ncpu_temperature = %s\nsoc_temperature = %s\n"
                       "memory = %s\nfps_corner = %s\noverlay_size = %s\nvibration = %d\nlight_bar = %s\ntriggers = %s\n"
                       "trigger_rumble = %d\ntrigger_resistance = %d\ncheck_updates = %s\nkeep_logs = %s\nstartup_sound = %s\n"
-                      "startup_volume = %d\nftp_server = %s\n",
+                      "startup_volume = %d\nftp_server = %s\nweb_page = %s\nremote_user = %s\nremote_password = %s\n",
                       settings->fps ? "on" : "off", settings->frame_time ? "on" : "off",
                       settings->cpu_usage ? "on" : "off", settings->cpu_temperature ? "on" : "off",
                       settings->soc_temperature ? "on" : "off", settings->memory ? "on" : "off",
@@ -172,7 +186,8 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
                       light_keys[settings->light_bar % PC5_LIGHTS], trigger_keys[settings->triggers % PC5_TRIGGERS_COUNT],
                       settings->trigger_rumble, settings->trigger_resistance, settings->check_updates ? "on" : "off",
                       settings->keep_logs ? "on" : "off", settings->startup_sound, settings->startup_volume,
-                      settings->ftp_server ? "on" : "off");
+                      settings->ftp_server ? "on" : "off", settings->web_page ? "on" : "off", settings->remote_user,
+                      settings->remote_password);
     for (int i = 0; i < PC5_PICTURE_SOURCES && length > 0 && (size_t)length < sizeof(text); i++)
         length += snprintf(text + length, sizeof(text) - (size_t)length, "pictures_%s = %s\n", pc5_picture_source_key(i),
                            settings->pictures_off & (1u << i) ? "off" : "on");

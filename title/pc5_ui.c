@@ -50,7 +50,7 @@ typedef enum Screen {
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
     S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE, S_FILES, S_FILES_MENU,
-    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING, S_TILE_ART, S_INSTALL_ASK
+    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING, S_TILE_ART, S_INSTALL_ASK, S_SETTINGS_TYPING
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -83,25 +83,25 @@ typedef struct QueueGame {
 /* The wiki's game compatibility list, which Game maintenance shows as a QR code. */
 #define PC5_COMPATIBILITY "https://github.com/bornaradusin/PC5/wiki/Game-compatibility"
 
-/* Settings: its rows, on six pages. */
+/* Settings: its rows, on seven pages. */
 typedef enum SettingRow {
     SR_INSTALL, SR_UNINSTALL, SR_COMPATIBILITY, SR_MAINTENANCE, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_OVERLAY_SIZE, SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
-    SR_FILES, SR_FTP,
+    SR_FILES, SR_FTP, SR_NETWORK, SR_REMOTE_USER, SR_REMOTE_PASSWORD,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
 enum { PAGE_ROWS = 8, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, PAGE_MAINTENANCE = 5,
-       SETTING_PAGES = 6 };
+       PAGE_NETWORK = 6, SETTING_PAGES = 7 };
 static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources",
-                                                        "Game maintenance" };
+                                                        "Game maintenance", "Network" };
 /* Where each page's row is on the first page (Back goes there); System's rows move with its
  * startup sound (system_row). */
-enum { ROW_MAINTENANCE = 0, ROW_GAMES = 1, ROW_OVERLAY = 2, ROW_FILES = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5 };
+enum { ROW_MAINTENANCE = 0, ROW_GAMES = 1, ROW_OVERLAY = 2, ROW_FILES = 3, ROW_SYSTEM = 4, ROW_NETWORK = 5, ROW_ABOUT = 6 };
 /* Game maintenance's rows. */
-enum { ROW_INSTALL = 0, ROW_UNINSTALL = 1, ROW_COMPATIBILITY = 2, ROW_FTP = 3 };
+enum { ROW_INSTALL = 0, ROW_UNINSTALL = 1, ROW_COMPATIBILITY = 2 };
 
 /* A page's rows: the triggers' strengths only while they are used, the startup sound's
  * volume only while there is one, Update now only while there is a newer PC5 it can install
@@ -139,13 +139,17 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_INSTALL;
         rows[n++] = SR_UNINSTALL;
         rows[n++] = SR_COMPATIBILITY;
+    } else if (page == PAGE_NETWORK) {
         rows[n++] = SR_FTP;
+        rows[n++] = SR_REMOTE_USER;
+        rows[n++] = SR_REMOTE_PASSWORD;
     } else {
         rows[n++] = SR_MAINTENANCE;
         rows[n++] = SR_GAMES;
         rows[n++] = SR_OVERLAY;
         rows[n++] = SR_FILES;
         rows[n++] = SR_SYSTEM;
+        rows[n++] = SR_NETWORK;
         rows[n++] = SR_ABOUT;
     }
     return n;
@@ -379,6 +383,7 @@ struct Pc5Ui {
     int install_waiting, install_looked, install_scanned;
     /* The INSTALL folder's FTP server: why it didn't start, and the uploads already asked about. */
     char ftp_error[PC5_ERROR];
+    int typing_row;                /* S_SETTINGS_TYPING: the row (SR_REMOTE_USER, SR_REMOTE_PASSWORD) */
     unsigned ftp_uploads_seen;
     int install_only;              /* S_SCAN and S_SOURCES: the INSTALL folder's games only */
     const char *scan_roots[16];
@@ -1271,7 +1276,7 @@ static void background_follow(Pc5Ui *ui)
     pc5_copy(job->path, sizeof(job->path), from_file ? path : "");
     job->ok = 0;
     atomic_store(&job->done, 0);
-    if (!pthread_create(&job->thread, NULL, bg_job_main, job)) {
+    if (!pc5_thread_start(&job->thread, bg_job_main, job, 0)) {
         job->running = 1;
     } else {
         bg_job_main(job);   /* no thread: made here */
@@ -1960,7 +1965,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_MAINTENANCE:
         *label = "Game maintenance";
-        pc5_copy(about, about_size, "Installing, uninstalling, the compatibility list, the FTP server");
+        pc5_copy(about, about_size, "Installing, uninstalling and the compatibility list");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
     case SR_GAMES:
@@ -2007,6 +2012,22 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         pc5_copy(value, value_size, set->ftp_server ? "On" : "Off");
         break;
     }
+    case SR_NETWORK:
+        *label = "Network";
+        pc5_copy(about, about_size, "Sending games from a PC: the FTP server, its username and password");
+        pc5_copy(value, value_size, "\xe2\x80\xba");
+        break;
+    case SR_REMOTE_USER:
+        *label = "Username";
+        pc5_copy(about, about_size, set->remote_user[0] ? "The username a PC must give" : "None set: any username will do");
+        pc5_copy(value, value_size, set->remote_user[0] ? set->remote_user : "Any");
+        break;
+    case SR_REMOTE_PASSWORD:
+        *label = "Password";
+        pc5_copy(about, about_size, set->remote_password[0] ? "The password a PC must give"
+                                                            : "Optional: none set, no password is asked for");
+        pc5_copy(value, value_size, set->remote_password[0] ? "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2" : "None");
+        break;
     case SR_FILES:
         *label = "File manager";
         pc5_copy(about, about_size, "Copy, move, rename and delete files on the console and its drives");
@@ -2154,6 +2175,7 @@ static void ftp_apply(Pc5Ui *ui)
         return;
     }
     Pc5FtpStatus status;
+    pc5_ftp_login(ui->settings.remote_user, ui->settings.remote_password);
     pc5_ftp_status(&status);
     if (status.running) return;
     if (pc5_ftp_start(ui->install_dir, PC5_FTP_PORT, ui->ftp_error, sizeof(ui->ftp_error)))
@@ -3307,6 +3329,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             go(ui, S_LIBRARY);
         } else if (k & back) {
             if (ui->page == PAGE_MAINTENANCE) settings_open(ui, 0, ROW_MAINTENANCE);
+            else if (ui->page == PAGE_NETWORK) settings_open(ui, 0, ROW_NETWORK);
             else if (ui->page == PAGE_GAMES) settings_open(ui, 0, ROW_GAMES);
             else if (ui->page == PAGE_OVERLAY) settings_open(ui, 0, ROW_OVERLAY);
             else if (ui->page == PAGE_SYSTEM) settings_open(ui, 0, ROW_SYSTEM);
@@ -3322,6 +3345,19 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 go(ui, S_UNINSTALL_LIST);
                 break;
             case SR_MAINTENANCE: settings_open(ui, PAGE_MAINTENANCE, 0); break;
+            case SR_NETWORK: settings_open(ui, PAGE_NETWORK, 0); break;
+            case SR_REMOTE_USER:
+            case SR_REMOTE_PASSWORD: {
+                int rc = -1, user = row == SR_REMOTE_USER;
+                if (ui->platform.keyboard_open)
+                    rc = ui->platform.keyboard_open(ui->platform.context, user ? "Username (empty: any)" : "Password (empty: none)",
+                                                    user ? ui->settings.remote_user : ui->settings.remote_password);
+                say(ui, "PC5 keyboard open rc=%d", rc);
+                ui->typing_row = row;
+                if (rc >= 0) go(ui, S_SETTINGS_TYPING);
+                else message(ui, 0, "The keyboard didn't open", "The console's on-screen keyboard can't be used just now.", S_SETTINGS);
+                break;
+            }
             case SR_COMPATIBILITY:
                 if (!ui->compatibility_qr.size) pc5_qr_make(PC5_COMPATIBILITY, &ui->compatibility_qr);
                 say(ui, "PC5 compatibility list qr=%d", ui->compatibility_qr.size);
@@ -3338,6 +3374,31 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             default: if (setting_change(ui, row, 1)) ui->dirty = 1; break;
             }
         }
+        break;
+    }
+    case S_SETTINGS_TYPING: {
+        int state = ui->platform.keyboard_state ? ui->platform.keyboard_state(ui->platform.context) : -1;
+        if (state == 1) break;   /* still up */
+        char typed[256] = "";
+        int rc = ui->platform.keyboard_close ? ui->platform.keyboard_close(ui->platform.context, typed, sizeof(typed)) : -1;
+        say(ui, "PC5 keyboard closed rc=%d", rc);
+        if (rc == 1) {
+            int user = ui->typing_row == SR_REMOTE_USER;
+            char *start = typed, *to = user ? ui->settings.remote_user : ui->settings.remote_password;
+            size_t size = user ? sizeof(ui->settings.remote_user) : sizeof(ui->settings.remote_password);
+            /* One line; a username without the spaces around it. */
+            start[strcspn(start, "\r\n")] = 0;
+            if (user) {
+                while (*start == ' ' || *start == '\t') start++;
+                for (size_t n = strlen(start); n && (start[n - 1] == ' ' || start[n - 1] == '\t'); n--) start[n - 1] = 0;
+            }
+            pc5_copy(to, size, start);
+            pc5_ftp_login(ui->settings.remote_user, ui->settings.remote_password);
+            if (pc5_settings_save(ui->root, &ui->settings)) say(ui, "PC5 problem settings: can't write them");
+            say(ui, "PC5 settings remote user=%s password=%s", ui->settings.remote_user[0] ? "set" : "any",
+                ui->settings.remote_password[0] ? "set" : "none");
+        }
+        go(ui, S_SETTINGS);
         break;
     }
     case S_CHECKING:
@@ -4265,7 +4326,7 @@ static void in_bands(Pc5Ui *ui, Pc5Canvas *c, BandFn fn, void *arg)
         bands[i].canvas.clip_x0 = c->w * i / BANDS;
         bands[i].canvas.clip_x1 = c->w * (i + 1) / BANDS;
     }
-    for (int i = 1; i < BANDS; i++) started[i] = !pthread_create(&threads[i], NULL, band_main, &bands[i]);
+    for (int i = 1; i < BANDS; i++) started[i] = !pc5_thread_start(&threads[i], band_main, &bands[i], 0);
     band_main(&bands[0]);
     for (int i = 1; i < BANDS; i++) {
         if (started[i]) pthread_join(threads[i], NULL);
@@ -5768,7 +5829,8 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         break;
     }
     switch (ui->screen) {
-    case S_SETTINGS: settings_screen(ui, c); break;
+    case S_SETTINGS:
+    case S_SETTINGS_TYPING: settings_screen(ui, c); break;
     case S_CHECKING: settings_screen(ui, c); busy_dialog(ui, c, "Checking for a newer PC5", "Asking GitHub", 0); break;
     case S_UPGRADE_ASK: {
         char title[120], body[400], how[200];

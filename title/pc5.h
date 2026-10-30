@@ -6,6 +6,7 @@
  * POSIX, so the same code runs in the host tests and on the console. */
 #ifndef PC5_H
 #define PC5_H
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -28,6 +29,12 @@ enum {
 void *pc5_alloc(size_t size);            /* zeroed; NULL when out of memory */
 void *pc5_realloc(void *block, size_t size);
 void pc5_free(void *block);
+
+/* ---- threads ------------------------------------------------------------------
+ * The console gives a new thread 64 KiB of stack, too little for paths and buffers on it;
+ * PC5's threads get PC5_THREAD_STACK. 0, or the error pthread_create gave. */
+enum { PC5_THREAD_STACK = 256 * 1024 };
+int pc5_thread_start(pthread_t *thread, void *(*main)(void *), void *arg, int detached);
 
 /* ---- byte buffers ----------------------------------------------------------- */
 typedef struct Pc5Buf {

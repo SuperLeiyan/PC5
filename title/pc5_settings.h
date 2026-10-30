@@ -55,6 +55,10 @@ typedef struct Pc5Settings {
     int check_updates;        /* when PC5 opens */
     int keep_logs;            /* every session's log, not only those with a problem */
     int ftp_server;           /* the INSTALL folder's FTP server, while PC5 is open (pc5_ftp.h) */
+    int web_page;             /* PC5's page for a browser, while PC5 is open (pc5_web.h) */
+    /* The username and password the FTP server and the page ask for: "" any (no password). */
+    char remote_user[64];
+    char remote_password[64];
     /* The sound on the controller's speaker when PC5 is opened: a sound's name
      * (pc5_sound.h), or "off". */
     char startup_sound[64];
