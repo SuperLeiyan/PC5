@@ -93,6 +93,19 @@ MBEDTLS_SHA256=a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
 DXVK_URL=https://github.com/mpereiraesaa/dxvk.git
 DXVK_COMMIT=a6f6dcc1eaa67946482ebdded0d1d5dc13293133      # tag v2.6.2-prospero2
 DXVK_NAME=2.6.2-prospero2-pc5.3
+# gbe_fork, a Steamworks emulator (LGPL 3.0), its release build unchanged: PC5 puts its
+# steam_api.dll or steam_api64.dll in place of Valve's in a game that has it
+# (title/pc5_steam.c). The DLLs are pinned by SHA-256 too; its source, at the release's
+# commit, goes in the source bundle.
+GBE_RELEASE=release-2026_09_27
+GBE_URL=https://github.com/Detanup01/gbe_fork/releases/download/$GBE_RELEASE/emu-win-release-vs22.7z
+GBE_SHA256=300186c34f49a9ea75b33ce2af299267cc1dad0225cf45e81a229578d4e11c85
+GBE_DLL64_SHA256=70d9826a402d3a78b0c07e9f7ea7c6832468a1113013f31ea570fccaa5445ea9
+GBE_DLL32_SHA256=cae4372bceda997d6c73cebc1c14eb27d39b74a7999d8f28384bdfd8d746a79c
+GBE_SOURCE_URL=https://github.com/Detanup01/gbe_fork.git
+GBE_COMMIT=7103add7ca6ef3ef8353279219880068f2494fc8       # tag release-2026_09_27
+GBE_LICENSE_URL=https://raw.githubusercontent.com/Detanup01/gbe_fork/$GBE_COMMIT/LICENSE
+GBE_LICENSE_SHA256=e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118
 # The PS5 Forwarder Format: the home screen tiles' program (template/) and psfwd, which
 # title/third_party/psfwd holds unchanged.
 FORWARDER_URL=https://github.com/heydemoura/ps5-forwarder-format.git
@@ -272,6 +285,12 @@ src_mono_source() {
     download "$B/downloads/wine-mono-$MONO_VERSION-src.tar.xz" "$MONO_SOURCE_URL" "$MONO_SOURCE_SHA256"
     download "$B/downloads/wine-mono-$MONO_VERSION-COPYING" "$MONO_COPYING_URL" "$MONO_COPYING_SHA256"
 }
+# gbe_fork's release build and its licence, for the app; its source, for the bundle.
+src_gbe() {
+    download "$B/downloads/gbe_fork-$GBE_RELEASE-emu-win-release-vs22.7z" "$GBE_URL" "$GBE_SHA256"
+    download "$B/downloads/gbe_fork-$GBE_RELEASE-LICENSE" "$GBE_LICENSE_URL" "$GBE_LICENSE_SHA256"
+}
+src_gbe_source() { fetch "$B/gbe_fork" "$GBE_SOURCE_URL" "$GBE_COMMIT"; }
 src_fonts() {
     download "$B/downloads/fonts-liberation_$LIBERATION_VERSION-3_all.deb" "$LIBERATION_URL" "$LIBERATION_SHA256"
     download "$B/downloads/liberation-fonts-$LIBERATION_VERSION-LICENSE" "$LIBERATION_LICENSE_URL" "$LIBERATION_LICENSE_SHA256"
@@ -299,7 +318,7 @@ src_venv() {
 }
 # What bundle archives, besides prospero-win.
 SOURCES="src_wine src_ffmpeg src_framegen src_foundation src_prxfoundation src_vulkan src_lapy src_dxvk
- src_vkd3d src_forwarder src_qrcodegen src_zink src_mbedtls src_freetype"
+ src_vkd3d src_forwarder src_qrcodegen src_zink src_mbedtls src_freetype src_gbe_source"
 
 # The PS5 payload SDK the title's boilerplate pins, and the module tool the Wine PS5 build
 # signs its PRX modules with (from the PRX boilerplate).
@@ -532,7 +551,7 @@ step_package() {
 }
 
 step_app() {
-    src_pw; src_forwarder; src_mono; src_mono_source; src_fonts
+    src_pw; src_forwarder; src_mono; src_mono_source; src_fonts; src_gbe
     need hostwine; need dxvk; need vkd3d
     local app=$release/$TITLE
     [[ -d $B/package/PPSA99995 ]] || { echo "build.sh: package is not built: run tools/build.sh package first" >&2; return 1; }
@@ -600,6 +619,17 @@ EOF_SOURCES
     mkdir -p "$app/LICENSES/liberation-fonts" "$app/LICENSES/droid-sans-fallback"
     cp "$B/downloads/liberation-fonts-$LIBERATION_VERSION-LICENSE" "$app/LICENSES/liberation-fonts/LICENSE"
     cp "$B/downloads/DroidSansFallbackFull-NOTICE" "$app/LICENSES/droid-sans-fallback/NOTICE"
+    # The Steam emulator: gbe_fork's regular (not experimental) steam_api DLLs, as its release
+    # has them, and its licence.
+    stage "the Steam emulator"
+    rm -rf "$B/gbe" && mkdir -p "$B/gbe" "$app/pc5/steam" "$app/LICENSES/gbe_fork"
+    7z x -y -o"$B/gbe" "$B/downloads/gbe_fork-$GBE_RELEASE-emu-win-release-vs22.7z" \
+        release/regular/x64/steam_api64.dll release/regular/x86/steam_api.dll >/dev/null
+    cp "$B/gbe/release/regular/x64/steam_api64.dll" "$B/gbe/release/regular/x86/steam_api.dll" "$app/pc5/steam/"
+    { echo "$GBE_DLL64_SHA256  $app/pc5/steam/steam_api64.dll"; echo "$GBE_DLL32_SHA256  $app/pc5/steam/steam_api.dll"; } |
+        sha256sum --check --status || { echo "build.sh: gbe_fork's DLLs aren't its $GBE_RELEASE release's" >&2; return 1; }
+    cp "$B/downloads/gbe_fork-$GBE_RELEASE-LICENSE" "$app/LICENSES/gbe_fork/LICENSE"
+    rm -rf "$B/gbe"
     # XAudio2 and XACT come from the PS5 Wine build (its FAudio fix) with their debug data in,
     # five times their size: stripped as Wine's own install strips its modules. Wine's
     # builtin mark (the DOS stub's "Wine builtin DLL") stays.
@@ -662,6 +692,8 @@ step_bundle() {
     part ps5-forwarder-format "$B/ps5-forwarder-format" "$FORWARDER_COMMIT" \
         "$FORWARDER_URL (the home screen tiles' program and psfwd)"
     part QR-Code-generator "$B/qrcodegen" "$QRCODEGEN_COMMIT" "$QRCODEGEN_URL (Report on GitHub's QR codes)"
+    part gbe_fork "$B/gbe_fork" "$GBE_COMMIT" \
+        "$GBE_SOURCE_URL (tag $GBE_RELEASE; the app's pc5/steam is its release build, unchanged)"
     mkdir -p "$stage/vkd3d-proton"
     tar -C "$B/vkd3d-proton-source" --exclude=.git -cf - . | tar -x -C "$stage/vkd3d-proton"
     printf '%-28s %s at %s (tag v%s), with its submodules and PC5'"'"'s patches/vkd3d-proton applied\n' \

@@ -19,6 +19,8 @@ void pc5_web_host_init(void);   /* the same */
 #include "pc5_json.h"
 #include "pc5_library.h"
 #include "pc5_logs.h"
+#include "pc5_cab.h"
+#include "pc5_msi.h"
 #include "pc5_qr.h"
 #include "pc5_report.h"
 #include "pc5_pe.h"
@@ -27,6 +29,7 @@ void pc5_web_host_init(void);   /* the same */
 #include "pc5_ui.h"
 #include "pc5_web.h"
 #include "pc5_sound.h"
+#include "pc5_steam.h"
 #include "pc5_tile.h"
 #include "pc5_dds.h"
 #include "pc5_update.h"
@@ -7446,6 +7449,356 @@ static void test_install_folder_screens(const char *fonts)
     pc5_free(canvas.px);
 }
 
+/* ---- redistributables (Windows Installer packages) and the Steam emulator --------------------- */
+
+/* A copy of a test program, from, at to: with a signature naming signer (its certificate table)
+ * and these bytes (the Steam interfaces a library names) after it, and its first section renamed
+ * section; any may be NULL. */
+static void pe_variant(const char *from, const char *to, const char *signer, const char *strings, size_t strings_size,
+                       const char *section)
+{
+    Pc5Buf data = { 0 };
+    if (pc5_read_file(from, &data, 64u << 20)) { fprintf(stderr, "can't read %s\n", from); exit(2); }
+    uint8_t *p = data.data;
+    uint32_t lfanew = (uint32_t)(p[0x3c] | p[0x3d] << 8 | p[0x3e] << 16 | (uint32_t)p[0x3f] << 24);
+    uint32_t opt = lfanew + 24, optional_size = (uint32_t)(p[lfanew + 20] | p[lfanew + 21] << 8);
+    uint32_t dirs = opt + ((p[opt] | p[opt + 1] << 8) == 0x20b ? 112 : 96);
+    if (section) {
+        memset(p + opt + optional_size, 0, 8);
+        memcpy(p + opt + optional_size, section, strlen(section));
+    }
+    if (strings) pc5_buf_put(&data, strings, strings_size);
+    if (signer) {
+        while (data.len % 8) pc5_buf_put(&data, "", 1);
+        /* WIN_CERTIFICATE's header (its length, revision 2, PKCS #7), then a stand-in for the certificate's names. */
+        static const uint8_t header[8] = { 0x10, 0x02, 0, 0, 0, 2, 2, 0 };
+        char names[200];
+        int n = snprintf(names, sizeof(names), " 0 CN=%s Corp., O=%s Corp.", signer, signer);
+        uint32_t at = (uint32_t)data.len, size = 8u + (uint32_t)n;
+        pc5_buf_put(&data, header, sizeof(header));
+        pc5_buf_put(&data, names, (size_t)n);
+        p = data.data;
+        for (int i = 0; i < 4; i++) {
+            p[dirs + 32 + i] = (uint8_t)(at >> (8 * i));
+            p[dirs + 36 + i] = (uint8_t)(size >> (8 * i));
+        }
+    }
+    char dir[PC5_PATH];
+    pc5_copy(dir, sizeof(dir), to);
+    *strrchr(dir, '/') = 0;
+    pc5_mkdirs(dir);
+    if (pc5_write_file(to, data.data, data.len)) { fprintf(stderr, "can't write %s\n", to); exit(2); }
+    pc5_buf_free(&data);
+}
+
+static void test_msi(void)
+{
+    char out[PC5_PATH], command[3 * PC5_PATH], prefix[PC5_PATH], file[PC5_PATH], expected[PC5_PATH], error[PC5_ERROR];
+    Pc5MsiReport report;
+
+    /* Conditions, as 64-bit Windows 7 has them. */
+    CHECK(pc5_msi_condition("VersionNT64", NULL) == 1 && pc5_msi_condition("NOT VersionNT64", NULL) == 0,
+          "VersionNT64 is set");
+    CHECK(pc5_msi_condition("VersionNT >= 501 AND (Msix64 OR Intel64)", NULL) == 1, "and with OR in brackets");
+    CHECK(pc5_msi_condition("VersionNT < 600", NULL) == 0 && pc5_msi_condition("Missing", NULL) == 0,
+          "a comparison, and a property without a value");
+    CHECK(pc5_msi_condition("NAME ~= \"physx\"", "NAME=PhysX\n") == 1 && pc5_msi_condition("NAME = \"physx\"", "NAME=PhysX\n") == 0,
+          "~ compares without case");
+    CHECK(pc5_msi_condition("NAME >< \"hys\" AND NAME << \"Ph\" AND NAME >> \"sX\"", "NAME=PhysX\n") == 1,
+          "contains, starts with, ends with");
+    CHECK(pc5_msi_condition("Installed OR $Comp = 3", NULL) == 0 && pc5_msi_condition("0", NULL) == 0 &&
+          pc5_msi_condition("1 XOR 0", NULL) == 1, "a component's state counts as none; 0 is false; XOR");
+    CHECK(pc5_msi_condition("((VersionNT", NULL) == 1, "text that can't be read: true");
+
+    /* A package as NVIDIA's PhysX installer is made: three cabinets (MSZIP, LZX, one beside it). */
+    path(out, sizeof(out), "%s/msi", work);
+    snprintf(command, sizeof(command), "rm -rf '%s' && python3 -I tests/make-test-msi.py '%s'", out, out);
+    run(command);
+    {
+        /* The LZX folder alone, read through pc5_cab as a package would. */
+        uint8_t mszip_in[] = { 0x4b, 0x4c, 0x4a, 0x06, 0x00 }, made[8];
+        CHECK(pc5_inflate(mszip_in, sizeof(mszip_in), NULL, 0, made, sizeof(made)) == 3 && !memcmp(made, "abc", 3),
+              "deflate: %d", (int)pc5_inflate(mszip_in, sizeof(mszip_in), NULL, 0, made, sizeof(made)));
+    }
+    path(prefix, sizeof(prefix), "%s/prefix", out);
+    path(file, sizeof(file), "%s/drive_c/windows/system32/cudart32.dll", prefix);
+    write_text(file, "Wine's own");
+    path(file, sizeof(file), "%s/physx.msi", out);
+    CHECK(!pc5_msi_install(file, 0, prefix, &report, error, sizeof(error)), "installed: %s", error);
+    CHECK(!strcmp(report.product, "PC5 Test PhysX") && report.files == 5 && report.kept == 1 && report.skipped == 3 &&
+          report.registry == 7 && report.path == 1,
+          "what it did: %s files=%d kept=%d skipped=%d registry=%d path=%d", report.product, report.files, report.kept,
+          report.skipped, report.registry, report.path);
+    static const char *const installed[] = {
+        "Program Files (x86)/NVIDIA Corporation/PhysX/Common/PhysXLoader.dll",
+        "Program Files (x86)/NVIDIA Corporation/PhysX/Common/PhysXCooking.dll",
+        "Program Files (x86)/NVIDIA Corporation/PhysX/Engine/v2.8.3/PhysXCore.dll",
+        "Program Files (x86)/NVIDIA Corporation/PhysX/Engine/v2.8.3/PhysXDevice.dll",
+        "Program Files (x86)/NVIDIA Corporation/PhysX/Common/readme.txt",
+    };
+    for (size_t i = 0; i < sizeof(installed) / sizeof(installed[0]); i++) {
+        path(file, sizeof(file), "%s/drive_c/%s", prefix, installed[i]);
+        path(expected, sizeof(expected), "%s/expected/%s", out, installed[i]);
+        CHECK(same_files(file, expected), "as the package has it (MSZIP, LZX, stored): %s", installed[i]);
+    }
+    path(file, sizeof(file), "%s/drive_c/windows/system32/cudart32.dll", prefix);
+    CHECK(file_is(file, "Wine's own"), "a file in C:\\windows already: left as it was");
+    path(file, sizeof(file), "%s/drive_c/windows/syswow64/cudart32.dll", prefix);
+    CHECK(!pc5_exists(file), "a component whose condition is false: left out");
+    path(file, sizeof(file), "%s/system.reg", prefix);
+    CHECK(file_holds_text(file, "[Software\\\\Wow6432Node\\\\AGEIA Technologies]\n\"PhysX Version\"=\"9.13.0604\"") &&
+          file_holds_text(file, "\"enableLocalPhysXCore\"=dword:00000001") &&
+          file_holds_text(file, "\"PhysXCore Path\"=\"C:\\\\Program Files (x86)\\\\NVIDIA Corporation\\\\PhysX\\\\Engine\\\\v2.8.3\\\\PhysXCore.dll\"") &&
+          file_holds_text(file, "[Software\\\\NVIDIA Corporation\\\\PhysX]\n@=\"C:\\\\Program Files (x86)\\\\NVIDIA Corporation\\\\PhysX\\\\Common\\\\\"") &&
+          file_holds_text(file, "\"Bytes\"=hex:0a,0b") &&
+          file_holds_text(file, "\"Expand\"=str(2):\"C:\\\\Program Files (x86)\\\\x \\\"q\\\"\"") &&
+          !file_holds_text(file, "Skipped") && !file_holds_text(file, "Gone"),
+          "the machine's registry: 32-bit keys under Wow6432Node, 64-bit ones not, formatted values");
+    path(file, sizeof(file), "%s/user.reg", prefix);
+    CHECK(file_holds_text(file, "[Software\\\\PhysX]\n\"User\"=\"yes\""), "the user's");
+    path(file, sizeof(file), "%s/pc5/path.txt", prefix);
+    CHECK(file_is(file, "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common\n"), "its folder for PATH");
+
+    /* NVIDIA's setup program carries the package as it is. */
+    path(file, sizeof(file), "%s/setup.exe", out);
+    CHECK(pc5_msi_embedded(file) == 5112, "the package in the setup program: %lld", (long long)pc5_msi_embedded(file));
+    path(file, sizeof(file), "%s/ext.cab", out);
+    CHECK(pc5_msi_embedded(file) == -1, "none in a cabinet");
+    /* A damaged one: refused, nothing half-written. */
+    path(file, sizeof(file), "%s/physx.msi", out);
+    snprintf(command, sizeof(command), "head -c 20000 '%s' > '%s/cut.msi'", file, out);
+    run(command);
+    path(file, sizeof(file), "%s/cut.msi", out);
+    path(prefix, sizeof(prefix), "%s/prefix-cut", out);
+    CHECK(pc5_msi_install(file, 0, prefix, &report, error, sizeof(error)) == -1 && error[0], "a cut package refused: %s", error);
+
+    /* A game's redistributables: found in its folder, installed once. */
+    char game_root[PC5_PATH], game[PC5_PATH], name[PC5_NAME] = "";
+    path(game_root, sizeof(game_root), "%s/redist-root", out);
+    path(game, sizeof(game), "%s/prefixes/physx-game/drive_c/Games/Physx Game", game_root);
+    path(file, sizeof(file), "%s/prefixes/physx-game/system.reg", game_root);
+    write_text(file, "WINE REGISTRY Version 2\n");
+    CHECK(!pc5_redist_pending(game_root, "physx-game", game, name, sizeof(name)), "a game with none: nothing to do");
+    path(file, sizeof(file), "%s/_CommonRedist/PhysX/9.13.0604/PhysX-9.13.0604-SystemSoftware.msi", game);
+    path(expected, sizeof(expected), "%s/physx.msi", out);
+    copy_file(expected, file);
+    path(file, sizeof(file), "%s/_CommonRedist/PhysX/9.13.0604/ext.cab", game);
+    path(expected, sizeof(expected), "%s/ext.cab", out);
+    copy_file(expected, file);
+    path(file, sizeof(file), "%s/_CommonRedist/vcredist/2015/vc_redist.x64.msi", game);
+    copy_file(expected, file);
+    path(file, sizeof(file), "%s/Redist/PhysX_SystemSoftware.exe", game);
+    path(expected, sizeof(expected), "%s/setup.exe", out);
+    copy_file(expected, file);
+    path(file, sizeof(file), "%s/Redist/ext.cab", game);
+    path(expected, sizeof(expected), "%s/ext.cab", out);
+    copy_file(expected, file);
+    path(file, sizeof(file), "%s/Data/notes.msi", game);
+    copy_file(expected, file);
+    CHECK(pc5_redist_pending(game_root, "physx-game", game, name, sizeof(name)) == 1 && !strcmp(name, "PhysX"),
+          "PhysX to install: %s", name);
+    CHECK(pc5_redist_install(game_root, "physx-game", game, NULL, NULL) == 2, "both PhysX packages installed");
+    path(file, sizeof(file), "%s/prefixes/physx-game/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX/Common/PhysXLoader.dll",
+         game_root);
+    CHECK(pc5_is_file(file), "into the game's Windows");
+    path(file, sizeof(file), "%s/prefixes/physx-game/pc5/redist.txt", game_root);
+    CHECK(file_holds_text(file, " installed _CommonRedist/PhysX/9.13.0604/PhysX-9.13.0604-SystemSoftware.msi\n") &&
+          file_holds_text(file, " installed Redist/PhysX_SystemSoftware.exe\n") && !file_holds_text(file, "vc_redist") &&
+          !file_holds_text(file, "notes.msi"),
+          "listed; Visual C++ and a package outside the redistributables' folders left out");
+    CHECK(!pc5_redist_pending(game_root, "physx-game", game, NULL, 0) &&
+          pc5_redist_install(game_root, "physx-game", game, NULL, NULL) == 0, "once: not again");
+}
+
+static void test_steam(void)
+{
+    char base[PC5_PATH], app[PC5_PATH], game[PC5_PATH], from[PC5_PATH], dll[PC5_PATH], file[PC5_PATH], error[PC5_ERROR];
+    char root_steam[PC5_PATH], program[PC5_PATH];
+    char found[PC5_STEAM_DLLS][PC5_PATH];
+    static const char interfaces[] = "SteamClient020\0SteamClient017\0SteamUser021\0xxSteamUtils010yy\0"
+                                     "STEAMCONTROLLER_INTERFACE_VERSION\0SteamGameServer\0SteamUser021";
+    Pc5Buf list = { 0 };
+
+    CHECK(!pc5_steam_interfaces((const uint8_t *)interfaces, sizeof(interfaces), &list) && list.data &&
+          list.len == strlen("SteamClient017\nSTEAMCONTROLLER_INTERFACE_VERSION\nSteamUser021\nSteamUtils010\n") &&
+          !memcmp(list.data, "SteamClient017\nSTEAMCONTROLLER_INTERFACE_VERSION\nSteamUser021\nSteamUtils010\n", list.len),
+          "the interfaces a library names, as generate_interfaces finds them: %.*s", (int)list.len,
+          list.data ? (char *)list.data : "");
+    pc5_buf_free(&list);
+
+    path(base, sizeof(base), "%s/steam", work);
+    path(root_steam, sizeof(root_steam), "%s/root", base);
+    path(app, sizeof(app), "%s/app0", base);
+    path(game, sizeof(game), "%s/game", base);
+    /* The app's emulator (stand-ins), and a game with Valve's 64-bit library, signed. */
+    path(file, sizeof(file), "%s/pc5/steam/steam_api64.dll", app);
+    write_text(file, "gbe_fork 64-bit stand-in");
+    path(file, sizeof(file), "%s/pc5/steam/steam_api.dll", app);
+    write_text(file, "gbe_fork 32-bit stand-in");
+    path(from, sizeof(from), "%s/engine.dll", programs);
+    path(dll, sizeof(dll), "%s/Binaries/Win64/steam_api64.dll", game);
+    pe_variant(from, dll, "Valve", "SteamClient017\0SteamUser021", 28, NULL);
+    path(program, sizeof(program), "%s/Binaries/Win64/Game.exe", game);
+    path(from, sizeof(from), "%s/game64.exe", programs);
+    copy_file(from, program);
+    path(file, sizeof(file), "%s/steam_appid.txt", game);
+    write_text(file, "480\r\n");
+    /* Another emulator a copy came with (not signed by Valve): left alone. */
+    path(file, sizeof(file), "%s/Tools/steam_api.dll", game);
+    path(from, sizeof(from), "%s/engine.dll", programs);
+    pe_variant(from, file, "Someone Else", NULL, 0, NULL);
+    Pc5Buf valve = { 0 };
+    pc5_read_file(dll, &valve, 64u << 20);
+
+    CHECK(pc5_steam_find(root_steam, "steamgame", game, program, found, PC5_STEAM_DLLS) == 2, "both libraries found");
+    path(file, sizeof(file), "%s/prefixes/steamgame/pc5/steam.txt", root_steam);
+    CHECK(file_holds_text(file, "Binaries/Win64/steam_api64.dll\n") && file_holds_text(file, "Tools/steam_api.dll\n"),
+          "kept for the next time");
+    CHECK(pc5_steam_prepare(root_steam, "steamgame", game, program, app, 1, error, sizeof(error)) == 1,
+          "Auto: Valve's replaced: %s", error);
+    path(file, sizeof(file), "%s/pc5/steam/steam_api64.dll", app);
+    CHECK(same_files(dll, file), "the emulator in its place");
+    path(file, sizeof(file), "%s.pc5-valve", dll);
+    Pc5Buf kept = { 0 };
+    CHECK(!pc5_read_file(file, &kept, 64u << 20) && kept.len == valve.len && !memcmp(kept.data, valve.data, kept.len),
+          "Valve's kept beside it");
+    pc5_buf_free(&kept);
+    path(file, sizeof(file), "%s/Binaries/Win64/steam_settings/steam_appid.txt", game);
+    CHECK(file_is(file, "480\n"), "the game's app ID");
+    path(file, sizeof(file), "%s/Binaries/Win64/steam_settings/steam_interfaces.txt", game);
+    CHECK(file_is(file, "SteamClient017\nSteamUser021\n"), "Valve's library's interfaces");
+    path(file, sizeof(file), "%s/Binaries/Win64/steam_settings/configs.main.ini", game);
+    CHECK(file_holds_text(file, "offline=1\ndisable_networking=1\n"), "offline");
+    path(file, sizeof(file), "%s/Binaries/Win64/steam_settings/configs.app.ini", game);
+    CHECK(file_holds_text(file, "unlock_all=0\n"), "no DLC it doesn't have");
+    path(file, sizeof(file), "%s/Tools/steam_api.dll.pc5-valve", game);
+    CHECK(!pc5_exists(file), "another emulator left alone");
+    CHECK(pc5_steam_prepare(root_steam, "steamgame", game, program, app, 1, error, sizeof(error)) == 0, "again: nothing to do");
+    /* An earlier PC5's emulator: the app's in its place. */
+    write_text(dll, "an earlier gbe_fork");
+    CHECK(pc5_steam_prepare(root_steam, "steamgame", game, program, app, 1, error, sizeof(error)) == 1, "an earlier emulator updated");
+    path(file, sizeof(file), "%s/pc5/steam/steam_api64.dll", app);
+    CHECK(same_files(dll, file), "the app's emulator now");
+    CHECK(pc5_steam_prepare(root_steam, "steamgame", game, program, app, 0, error, sizeof(error)) == 1, "Off: Valve's back");
+    Pc5Buf back = { 0 };
+    CHECK(!pc5_read_file(dll, &back, 64u << 20) && back.len == valve.len && !memcmp(back.data, valve.data, back.len),
+          "Valve's in its place again");
+    pc5_buf_free(&back);
+    CHECK(pc5_steam_prepare(root_steam, "steamgame", game, program, app, 0, error, sizeof(error)) == 0, "off again: nothing");
+    pc5_buf_free(&valve);
+    /* Without the emulator in the app: said, nothing changed. */
+    path(file, sizeof(file), "%s/nowhere", base);
+    CHECK(pc5_steam_prepare(root_steam, "steamgame", game, program, file, 1, error, sizeof(error)) == -1 && error[0],
+          "no emulator: %s", error);
+    /* SteamStub: the wrapper's section. */
+    CHECK(!pc5_steam_stub(program), "a program without SteamStub");
+    path(from, sizeof(from), "%s/game64.exe", programs);
+    path(file, sizeof(file), "%s/stub.exe", base);
+    pe_variant(from, file, NULL, NULL, 0, ".bind");
+    CHECK(pc5_steam_stub(file), "one wrapped in it");
+    path(from, sizeof(from), "%s/game32.exe", programs);
+    pe_variant(from, file, NULL, NULL, 0, ".bind");
+    CHECK(pc5_steam_stub(file), "a 32-bit one too");
+    /* Its menu's setting. */
+    Pc5Controls controls;
+    pc5_controls_load(root_steam, "steamgame", &controls);
+    CHECK(!controls.steam_off, "Auto by default");
+    controls.steam_off = 1;
+    pc5_controls_save(root_steam, "steamgame", &controls);
+    pc5_controls_load(root_steam, "steamgame", &controls);
+    CHECK(controls.steam_off, "Off kept");
+}
+
+/* Starting a game: its PhysX installed the first time, the Steam emulator in place, the game's
+ * Steam emulator row, and a program in SteamStub refused with why. */
+static void test_launch_extras(const char *fonts)
+{
+    FakeConsole console = { 0 };
+    FakeNet net = { 0 };
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
+                             fake_sound, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
+    const char *roots[] = { usb, NULL };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0 };
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
+    char game[PC5_PATH], file[PC5_PATH], from[PC5_PATH], dll[PC5_PATH], program[PC5_PATH], saved[PC5_PATH];
+    Pc5Library library;
+
+    pc5_library_load(root, &library);
+    int neon = pc5_library_find(&library, "neondrift");
+    CHECK(neon >= 0 && !pc5_game_folder(root, "neondrift", game, sizeof(game)) &&
+          !pc5_game_program(root, "neondrift", program, sizeof(program)), "the game to start");
+    if (neon < 0) return;
+    path(from, sizeof(from), "%s/msi/physx.msi", work);
+    path(file, sizeof(file), "%s/_CommonRedist/PhysX/PhysX-SystemSoftware.msi", game);
+    copy_file(from, file);
+    path(from, sizeof(from), "%s/msi/ext.cab", work);
+    path(file, sizeof(file), "%s/_CommonRedist/PhysX/ext.cab", game);
+    copy_file(from, file);
+    path(from, sizeof(from), "%s/engine.dll", programs);
+    path(dll, sizeof(dll), "%s/steam_api64.dll", game);
+    pe_variant(from, dll, "Valve", "SteamUser021", 13, NULL);
+    path(file, sizeof(file), "%s/app0/pc5/steam/steam_api64.dll", work);
+    write_text(file, "gbe_fork 64-bit stand-in");
+
+    Pc5Ui *ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "library", &canvas);
+    for (int i = 0; i < 10; i++) press(ui, PC5_KEY_LEFT, &canvas);
+    for (int i = 0; i < neon; i++) press(ui, PC5_KEY_RIGHT, &canvas);
+    int plays = console.plays;
+    frames(ui, 0, PC5_KEY_ACCEPT, 1, &canvas);   /* Play: "Starting", then the busy line */
+    frames(ui, 0, 0, 1, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "launch") && console.plays == plays, "PhysX first: %s", pc5_ui_screen(ui));
+    save_shot(&canvas, "launch-redist");
+    CHECK(!cuts_after(ui, 0, &canvas), "the busy line: no text cut short");
+    frames(ui, 0, 0, 4, &canvas);
+    CHECK(console.plays == plays + 1, "then started: %d", console.plays);
+    path(file, sizeof(file), "%s/prefixes/neondrift/drive_c/Program Files (x86)/NVIDIA Corporation/PhysX/Common/PhysXLoader.dll", root);
+    CHECK(pc5_is_file(file), "PhysX installed the first time");
+    path(file, sizeof(file), "%s/app0/pc5/steam/steam_api64.dll", work);
+    CHECK(same_files(dll, file), "the Steam emulator in place of Valve's");
+    until_screen(ui, "message", &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+
+    /* Its menu: Manage has the Steam emulator, after Change program; Off puts Valve's back. */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    for (int i = 0; i < 40; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* Manage, the last row */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_DOWN, &canvas);        /* Steam emulator */
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "game-menu-steam");
+    CHECK(!cuts_after(ui, 0, &canvas), "its row: no text cut short");
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(controls_has("neondrift", "steam_emulator = off\n"), "Off");
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Play: once, nothing to install now */
+    frames(ui, 0, 0, 4, &canvas);
+    CHECK(console.plays == plays + 2, "started again: %d", console.plays);
+    path(file, sizeof(file), "%s.pc5-valve", dll);
+    CHECK(!pc5_exists(file), "Valve's library back");
+    until_screen(ui, "message", &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+
+    /* A program in SteamStub: not started, and why. */
+    path(saved, sizeof(saved), "%s.saved", program);
+    copy_file(program, saved);
+    path(from, sizeof(from), "%s/game64.exe", programs);
+    pe_variant(from, program, NULL, NULL, 0, ".bind");
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 4, &canvas);
+    CHECK(console.plays == plays + 2 && !strcmp(pc5_ui_screen(ui), "message"), "SteamStub: not started: %s",
+          pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "launch-steamstub");
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    rename(saved, program);
+    /* What was added for this test, taken out again. */
+    char command[4 * PC5_PATH];
+    snprintf(command, sizeof(command), "rm -rf '%s/_CommonRedist' '%s' '%s/steam_settings'", game, dll, game);
+    run(command);
+    pc5_ui_destroy(ui);
+    pc5_free(canvas.px);
+}
+
 int main(int argc, char **argv)
 {
     char fonts[PC5_PATH];
@@ -7493,6 +7846,8 @@ int main(int argc, char **argv)
     test_prefix_system();
     test_prefix_dxvk();
     test_dotnet();
+    test_msi();
+    test_steam();
     test_keyboard();
     test_named_libraries();
     test_java();
@@ -7500,6 +7855,7 @@ int main(int argc, char **argv)
     test_files();
     test_game(fonts);
     test_screens(fonts);
+    test_launch_extras(fonts);
     test_tile_start(fonts);
     test_report(fonts);
     test_upgrade_screens(fonts);

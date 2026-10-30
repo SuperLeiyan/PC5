@@ -262,11 +262,15 @@ A game that carries Microsoft's Visual C++ runtimes, Direct3D shader compilers (
 
 Games' videos and compressed sound (Media Foundation, DirectShow, Windows Media and DMOs) are decoded with FFmpeg: H.264, WMV and VC-1, MPEG-1 and 2, AAC, WMA, MP3 and others.
 
+A game that carries NVIDIA's PhysX System Software (in `_CommonRedist`, `Redist`, `PhysX` or a similar folder, as a Windows Installer package or NVIDIA's setup program) gets it installed into its Windows the first time it starts: "Installing PhysX for it, once" shows while it does. PC5 installs the package itself, as Windows Installer would: its files, its registry values and its folder in PATH. Other Windows Installer packages in those folders are installed the same way, but for Visual C++, DirectX, .NET and XNA, which Wine already has. Each package is installed once; the game's `pc5/redist.txt` lists them.
+
+A game made for Steam gets a Steam emulator in place of Steam's library: see [Games made for Steam](Playing-games#games-made-for-steam).
+
 A game whose own launcher starts the game (another program in the game's folder) runs: the console can't run two programs at once, so when the launcher starts the game, the launcher closes and PC5 starts the game in its place, with what the launcher gave it, as 32-bit or 64-bit and with the graphics the game's own program needs, whatever the launcher's are. Each start goes through the launcher again; **△ › Change program** starts the game directly instead. Programs whose names say they are helpers (crash reporters, installers, updaters, settings tools) aren't started this way: a game that starts its own settings tool each time it opens (Far Cry) goes on to the game.
 
 What won't run:
 
-- Games that need Steam, Epic, EA or Ubisoft's launcher running.
+- Games that need Epic, EA or Ubisoft's launcher running, or Steam itself: a program wrapped in Steam's DRM (SteamStub). A game that only uses Steam's library runs with the [Steam emulator](Playing-games#games-made-for-steam).
 - Games with online DRM or anti-cheat.
 - .NET programs that mix .NET and C++ (C++/CLI), and some WPF programs. Other .NET games run with Wine Mono.
 - Programs that aren't Windows programs.

@@ -471,3 +471,8 @@ controller's speaker.
 | 249 | A game's Launch options on the page: type `-windowed`, Save, start the game | the game starts with it; the file is beside its program | `PC5 web wrote launch.txt for …`, the profile's arguments end with `-windowed` |
 | 250 | A game's Newest log, and a log under Logs | both download as zips that open | `PC5 web sent …zip` |
 | 251 | Leave PC5 while the page sends a game | the page says where it stopped; no `.pc5part` file is left in INSTALL | `PC5 web received … cut-short` |
+| 252 | A game with `_CommonRedist/PhysX/…/PhysX…SystemSoftware.msi` (Prison Break), started the first time | "Installing PhysX for it, once", then the game starts and finds PhysX | `PC5 redist installed _CommonRedist/PhysX/… files=…`, `PC5 redist <id> installed=1` |
+| 253 | Start it again | no busy line: installed once | no `PC5 redist installed` line |
+| 254 | A game with Valve's `steam_api64.dll` (no SteamStub), started | it starts as without Steam's client; `steam_api64.dll.pc5-valve` and `steam_settings/` beside the DLL | `PC5 steam emulator on changed=1` |
+| 255 | △ › Manage › Steam emulator Off, start it | Valve's DLL back (and the game quits for want of Steam, as before) | `PC5 steam emulator off changed=1` |
+| 256 | A game whose program has SteamStub (a `.bind` section) | "… needs Steam", not started | `PC5 problem play …: SteamStub (.bind) in …` |

@@ -146,6 +146,9 @@ int pc5_controls_load(const char *root, const char *id, Pc5Controls *controls)
         } else if (!strcmp(name, "cpu_sharing")) {
             if (!strcmp(value, "on")) controls->cpu_sharing = 1;
             else if (!strcmp(value, "off")) controls->cpu_sharing = 0;
+        } else if (!strcmp(name, "steam_emulator")) {
+            if (!strcmp(value, "off")) controls->steam_off = 1;
+            else if (!strcmp(value, "auto")) controls->steam_off = 0;
         } else if (!strcmp(name, "graphics_api")) {
             for (int i = 0; i < PC5_GRAPHICS_COUNT; i++)
                 if (!strcmp(value, graphics_keys[i])) controls->graphics = (Pc5Graphics)i;
@@ -197,7 +200,9 @@ int pc5_controls_save(const char *root, const char *id, const Pc5Controls *contr
                                    "# Triangle on the game, then Resolution\nresolution = %s\n"
                                    "# Triangle on the game, then Aspect ratio\naspect_ratio = %s\n"
                                    "# Triangle on the game, then CPU sharing\ncpu_sharing = %s\n"
-                                   "# Triangle on the game, then Graphics API\ngraphics_api = %s\n",
+                                   "# Triangle on the game, then Graphics API\ngraphics_api = %s\n"
+                                   "# Triangle on the game, then Manage, then Steam emulator: auto or off\n"
+                                   "steam_emulator = %s\n",
                             mode_keys[controls->mode % PC5_PAD_MODES], stick_keys[controls->stick[0] % PC5_STICK_USES],
                             stick_keys[controls->stick[1] % PC5_STICK_USES], controls->speed,
                             controls->slow_button >= 0 && controls->slow_button < PC5_BUTTONS
@@ -207,7 +212,7 @@ int pc5_controls_save(const char *root, const char *id, const Pc5Controls *contr
                             controls->video_memory_full ? "full" : "auto",
                             controls->resolution == 2 ? "2160p" : controls->resolution == 1 ? "1440p" : "1080p",
                             controls->stretch ? "stretch" : "keep", controls->cpu_sharing ? "on" : "off",
-                            graphics_keys[controls->graphics % PC5_GRAPHICS_COUNT]);
+                            graphics_keys[controls->graphics % PC5_GRAPHICS_COUNT], controls->steam_off ? "off" : "auto");
     for (int i = 0; i < PC5_CONTROLS && !status; i++)
         status = pc5_buf_printf(&text, "%s = %s\n", control_keys[i], pc5_keys[controls->key[i] % pc5_key_count].name);
     if (!status) status = pc5_write_file(path, text.data, text.len);

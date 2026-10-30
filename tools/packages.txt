@@ -4,4 +4,4 @@ git python3 python3-yaml python3-venv python3-pip python3-pil
 gcc-mingw-w64 g++-mingw-w64 mingw-w64-tools bison flex pkg-config cmake ninja-build glslang-tools spirv-tools
 libx11-dev libxext-dev libfreetype-dev libfontconfig-dev libvulkan-dev libgnutls28-dev
 libasound2-dev libpulse-dev zlib1g-dev
-zip unzip xz-utils zstd bzip2 curl wget file rsync patch gettext ca-certificates openssl
+zip unzip 7zip xz-utils zstd bzip2 curl wget file rsync patch gettext ca-certificates openssl

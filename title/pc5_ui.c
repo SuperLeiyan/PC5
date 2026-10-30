@@ -11,10 +11,12 @@
 #include "pc5_image.h"
 #include "pc5_library.h"
 #include "pc5_logs.h"
+#include "pc5_msi.h"
 #include "pc5_qr.h"
 #include "pc5_report.h"
 #include "pc5_settings.h"
 #include "pc5_sound.h"
+#include "pc5_steam.h"
 #include "pc5_source.h"
 #include "pc5_update.h"
 #include "pc5_upgrade.h"
@@ -163,17 +165,18 @@ typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
     GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_VIDEO_MEMORY, GR_CPU_SHARING,
     GR_COVER, GR_BACKGROUND, GR_HOME, GR_ICON,
-    GR_PROGRAM, GR_FILES, GR_UPDATE, GR_UNINSTALL
+    GR_PROGRAM, GR_STEAM, GR_FILES, GR_UPDATE, GR_UNINSTALL
 } GameRow;
 enum { GAME_ROWS = 7, GAME_PAGES = 4, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3 };
 static const char *const game_page_titles[GAME_PAGES] = { "", "Graphics", "Appearance", "Manage" };
 /* The first page's row that opens each page. */
 static const GameRow game_page_rows[GAME_PAGES] = { GR_PLAY, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE };
 /* What a game is, for its menu's rows. */
-enum { GAME_32BIT = 1, GAME_VULKAN = 2, GAME_PC5 = 4, GAME_API = 8 };
+enum { GAME_32BIT = 1, GAME_VULKAN = 2, GAME_PC5 = 4, GAME_API = 8, GAME_STEAM = 16 };
 
 /* kind: GAME_32BIT for Memory, GAME_VULKAN for Resolution, GAME_PC5 (PC5 installed it) for Game files and Update,
- * GAME_API (it draws with DirectDraw or Direct3D) for Graphics API. */
+ * GAME_API (it draws with DirectDraw or Direct3D) for Graphics API, GAME_STEAM (it has Steam's library) for
+ * Steam emulator. */
 static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow rows[GAME_ROWS])
 {
     int n = 0;
@@ -195,6 +198,7 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         break;
     case GP_MANAGE:
         rows[n++] = GR_PROGRAM;
+        if (kind & GAME_STEAM) rows[n++] = GR_STEAM;
         if (kind & GAME_PC5) rows[n++] = GR_FILES;
         if (kind & GAME_PC5) rows[n++] = GR_UPDATE;
         rows[n++] = GR_UNINSTALL;
@@ -296,6 +300,11 @@ struct Pc5Ui {
      * at yet, 1: copying, 2: nothing (more) to do. */
     Pc5Runtime runtime;
     int runtime_state;
+    /* Starting a game: its redistributables the first time (pc5_msi.h). 0: not looked at yet,
+     * 1: installing them (the busy line names them), 2: nothing (more) to do. */
+    int redist_state;
+    char redist_name[PC5_NAME];
+    int steam_dlls;                /* the game whose menu is open: its steam_api DLLs (pc5_steam.h) */
     const char *const *usb_roots;
     Pc5Platform platform;
     Pc5Fonts fonts;
@@ -462,7 +471,8 @@ static int ui_game_kind(const Pc5Ui *ui)
     Pc5Graphics choices[PC5_GRAPHICS_COUNT];
     return (ui->library.games[index].bits == 32 ? GAME_32BIT : 0) | (ui->library.games[index].vulkan ? GAME_VULKAN : 0) |
            (ui->library.games[index].pc5 ? GAME_PC5 : 0) |
-           (pc5_graphics_choices(ui->library.games[index].api, choices) > 1 ? GAME_API : 0);
+           (pc5_graphics_choices(ui->library.games[index].api, choices) > 1 ? GAME_API : 0) |
+           (ui->steam_dlls > 0 ? GAME_STEAM : 0);
 }
 
 /* What the game whose menu is open draws with (Pc5Api), PC5_API_GDI when it isn't found. */
@@ -499,6 +509,7 @@ static void go(Pc5Ui *ui, Screen screen)
 {
     if (ui->runtime_state == 1) pc5_runtime_end(&ui->runtime);
     if (screen == S_LAUNCH || ui->runtime_state == 1) ui->runtime_state = 0;
+    if (screen == S_LAUNCH) ui->redist_state = 0;
     ui->screen = screen;
     ui->entered = ui->now;
     /* The backgrounds' worker waits while these screens use the network, so they don't wait for it. */
@@ -2352,12 +2363,30 @@ static int pad_change(Pc5Ui *ui, PadRow row, int step)
     }
 }
 
+/* A redistributable's line in the log (pc5_redist_install). */
+static void redist_log(void *context, const char *line)
+{
+    say(context, "%s", line);
+}
+
 /* A game's menu, with its controller as PC5 kept it. */
 static void game_menu_open(Pc5Ui *ui, const char *id)
 {
     pc5_copy(ui->launch_id, sizeof(ui->launch_id), id);
     pc5_controls_load(ui->root, id, &ui->controls);
     if (!ui->config.tiles_root || !pc5_home_find(ui->config.tiles_root, id, ui->tile)) ui->tile[0] = 0;
+    /* Steam's library in its folder: its Steam emulator row (looked for once, pc5_steam.h). */
+    ui->steam_dlls = 0;
+    int index = pc5_library_find(&ui->library, id);
+    char folder[PC5_PATH], program[PC5_PATH];
+    if (index >= 0 && ui->library.games[index].pc5 && !pc5_game_folder(ui->root, id, folder, sizeof(folder))) {
+        char (*found)[PC5_PATH] = pc5_alloc(sizeof(*found) * PC5_STEAM_DLLS);
+        if (found)
+            ui->steam_dlls = pc5_steam_find(ui->root, id, folder,
+                                            pc5_game_program(ui->root, id, program, sizeof(program)) ? NULL : program,
+                                            found, PC5_STEAM_DLLS);
+        pc5_free(found);
+    }
     ui->menu = 0;
     ui->game_page = GP_MAIN;
     go(ui, S_GAME_MENU);
@@ -3755,6 +3784,10 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->controls.cpu_sharing = !ui->controls.cpu_sharing;
             controls_changed(ui);
             ui->dirty = 1;
+        } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_STEAM) {
+            ui->controls.steam_off = !ui->controls.steam_off;
+            controls_changed(ui);
+            ui->dirty = 1;
         } else if ((k & accept) && row == GR_HOME) {
             home_toggle(ui, game);
         } else if (k & accept) {
@@ -4181,6 +4214,45 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 say(ui, "PC5 dotnet runtime copied entries=%u", (unsigned)ui->runtime.done);
                 pc5_runtime_end(&ui->runtime);
                 ui->runtime_state = 2;
+            }
+            /* The game's redistributables the first time it starts (PhysX): their busy line is
+             * drawn, then they are installed. */
+            char game_dir[PC5_PATH], program[PC5_PATH];
+            int own = index >= 0 && ui->library.games[index].pc5 &&
+                      !pc5_game_folder(ui->root, ui->launch_id, game_dir, sizeof(game_dir));
+            if (ui->redist_state == 0) {
+                ui->redist_state = 2;
+                if (own && pc5_redist_pending(ui->root, ui->launch_id, game_dir, ui->redist_name, sizeof(ui->redist_name))) {
+                    ui->redist_state = 1;
+                    ui->drawn = 0;
+                    ui->dirty = 1;
+                    break;
+                }
+            }
+            if (ui->redist_state == 1) {
+                int installed = pc5_redist_install(ui->root, ui->launch_id, game_dir, redist_log, ui);
+                say(ui, "PC5 redist %s installed=%d", ui->launch_id, installed);
+                ui->redist_state = 2;
+            }
+            /* Steam: a program in Steam's DRM wrapper can't start without it; Steam's library
+             * gets the emulator in its place, or back, as the game's menu says. */
+            if (own && !pc5_game_program(ui->root, ui->launch_id, program, sizeof(program))) {
+                if (pc5_steam_stub(program)) {
+                    snprintf(title, sizeof(title), "%s needs Steam", ui->library.games[index].title);
+                    say(ui, "PC5 problem play %s: SteamStub (.bind) in %s", ui->launch_id, program);
+                    message(ui, 0, title,
+                            "Its program is wrapped in Steam's DRM (SteamStub), which starts only with Steam running, "
+                            "and Steam doesn't run on the console. A copy of the game without it can start.",
+                            S_LIBRARY);
+                    break;
+                }
+                Pc5Controls chosen;
+                char why[PC5_ERROR];
+                pc5_controls_load(ui->root, ui->launch_id, &chosen);
+                int changed = pc5_steam_prepare(ui->root, ui->launch_id, game_dir, program, ui->app, !chosen.steam_off, why,
+                                                sizeof(why));
+                if (changed < 0) say(ui, "PC5 problem steam %s: %s", ui->launch_id, why);
+                else if (changed) say(ui, "PC5 steam emulator %s changed=%d", chosen.steam_off ? "off" : "on", changed);
             }
             if (index >= 0 && ui->library.games[index].pc5 &&
                 pc5_profile_refresh(ui->root, ui->launch_id, error, sizeof(error))) {
@@ -4844,6 +4916,12 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         *value = "";
         break;
     }
+    case GR_STEAM:
+        *label = "Steam emulator";
+        *text = ui->controls.steam_off ? "Steam's own library: the game won't find Steam on the console"
+                                       : "Stands in for Steam, which the game asks for; Off if it misbehaves";
+        *value = ui->controls.steam_off ? "Off" : "Auto";
+        break;
     case GR_FILES:
         *label = "Game files";
         *text = "Its folder: copy, move, rename and delete its files";
@@ -4885,7 +4963,7 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
     }
     GameRow row = chosen >= 0 && chosen < count ? rows[chosen] : GR_PLAY;
     int changes = row == GR_CONTROLLER || row == GR_FRAMEGEN || row == GR_RESOLUTION || row == GR_ASPECT ||
-                  row == GR_MEMORY || row == GR_VIDEO_MEMORY || row == GR_CPU_SHARING || row == GR_HOME;
+                  row == GR_MEMORY || row == GR_VIDEO_MEMORY || row == GR_CPU_SHARING || row == GR_HOME || row == GR_STEAM;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);
 }
@@ -6089,7 +6167,11 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_LAUNCH: {
         int index = pc5_library_find(&ui->library, ui->launch_id);
         snprintf(line, sizeof(line), "Starting %s", index >= 0 ? ui->library.games[index].title : "the game");
-        if (ui->runtime_state == 1) {
+        if (ui->redist_state == 1) {
+            char count[PC5_NAME + 64];
+            snprintf(count, sizeof(count), "Installing %.80s for it, once", ui->redist_name);
+            busy_dialog(ui, c, line, count, 0);
+        } else if (ui->runtime_state == 1) {
             char count[96];
             snprintf(count, sizeof(count), "Setting up .NET for your games, once: %u of %u", (unsigned)ui->runtime.done,
                      (unsigned)ui->runtime.total);

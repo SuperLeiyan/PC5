@@ -13,6 +13,7 @@
 
 typedef struct Section {
     uint32_t va, vsize, raw, rawsize;
+    char name[9];
 } Section;
 
 typedef struct Pe {
@@ -138,7 +139,8 @@ static int pe_open(const char *path, Pe *pe)
     for (int i = 0; i < sections; i++) {
         uint8_t s[40];
         if (read_at(pe, (uint64_t)lfanew + 24 + optional_size + 40u * (unsigned)i, s, sizeof(s))) goto fail;
-        pe->sections[i] = (Section){ u32(s + 12), u32(s + 8), u32(s + 20), u32(s + 16) };
+        pe->sections[i] = (Section){ u32(s + 12), u32(s + 8), u32(s + 20), u32(s + 16), { 0 } };
+        memcpy(pe->sections[i].name, s, 8);
     }
     pe->section_count = sections;
     return 0;
@@ -534,6 +536,34 @@ int pc5_pe_godot(const char *path)
         if (!stat(pck, &st) && S_ISREG(st.st_mode)) return 1;
     }
     return file_has_text(path, "Godot Engine");
+}
+
+int pc5_pe_section(const char *path, const char *name)
+{
+    Pe pe;
+    int found = 0;
+    if (pe_open(path, &pe)) return 0;
+    for (int i = 0; i < pe.section_count && !found; i++) found = !strcmp(pe.sections[i].name, name);
+    pe_close(&pe);
+    return found;
+}
+
+int pc5_pe_signed_by(const char *path, const char *who)
+{
+    Pe pe;
+    int found = 0;
+    if (pe_open(path, &pe)) return 0;
+    /* The certificate table (directory 4) is where the file is, not where it is loaded. */
+    uint32_t at = pe.dir_rva[4], size = pe.dir_size[4];
+    size_t n = strlen(who);
+    if (at && size >= n && size <= (1u << 20)) {
+        uint8_t *table = pc5_alloc(size);
+        if (table && !read_at(&pe, at, table, size))
+            for (uint32_t i = 0; !found && i + n <= size; i++) found = table[i] == (uint8_t)who[0] && !memcmp(table + i, who, n);
+        pc5_free(table);
+    }
+    pe_close(&pe);
+    return found;
 }
 
 const char *pc5_api_name(Pc5Api api)

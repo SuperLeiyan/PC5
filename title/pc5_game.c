@@ -504,6 +504,38 @@ int pc5_game_env_name_ok(const char *name)
     return pc5_casecmp(name, "PATH") && pc5_casecmp(name, "HOME") && pc5_casecmp(name, "TMPDIR");
 }
 
+/* The folders in the game's pc5/path.txt (one a line, as Windows writes them), each once,
+ * after what path has, ';' between. */
+static void redist_path(const char *root, const char *prefix, char *path, size_t size)
+{
+    char file[PC5_PATH];
+    Pc5Buf text = { 0 };
+    if (!prefix || !prefix[0] || !strcmp(prefix, "default") ||
+        pc5_format(file, sizeof(file), "%s/prefixes/%s/pc5/path.txt", root, prefix) || !pc5_is_file(file) ||
+        pc5_read_file(file, &text, 65536) || pc5_buf_terminate(&text)) {
+        pc5_buf_free(&text);
+        return;
+    }
+    for (char *line = (char *)text.data, *next; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        size_t n = strlen(line);
+        while (n && (line[n - 1] == '\r' || line[n - 1] == ' ')) line[--n] = 0;
+        if (!n || strchr(line, ';')) continue;
+        /* Once: not when path has it already. */
+        int had = 0;
+        for (const char *at = path; *at && !had;) {
+            const char *end = strchr(at, ';');
+            size_t len = end ? (size_t)(end - at) : strlen(at);
+            had = len == n && !strncasecmp(at, line, n);
+            at = end ? end + 1 : at + len;
+        }
+        size_t used = strlen(path);
+        if (!had && used + n + 2 < size) snprintf(path + used, size - used, "%s%s", used ? ";" : "", line);
+    }
+    pc5_buf_free(&text);
+}
+
 void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *root, const char *app,
                     const char *prefix, const char *title)
 {
@@ -573,14 +605,16 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
         if (set) say(game, "PC5 env.txt set=%d %s", set, names);
     }
     /* A Java game's launcher made with jpackage: its app folder in PATH from the start, which
-     * Wine takes from WINEPATH (pc5_game_winepath). */
-    char winepath[PC5_PATH + 40];
+     * Wine takes from WINEPATH (pc5_game_winepath); and the folders the game's redistributables
+     * put in PATH (pc5_msi.h, pc5/path.txt). */
+    char winepath[PC5_PATH + 40], path[2048] = "";
     if (prefix && prefix[0] && strcmp(prefix, "default") && !pc5_game_winepath(root, prefix, winepath, sizeof(winepath))) {
-        setenv("WINEPATH", winepath, 1);
+        pc5_copy(path, sizeof(path), winepath);
         say(game, "PC5 Java launcher: %s in PATH", winepath);
-    } else {
-        unsetenv("WINEPATH");
     }
+    redist_path(root, prefix, path, sizeof(path));
+    if (path[0]) setenv("WINEPATH", path, 1);
+    else unsetenv("WINEPATH");
     say(game, "PC5 game fps=%d overlay=%#x corner=%d vibration=%d light=%d triggers=%d trigger_rumble=%d "
         "trigger_resistance=%d tint=%06x frame_generation=%d memory_32bit=%s aspect_ratio=%s cpu_sharing=%d",
         game->settings.fps,
