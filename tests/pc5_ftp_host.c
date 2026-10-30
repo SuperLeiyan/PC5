@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-/* PC5's FTP server's platform on the host, for the tests (pc5_ftp_ps5.c is the console's),
- * and, built with PC5_FTP_SERVE, a server of its own for tests/test_ftp.py: ftp-serve <root> <port>. */
+/* PC5's FTP server's and browser page's platform on the host, for the tests (pc5_ftp_ps5.c is
+ * the console's); built with PC5_FTP_SERVE, a server of its own for tests/test_ftp.py:
+ * ftp-serve <root> <port>; with PC5_WEB_SERVE, the page's for tests/test_web.py:
+ * web-serve <root> <install folder> <port> [user password]. */
 #include "../title/pc5_ftp.h"
+#include "../title/pc5_web.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -84,13 +87,22 @@ static void host_log(const char *line)
     if (getenv("PC5_FTP_LOG")) fprintf(stderr, "%s\n", line);
 }
 
+static const Pc5FtpOps host_ops = { host_listen, host_accept, host_address, host_lan_ip,
+                                    host_send,   host_recv,   host_close,   host_log };
+
 void pc5_ftp_host_init(void);
 void pc5_ftp_host_init(void)
 {
-    static const Pc5FtpOps ops = { host_listen, host_accept, host_address, host_lan_ip,
-                                   host_send,   host_recv,   host_close,   host_log };
-    pc5_ftp_init(&ops);
+    pc5_ftp_init(&host_ops);
 }
+
+#ifndef PC5_FTP_SERVE
+void pc5_web_host_init(void);
+void pc5_web_host_init(void)
+{
+    pc5_web_init(&host_ops);
+}
+#endif
 
 #ifdef PC5_FTP_SERVE
 int main(int argc, char **argv)
@@ -112,6 +124,37 @@ int main(int argc, char **argv)
     Pc5FtpStatus status;
     pc5_ftp_status(&status);
     printf("stopped running=%d sessions=%d\n", status.running, status.sessions);
+    return 0;
+}
+#endif
+
+#ifdef PC5_WEB_SERVE
+int main(int argc, char **argv)
+{
+    char error[PC5_ERROR];
+    if (argc != 4 && argc != 6) return 2;
+    signal(SIGPIPE, SIG_IGN);
+    pc5_web_host_init();
+    if (argc == 6) pc5_web_login(argv[4], argv[5]);
+    Pc5WebConfig config = { argv[1], argv[2] };
+    if (pc5_web_start(&config, (uint16_t)atoi(argv[3]), error, sizeof(error))) {
+        fprintf(stderr, "web-serve: %s\n", error);
+        return 1;
+    }
+    printf("ready\n");
+    fflush(stdout);
+    /* A line on stdin: the counts; stdin closed: stopped, as PC5 stops it. */
+    char line[64];
+    while (fgets(line, sizeof(line), stdin)) {
+        Pc5WebStatus status;
+        pc5_web_status(&status);
+        printf("uploads=%u transfers=%d\n", status.uploads, status.transfers);
+        fflush(stdout);
+    }
+    pc5_web_stop();
+    Pc5WebStatus status;
+    pc5_web_status(&status);
+    printf("stopped running=%d\n", status.running);
     return 0;
 }
 #endif

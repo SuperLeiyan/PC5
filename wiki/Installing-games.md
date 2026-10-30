@@ -1,4 +1,4 @@
-PC5 installs games from a USB drive. You put each game's installed folder on the drive, choose it in PC5, and PC5 copies it to the console once, checks the copy against the drive and adds the game to your library. You can install one game at a time or several in a row, [play a game from its USB drive](#playing-a-game-from-its-usb-drive) without copying it, or [put a game in PC5's INSTALL folder](#the-install-folder) over FTP. This page also covers choosing the right program for a game, updating a game and uninstalling games.
+PC5 installs games from a USB drive. You put each game's installed folder on the drive, choose it in PC5, and PC5 copies it to the console once, checks the copy against the drive and adds the game to your library. You can install one game at a time or several in a row, [play a game from its USB drive](#playing-a-game-from-its-usb-drive) without copying it, or [put a game in PC5's INSTALL folder](#the-install-folder) over FTP or from the [web page](Web-page). This page also covers choosing the right program for a game, updating a game and uninstalling games.
 
 ## Preparing the USB drive
 
@@ -130,7 +130,7 @@ Good to know:
 
 ## The INSTALL folder
 
-PC5's own folder has a folder called **INSTALL** (for example `/data/homebrew/PPSA11018/INSTALL`). PC5 makes it the first time it opens. It is for sending games to the console without a USB drive, over FTP or with the [file manager](File-manager).
+PC5's own folder has a folder called **INSTALL** (for example `/data/homebrew/PPSA11018/INSTALL`). PC5 makes it the first time it opens. It is for sending games to the console without a USB drive, over FTP, from PC5's [web page](Web-page) or with the [file manager](File-manager).
 
 1. Copy a game's installed folder into `INSTALL`, as you would onto a USB drive: one folder per game, the folder named like the game.
 2. Open PC5. It finds the game and asks: "1 game is waiting in …/INSTALL. Install it now?"
@@ -147,8 +147,8 @@ The INSTALL folder and what is in it stay when PC5 updates. **Install games from
 
 PC5 has an FTP server of its own for the INSTALL folder, so you can send games from a PC with an FTP app such as [FileZilla](https://filezilla-project.org/), without knowing the folder's path.
 
-1. In PC5, turn on **Settings › Game maintenance › FTP server**. The row shows the address, for example `ftp://192.168.1.20:2125`.
-2. On the PC, connect to that address (in FileZilla: **Host** `192.168.1.20`, **Port** `2125`, no user name or password).
+1. In PC5, turn on **Settings › Network › FTP server**. The row shows the address, for example `ftp://192.168.1.20:2125`.
+2. On the PC, connect to that address (in FileZilla: **Host** `192.168.1.20`, **Port** `2125`, and the username and password set in **Settings › Network**, or none when none is set).
 3. Drag the game's installed folder into it, as you would onto a USB drive.
 4. When the transfer is done, PC5 asks to install the game, as when it opens.
 
@@ -156,7 +156,11 @@ Good to know:
 
 - The server shows only the INSTALL folder, nothing else on the console. It runs while PC5 is open: leaving PC5 stops a transfer, and FileZilla can resume it once PC5 is open again.
 - It uses port 2125, so it doesn't clash with the FTP server of your jailbreak (often 2121 or 1337), which keeps working as before.
-- It is plain FTP with no password: use it on your home network only.
+- It is plain FTP: with no username or password set in **Settings › Network**, anyone on your network can use it, and even with them nothing is encrypted. Use it on your home network only.
+
+### Sending games from the web page
+
+With **Settings › Network › Web page** on, open the address it shows (for example `http://192.168.1.20:8125`) in a browser on a PC, and choose **Choose a folder** under **Send a game**. The game's folder goes to the INSTALL folder, and PC5 asks to install it, as after FTP. See [Web page](Web-page).
 
 ## Choosing the right program
 

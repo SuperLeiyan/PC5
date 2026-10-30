@@ -3,6 +3,7 @@
 #include "pc5_ui.h"
 #include "pc5_backgrounds.h"
 #include "pc5_ftp.h"
+#include "pc5_web.h"
 #include "pc5_files.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
@@ -89,7 +90,7 @@ typedef enum SettingRow {
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_OVERLAY_SIZE, SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
-    SR_FILES, SR_FTP, SR_NETWORK, SR_REMOTE_USER, SR_REMOTE_PASSWORD,
+    SR_FILES, SR_FTP, SR_WEB, SR_NETWORK, SR_REMOTE_USER, SR_REMOTE_PASSWORD,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
@@ -141,6 +142,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_COMPATIBILITY;
     } else if (page == PAGE_NETWORK) {
         rows[n++] = SR_FTP;
+        rows[n++] = SR_WEB;
         rows[n++] = SR_REMOTE_USER;
         rows[n++] = SR_REMOTE_PASSWORD;
     } else {
@@ -385,6 +387,8 @@ struct Pc5Ui {
     char ftp_error[PC5_ERROR];
     int typing_row;                /* S_SETTINGS_TYPING: the row (SR_REMOTE_USER, SR_REMOTE_PASSWORD) */
     unsigned ftp_uploads_seen;
+    char web_error[PC5_ERROR];
+    unsigned web_uploads_seen;
     int install_only;              /* S_SCAN and S_SOURCES: the INSTALL folder's games only */
     const char *scan_roots[16];
     int removing_kind;             /* S_REMOVING: 0 an uninstall, 1 one that keeps the saves, 2 kept saves deleted */
@@ -784,6 +788,7 @@ void pc5_ui_destroy(Pc5Ui *ui)
 {
     if (!ui) return;
     pc5_ftp_stop();
+    pc5_web_stop();
     /* The update's thread works in ui: it stops first (or finishes putting files in place). */
     if (pc5_upgrade_busy(&ui->upgrade)) {
         pc5_upgrade_cancel(&ui->upgrade);
@@ -2012,19 +2017,33 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         pc5_copy(value, value_size, set->ftp_server ? "On" : "Off");
         break;
     }
+    case SR_WEB: {
+        Pc5WebStatus web;
+        pc5_web_status(&web);
+        *label = "Web page";
+        if (web.running)
+            snprintf(about, about_size, "http://%s in a browser on a phone or a PC, while PC5 is open", web.address);
+        else if (set->web_page && ui->web_error[0])
+            snprintf(about, about_size, "Not started: %.150s", ui->web_error);
+        else
+            pc5_copy(about, about_size, "PC5 from a browser: send games, launch options, logs");
+        pc5_copy(value, value_size, set->web_page ? "On" : "Off");
+        break;
+    }
     case SR_NETWORK:
         *label = "Network";
-        pc5_copy(about, about_size, "Sending games from a PC: the FTP server, its username and password");
+        pc5_copy(about, about_size, "From a PC or a phone: the FTP server, the web page, a username and password");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
     case SR_REMOTE_USER:
         *label = "Username";
-        pc5_copy(about, about_size, set->remote_user[0] ? "The username a PC must give" : "None set: any username will do");
+        pc5_copy(about, about_size, set->remote_user[0] ? "The username the FTP server and the web page ask for"
+                                                        : "None set: any username will do");
         pc5_copy(value, value_size, set->remote_user[0] ? set->remote_user : "Any");
         break;
     case SR_REMOTE_PASSWORD:
         *label = "Password";
-        pc5_copy(about, about_size, set->remote_password[0] ? "The password a PC must give"
+        pc5_copy(about, about_size, set->remote_password[0] ? "The password the FTP server and the web page ask for"
                                                             : "Optional: none set, no password is asked for");
         pc5_copy(value, value_size, set->remote_password[0] ? "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2" : "None");
         break;
@@ -2183,20 +2202,43 @@ static void ftp_apply(Pc5Ui *ui)
     ui->ftp_uploads_seen = 0;
 }
 
-/* Games sent over FTP: once nothing has moved for a few seconds after an upload, the INSTALL
- * folder looked at again, and its games offered as when PC5 opens. */
-static void ftp_uploads_check(Pc5Ui *ui)
+/* PC5's page for a browser, as its setting says: started (with PC5's folders) or stopped. */
+static void web_apply(Pc5Ui *ui)
 {
-    Pc5FtpStatus status;
-    pc5_ftp_status(&status);
-    if (!status.running || status.uploads == ui->ftp_uploads_seen || status.transfers || status.idle_ms < 3000)
+    ui->web_error[0] = 0;
+    if (!ui->settings.web_page) {
+        pc5_web_stop();
         return;
-    ui->ftp_uploads_seen = status.uploads;
+    }
+    Pc5WebStatus status;
+    pc5_web_login(ui->settings.remote_user, ui->settings.remote_password);
+    pc5_web_status(&status);
+    if (status.running) return;
+    const Pc5WebConfig config = { ui->root, ui->install_dir };
+    if (pc5_web_start(&config, PC5_WEB_PORT, ui->web_error, sizeof(ui->web_error)))
+        say(ui, "PC5 problem web page: %s", ui->web_error);
+    ui->web_uploads_seen = 0;
+}
+
+/* Games sent over FTP or from the web page: once nothing has moved for a few seconds after an
+ * upload, the INSTALL folder looked at again, and its games offered as when PC5 opens. */
+static void uploads_check(Pc5Ui *ui)
+{
+    Pc5FtpStatus ftp;
+    Pc5WebStatus web;
+    pc5_ftp_status(&ftp);
+    pc5_web_status(&web);
+    int sent = (ftp.running && ftp.uploads != ui->ftp_uploads_seen) || (web.running && web.uploads != ui->web_uploads_seen);
+    if (!sent || (ftp.running && (ftp.transfers || ftp.idle_ms < 3000)) ||
+        (web.running && (web.transfers || web.idle_ms < 3000)))
+        return;
+    if (ftp.running) ui->ftp_uploads_seen = ftp.uploads;
+    if (web.running) ui->web_uploads_seen = web.uploads;
     const char *only[] = { ui->install_dir, NULL };
     Pc5Source *found = pc5_alloc(sizeof(*found) * PC5_SOURCES);
     int games = found ? pc5_source_scan(only, found, PC5_SOURCES) : 0;
     pc5_free(found);
-    say(ui, "PC5 ftp uploads=%u install folder games=%d", status.uploads, games);
+    say(ui, "PC5 uploads ftp=%u web=%u install folder games=%d", ftp.uploads, web.uploads, games);
     if (games) {
         ui->install_waiting = games;
         ui->button = 1;   /* Install first */
@@ -2213,6 +2255,10 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
     case SR_FTP:
         set->ftp_server = !set->ftp_server;
         ftp_apply(ui);
+        break;
+    case SR_WEB:
+        set->web_page = !set->web_page;
+        web_apply(ui);
         break;
     case SR_FPS: set->fps = !set->fps; break;
     case SR_FRAME_TIME: set->frame_time = !set->frame_time; break;
@@ -3138,6 +3184,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             } else {
                 ui->install_dir[0] = 0;
             }
+            if (ui->settings.web_page) web_apply(ui);
         }
         if (pc5_recover_step(ui->root, &ui->remove, 14)) { ui->dirty = 1; break; }
         pc5_remove_end(&ui->remove);
@@ -3280,7 +3327,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_LIBRARY: {
         int before = ui->selected, count = ui->library.count;
-        ftp_uploads_check(ui);
+        uploads_check(ui);
         if (count) {
             if (k & PC5_KEY_LEFT && ui->selected > 0) ui->selected--;
             if (k & PC5_KEY_RIGHT && ui->selected + 1 < count) ui->selected++;
@@ -3394,6 +3441,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             }
             pc5_copy(to, size, start);
             pc5_ftp_login(ui->settings.remote_user, ui->settings.remote_password);
+            pc5_web_login(ui->settings.remote_user, ui->settings.remote_password);
             if (pc5_settings_save(ui->root, &ui->settings)) say(ui, "PC5 problem settings: can't write them");
             say(ui, "PC5 settings remote user=%s password=%s", ui->settings.remote_user[0] ? "set" : "any",
                 ui->settings.remote_password[0] ? "set" : "none");
@@ -4677,7 +4725,7 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
                    i == ui->menu, label, about, value);
     }
     SettingRow row = rows[ui->menu < count ? ui->menu : 0];
-    int changes = row == SR_KEEP_LOGS || row == SR_FTP || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
+    int changes = row == SR_KEEP_LOGS || row == SR_FTP || row == SR_WEB || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
                   row == SR_STARTUP_SOUND || row == SR_STARTUP_VOLUME || row >= SR_SOURCE;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);

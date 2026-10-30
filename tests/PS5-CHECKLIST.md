@@ -453,8 +453,14 @@ controller's speaker.
 | 231 | Install games from USB with PC5 and other homebrew or game dumps on the drive | the list shows at once, without them | `PC5 usb folders=…` |
 | 232 | A game in a USB 2.0 port (front USB-A on the original PS5) › △ Play from USB | refused: too slow, plug it into a port on the back; Install still works | `PC5 problem install …: The drive reads at …` |
 | 233 | The same game in a back port › △ Play from USB | it plays | `PC5 install id=… usb=1` |
-| 234 | Settings › Game maintenance › FTP server On | the row shows ftp://<console's address>:2125 | `PC5 ftp on address=…:2125 root=…/INSTALL` |
+| 234 | Settings › Network › FTP server On | the row shows ftp://<console's address>:2125 | `PC5 ftp on address=…:2125 root=…/INSTALL` |
 | 235 | FileZilla from a PC to that address, drag a game's folder in | it lands in INSTALL; a few seconds after it finishes, PC5 asks to install it | `PC5 ftp received …`, `PC5 ftp uploads=… install folder games=1` |
 | 236 | Leave PC5 during a transfer, open it again, resume in FileZilla | the transfer resumes and finishes | |
 | 237 | Splinter Cell: Conviction's system check | it finds the sound device (and 2 GB of video memory) | `dxdiag` (with `+dxdiag`): `szHardwareID` asked for and given |
 | 238 | Heroes of Might and Magic: Olden Era › Start Game › a mode | its maps load (Story_maps listed), no "invalid handle" | `wine-ps5: L"Story_maps" looked up in directory … by its name, not its descriptor: status 0` |
+| 239 | Settings › Network › Web page On, open the address it shows on a phone | the page opens: PC5's version, free space, the games and the logs | `PC5 web on address=…:8125 install=…/INSTALL` |
+| 240 | Settings › Network › Username and Password set, open the page again | the browser asks for them; wrong ones are refused, the right ones open it | `PC5 web login refused user=…` for a wrong one |
+| 241 | On a PC's browser: Send a game › Choose a folder, a game's installed folder | each file is sent with the bar moving; a few seconds after the last, PC5 asks to install it | `PC5 web received …`, `PC5 uploads ftp=… web=… install folder games=1` |
+| 242 | A game's Launch options on the page: type `-windowed`, Save, start the game | the game starts with it; the file is beside its program | `PC5 web wrote launch.txt for …`, the profile's arguments end with `-windowed` |
+| 243 | A game's Newest log, and a log under Logs | both download as zips that open | `PC5 web sent …zip` |
+| 244 | Leave PC5 while the page sends a game | the page says where it stopped; no `.pc5part` file is left in INSTALL | `PC5 web received … cut-short` |

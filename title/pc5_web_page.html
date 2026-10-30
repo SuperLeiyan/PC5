@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC5</title>
+<style>
+:root { --bg: #f4f5f7; --card: #fff; --text: #16181d; --dim: #5d6370; --line: #dde0e6; --accent: #2a6df4; --bad: #c62828; --good: #2e7d32; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111318; --card: #1b1e25; --text: #e9ebf0; --dim: #9aa1ad; --line: #2c313b; --accent: #6a9bff; --bad: #ef6b6b; --good: #6fcf7a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 18px 16px 6px; max-width: 860px; margin: auto; }
+header h1 { margin: 0; font-size: 24px; }
+header p { margin: 2px 0 0; color: var(--dim); }
+main { max-width: 860px; margin: auto; padding: 8px 16px 40px; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 12px 0; }
+h2 { margin: 0 0 8px; font-size: 18px; }
+.dim { color: var(--dim); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, .button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-block; }
+button.main, .button.main { background: var(--accent); border-color: var(--accent); color: #fff; }
+a { color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+input[type=text] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); min-width: 160px; flex: 1; }
+textarea { width: 100%; min-height: 70px; font: 13px/1.4 ui-monospace, Consolas, monospace; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+.game { border-top: 1px solid var(--line); padding: 10px 0; }
+.game:first-of-type { border-top: 0; }
+.game h3 { margin: 0; font-size: 16px; }
+details { margin-top: 6px; }
+summary { cursor: pointer; color: var(--accent); }
+progress { width: 100%; height: 10px; }
+.bad { color: var(--bad); }
+.good { color: var(--good); }
+ul { margin: 0; padding-left: 18px; }
+li { margin: 3px 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<header><h1>PC5</h1><p id="status">Asking the console…</p></header>
+<main>
+<section>
+  <h2>Send a game</h2>
+  <p class="dim">Choose a game's folder: it goes to PC5's INSTALL folder, then PC5 asks to install it.</p>
+  <div class="row">
+    <label class="button main">Choose a folder<input id="folder" type="file" webkitdirectory multiple hidden></label>
+  </div>
+  <p class="dim">A phone that can't choose a folder: type the game's folder name, then choose its files.</p>
+  <div class="row">
+    <input id="name" type="text" placeholder="The game's folder name">
+    <label class="button">Choose files<input id="files" type="file" multiple hidden></label>
+  </div>
+  <p id="sending" class="dim"></p>
+  <progress id="progress" value="0" max="1" hidden></progress>
+</section>
+<section>
+  <h2>Games</h2>
+  <div id="games" class="dim">Loading…</div>
+</section>
+<section>
+  <h2>Logs</h2>
+  <p class="dim">Attach one to an issue on GitHub when a game has a problem.</p>
+  <ul id="logs"><li class="dim">Loading…</li></ul>
+</section>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function size(n) {
+  const units = ["bytes", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + units[i];
+}
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const k in attrs || {}) { if (k === "text") e.textContent = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  for (const c of children) e.append(c);
+  return e;
+}
+async function json(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(r.status + " " + r.statusText);
+  return r.json();
+}
+function path(parts) { return parts.map(encodeURIComponent).join("/"); }
+
+async function status() {
+  try {
+    const s = await json("api/status");
+    let line = "PC5 " + s.version + " · " + size(s.free) + " free on the console";
+    if (s.install) line += " · INSTALL folder: " + size(s.install_free) + " free";
+    $("status").textContent = line;
+  } catch (e) { $("status").textContent = "The console didn't answer: " + e.message; }
+}
+
+function editor(game, kind, label, help) {
+  const box = el("details", {}, el("summary", { text: label }));
+  const area = el("textarea", { spellcheck: "false" });
+  area.value = game[kind];
+  const said = el("span", { class: "dim" });
+  const save = el("button", { text: "Save" });
+  save.onclick = async () => {
+    save.disabled = true;
+    said.textContent = "Saving…";
+    try {
+      const r = await fetch("api/games/" + encodeURIComponent(game.id) + "/" + kind, { method: "PUT", body: area.value });
+      if (!r.ok) throw new Error(await r.text());
+      said.textContent = "Saved: used at the game's next start.";
+      said.className = "good";
+    } catch (e) { said.textContent = "Not saved: " + e.message; said.className = "bad"; }
+    save.disabled = false;
+  };
+  box.append(el("p", { class: "dim", text: help }), area, el("div", { class: "row" }, save, said));
+  return box;
+}
+
+async function games() {
+  const box = $("games");
+  try {
+    const list = await json("api/games");
+    box.textContent = "";
+    box.className = "";
+    if (!list.length) box.append(el("p", { class: "dim", text: "No games yet." }));
+    for (const g of list) {
+      const item = el("div", { class: "game" }, el("h3", { text: g.title }),
+                      el("div", { class: "dim", text: g.detail + (g.folder ? " · " + g.folder : "") }));
+      if (!g.playable && g.problem) item.append(el("div", { class: "bad", text: g.problem }));
+      const row = el("div", { class: "row" });
+      if (g.log) row.append(el("a", { class: "button", href: "api/games/" + encodeURIComponent(g.id) + "/log", text: "Newest log" }));
+      if (row.childNodes.length) item.append(row);
+      if (g.editable) {
+        item.append(editor(g, "launch", "Launch options (launch.txt)",
+                           "The first line that isn't empty or a comment (# or ;) is added to the program's command line."));
+      }
+      item.append(editor(g, "env", "Environment variables (env.txt)", "One NAME=value a line, set before the game starts."));
+      box.append(item);
+    }
+  } catch (e) { box.textContent = "The games didn't load: " + e.message; box.className = "bad"; }
+}
+
+async function logs() {
+  const box = $("logs");
+  try {
+    const list = await json("api/logs");
+    box.textContent = "";
+    if (!list.length) box.append(el("li", { class: "dim", text: "No logs kept." }));
+    for (const l of list)
+      box.append(el("li", {}, el("a", { href: "logs/" + encodeURIComponent(l.name), text: l.name }),
+                    " ", el("span", { class: "dim", text: size(l.size) })));
+  } catch (e) { box.textContent = "The logs didn't load: " + e.message; }
+}
+
+function put(url, file, progress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", url);
+    x.upload.onprogress = e => progress(e.loaded);
+    x.onload = () => x.status < 300 ? resolve() : reject(new Error(x.responseText || x.status));
+    x.onerror = () => reject(new Error("the connection was lost"));
+    x.send(file);
+  });
+}
+
+async function send(files, named) {
+  const list = Array.from(files);
+  if (!list.length) return;
+  const total = list.reduce((n, f) => n + f.size, 0) || 1;
+  let done = 0;
+  const bar = $("progress"), said = $("sending");
+  bar.hidden = false;
+  bar.value = 0;
+  said.className = "dim";
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    const relative = named ? named + "/" + f.name : (f.webkitRelativePath || f.name);
+    said.textContent = "Sending " + (i + 1) + " of " + list.length + ": " + relative;
+    try {
+      await put("upload/" + path(relative.split("/")), f, n => { bar.value = (done + n) / total; });
+    } catch (e) {
+      said.textContent = "Stopped at " + relative + ": " + e.message;
+      said.className = "bad";
+      return;
+    }
+    done += f.size;
+    bar.value = done / total;
+  }
+  said.textContent = "Sent " + list.length + " files (" + size(done) + "). PC5 asks to install the game in a moment.";
+  said.className = "good";
+  status();
+}
+
+$("folder").onchange = e => { send(e.target.files, ""); e.target.value = ""; };
+$("files").onchange = e => {
+  const named = $("name").value.trim();
+  if (!named || /[\\\/]|^\.\.?$/.test(named)) {
+    $("sending").textContent = "Type the game's folder name first (no / or \\).";
+    $("sending").className = "bad";
+  } else send(e.target.files, named);
+  e.target.value = "";
+};
+status();
+games();
+logs();
+</script>
+</body>
+</html>

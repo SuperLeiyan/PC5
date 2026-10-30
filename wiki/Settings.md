@@ -21,11 +21,12 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 
 | Row | What it does |
 | --- | --- |
-| Game maintenance › | Installing and uninstalling games, the game compatibility list and the FTP server. See [Game maintenance](#game-maintenance). |
+| Game maintenance › | Installing and uninstalling games, and the game compatibility list. See [Game maintenance](#game-maintenance). |
 | In games › | Vibration, light bar and adaptive triggers. See [In games](#in-games). |
 | Overlay › | The overlay shown over every game. See [Overlay](#overlay). |
 | File manager › | Copy, move, rename and delete files on the console and its drives. See [File manager](File-manager). |
 | System › | The startup sound, the logs, the picture sources and updates. When a newer PC5 is out, the row says so. See [System](#system). |
+| Network › | The FTP server, the web page, and the username and password they ask for. See [Network](#network). |
 | About PC5 | The version, where games are kept, the free space on the console, and a QR code for Buy Me a Coffee. |
 
 ## Game maintenance
@@ -38,7 +39,6 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 | Install games from USB | Copies one game, or several in a row, from a USB drive to the console. See [Installing games](Installing-games). |
 | Uninstall game | Lists your games to uninstall one, keeping its saves or not, then the saves kept from games uninstalled before, to delete them. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
 | Game compatibility list | Shows a QR code: scan it with your phone to open the [game compatibility list](Game-compatibility), the games players have tried, how each ran and the settings that helped. **Add a game** at the top of that page reports one of yours. |
-| FTP server | **Off** (the default) or **On**: send games from a PC to PC5's INSTALL folder, while PC5 is open. The row shows the address. See [Sending games over FTP](Installing-games#sending-games-over-ftp). |
 
 ![The game compatibility list's QR code](images/compatibility-list.png)
 *Game maintenance › Game compatibility list.*
@@ -76,6 +76,19 @@ These follow the settings in every game, whatever its [controller mode](Controll
 | Update now | | Shows while a newer release is out: downloads it from GitHub, puts it in place of this PC5 and restarts PC5. |
 
 When a newer PC5 is out, PC5 asks when it opens whether to update now or later. PC5 never updates without asking. See [Updating PC5](Installing-and-updating#updating-pc5).
+
+## Network
+
+For sending games and managing PC5 from a PC or a phone on the same network as the console. Both run only while PC5 is open.
+
+| Row | Values | What it does |
+| --- | --- | --- |
+| FTP server | **Off**, On | Send games from a PC to PC5's INSTALL folder with an FTP app such as FileZilla. The row shows the address, for example `ftp://192.168.1.20:2125`. See [Sending games over FTP](Installing-games#sending-games-over-ftp). |
+| Web page | **Off**, On | PC5's page for a browser: send games, edit a game's launch options, download logs. The row shows the address, for example `http://192.168.1.20:8125`. See [Web page](Web-page). |
+| Username | **Any**, or one you type | The username the FTP server and the web page ask for. Press **✕** to type it with the on-screen keyboard; leave it empty for any username. |
+| Password | **None**, or one you type | The password they ask for. It is optional: with none, no password is asked for. Press **✕** to type it; leave it empty to remove it. |
+
+With a username or a password set, both the FTP server and the web page ask for them. They are saved in `settings.txt` as they are typed, so anyone who can read the console's files can read them: use a password you don't use anywhere else.
 
 ## Startup sound
 

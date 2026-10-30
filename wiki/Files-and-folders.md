@@ -37,7 +37,7 @@ PPSA11018/                                  the app (where you installed it)
 | `prefixes/<game>/drive_c/Games/<folder>/` | The game's files, as copied from the USB drive. Saves a game writes into its own folder are here too. | You can add a [`launch.txt`](Launch-options) beside the game's `.exe`. |
 | `prefixes/<game>/pc5/` | PC5's notes on the game (`info.txt`), its controller and frame generation (`controls.txt`), its cover (`cover.bin`) and its background (`background.bin`). | Change these in PC5 (the game's menu), not by hand. You can add an [`env.txt`](Launch-options#a-games-environment-variables-envtxt) here for a game's environment variables, and a `winedebug.txt` when an issue asks for a more detailed log: see [Logs and debugging](Logs-and-debugging#a-more-detailed-log-for-one-game). |
 | `profiles/<game>.profile` | The game's prospero-win profile. | No: PC5 writes it again each time the game starts. Use `launch.txt` for launch options. |
-| `PPSA11018/INSTALL/` | Games you put there over FTP or with the file manager, for PC5 to install as it opens. | Yes. See [The INSTALL folder](Installing-games#the-install-folder). |
+| `PPSA11018/INSTALL/` | Games you put there over FTP, from the web page or with the file manager, for PC5 to install as it opens. | Yes. See [The INSTALL folder](Installing-games#the-install-folder). |
 | `covers/` | Your own covers for installed games. | Yes. See [Covers](Covers#for-a-game-already-installed). |
 | `backgrounds/` | Your own backgrounds for installed games. | Yes. See [Backgrounds](Covers#backgrounds). |
 | `sounds/` | Your own startup sounds. | Yes. See [Settings](Settings#startup-sound). |

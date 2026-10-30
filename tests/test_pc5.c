@@ -12,6 +12,7 @@
 #include "pc5_files.h"
 #include "pc5_ftp.h"
 void pc5_ftp_host_init(void);   /* tests/pc5_ftp_host.c */
+void pc5_web_host_init(void);   /* the same */
 #include "pc5_game.h"
 #include "pc5_home.h"
 #include "pc5_image.h"
@@ -24,6 +25,7 @@ void pc5_ftp_host_init(void);   /* tests/pc5_ftp_host.c */
 #include "pc5_settings.h"
 #include "pc5_source.h"
 #include "pc5_ui.h"
+#include "pc5_web.h"
 #include "pc5_sound.h"
 #include "pc5_tile.h"
 #include "pc5_dds.h"
@@ -7339,6 +7341,24 @@ static void test_install_folder_screens(const char *fonts)
     CHECK(!cuts_after(ui, 0, &canvas), "its row: no text cut short");
     /* Without a username or password set, any login will do. */
     run("python3 -I -c \"import ftplib; f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10); f.login(); f.nlst(); f.quit()\"");
+    /* The web page, on below it: the page at the address it shows, open to anyone while no
+     * username or password is set. */
+    pc5_web_host_init();
+    press(ui, PC5_KEY_DOWN, &canvas);                                 /* Web page */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    Pc5WebStatus web;
+    pc5_web_status(&web);
+    CHECK(web.running && !strcmp(web.address, "127.0.0.1:8125"), "the web page on: %d %s", web.running, web.address);
+    {
+        Pc5Settings set;
+        pc5_settings_load(root, &set);
+        CHECK(set.web_page, "the web page kept on");
+    }
+    CHECK(!cuts_after(ui, 0, &canvas), "the web page's row: no text cut short");
+    run("python3 -I -c \"import json, urllib.request\n"
+        "s = json.load(urllib.request.urlopen('http://127.0.0.1:8125/api/status', timeout=10))\n"
+        "assert s['install'] and s['address'] == '127.0.0.1:8125', s\n"
+        "assert json.load(urllib.request.urlopen('http://127.0.0.1:8125/api/games', timeout=20))\"");
     /* A username and a password typed: both asked for; a wrong one refused. */
     press(ui, PC5_KEY_DOWN, &canvas);                                 /* Username */
     console.typed = "  kevin ";
@@ -7368,6 +7388,14 @@ static void test_install_folder_screens(const char *fonts)
         "try: f.nlst(); sys.exit('listed before logging in')\n"
         "except ftplib.error_perm: pass\n"
         "f.login('kevin', 'pass word'); f.nlst(); f.quit()\"");
+    /* The web page asks for the same. */
+    run("python3 -I -c \"import base64, urllib.request, urllib.error\n"
+        "def get(login):\n"
+        "    r = urllib.request.Request('http://127.0.0.1:8125/api/status')\n"
+        "    if login: r.add_header('Authorization', 'Basic ' + base64.b64encode(login.encode()).decode())\n"
+        "    try: return urllib.request.urlopen(r, timeout=10).status\n"
+        "    except urllib.error.HTTPError as e: return e.code\n"
+        "assert get('') == 401 and get('kevin:nope') == 401 and get('kevin:pass word') == 200\"");
     path(file, sizeof(file),
          "python3 -I -c \"import ftplib, io; f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10); f.login('kevin', 'pass word'); "
          "f.mkd('Starfall'); f.mkd('Starfall/bin'); f.storbinary('STOR Starfall/bin/gl32.exe', open('%s/Starfall/bin/gl32.exe', 'rb')); f.quit()\"",
@@ -7386,13 +7414,31 @@ static void test_install_folder_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);                               /* Later */
     frames(ui, 0, 0, 5, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "library"), "later: %s", pc5_ui_screen(ui));
+    /* A file sent from the web page: offered again once it has settled. */
+    run("python3 -I -c \"import base64, urllib.request\n"
+        "r = urllib.request.Request('http://127.0.0.1:8125/upload/Starfall/readme%20web.txt', data=b'from a phone', method='PUT')\n"
+        "r.add_header('Authorization', 'Basic ' + base64.b64encode(b'kevin:pass word').decode())\n"
+        "assert urllib.request.urlopen(r, timeout=10).status == 201\"");
+    path(file, sizeof(file), "%s/Starfall/readme web.txt", install_dir);
+    CHECK(file_is(file, "from a phone"), "sent from the web page into the INSTALL folder");
+    frames(ui, 0, 0, 5, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "not asked at once: %s", pc5_ui_screen(ui));
+    usleep(3200 * 1000);
+    frames(ui, 0, 0, 5, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "install-ask"), "sent from the web page, then offered: %s", pc5_ui_screen(ui));
+    frames(ui, 0, 0, 25, &canvas);
+    press(ui, PC5_KEY_LEFT, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);                               /* Later */
+    frames(ui, 0, 0, 5, &canvas);
     pc5_ui_destroy(ui);
     pc5_ftp_status(&ftp);
     CHECK(!ftp.running, "stopped as PC5 closes");
+    pc5_web_status(&web);
+    CHECK(!web.running, "the web page stopped as PC5 closes");
     {
         Pc5Settings set;
         pc5_settings_load(root, &set);
-        set.ftp_server = 0;
+        set.ftp_server = set.web_page = 0;
         set.remote_user[0] = set.remote_password[0] = 0;
         pc5_settings_save(root, &set);
     }

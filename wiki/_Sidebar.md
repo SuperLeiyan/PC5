@@ -12,6 +12,7 @@
 - [Home screen tiles](Home-screen-tiles)
 - [Launch options](Launch-options)
 - [File manager](File-manager)
+- [Web page](Web-page)
 
 **Reference**
 - [Files and folders](Files-and-folders)
