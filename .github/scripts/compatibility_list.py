@@ -12,7 +12,8 @@ places.
   (unless a player's report lists the game already); needs testing once it is closed for no
   reply (labelled "needs testing" by no_reply.py: it didn't run for its reporter, but another
   copy or version may); unresolved (it doesn't run) once it is closed as not planned
-  otherwise. An issue labelled "needs steam" (its copy of the game needs Steam or another
+  otherwise; playable with issues once it is closed labelled "playable with issues" (it runs, with
+  a setting or with something still wrong, which the issue says). An issue labelled "needs steam" (its copy of the game needs Steam or another
   store's client running, which PC5 can't do) shows as such, not as a game that doesn't run:
   another copy may. Labelled while open, it gets one comment saying so and is closed as not
   planned. An issue closed as a duplicate
@@ -58,6 +59,7 @@ FIXED = "Works perfectly"           # an issue closed as completed
 UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
 NEEDS_TESTING = "🧪 Needs testing"    # an issue closed for no reply (no_reply.py's label)
 NO_REPLY = "needs testing"
+PLAYABLE = "playable with issues"   # an issue closed with this label: it runs, with a setting or a problem
 NEEDS_STORE = "🏪 This copy needs Steam"   # an issue labelled STORE: the copy, not the game
 STORE = "needs steam"
 STORE_ABOUT = "This copy needs Steam or another store's client running, which PC5 can't do: another copy may run"
@@ -340,6 +342,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                 shown = LOOKED_AT
             elif NO_REPLY in issue["labels"]:
                 shown = NEEDS_TESTING
+            elif PLAYABLE in issue["labels"]:
+                shown = "Playable with issues"
             elif node["stateReason"] == "NOT_PLANNED" or "wontfix" in issue["labels"]:
                 shown = UNRESOLVED
             else:
@@ -355,6 +359,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                     "notes": ("No reply: another copy or version may run. " + saw).strip() if shown == NEEDS_TESTING
                              else "This copy needs Steam (or another store's client) running, which PC5 can't do: "
                                   "a copy that runs without it may run." if shown == NEEDS_STORE
+                             else "It runs: the issue says what to set, or what is still wrong."
+                             if shown == "Playable with issues"
                              else saw if shown != FIXED else "",
                     "url": node["url"], "number": node["number"],
                     "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
