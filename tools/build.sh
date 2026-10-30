@@ -428,7 +428,11 @@ step_wineps5() {
     stage "Wine for the PS5"
     PATH="$B/venv/bin:$PATH" tools/build_wine_ps5.sh --source "$PW/.deps/wine/source" \
         --host-tools "$PW/.deps/wine-tools/build" --prx-foundation "$B/prx-foundation" \
-        --radv "$B/PS5_Vulkan" --ffmpeg-source "$PW/.deps/ffmpeg/source" --framegen "$B/ps5-framegen" --jobs "$jobs"
+        --radv "$B/PS5_Vulkan" --ffmpeg-source "$PW/.deps/ffmpeg/source" --framegen "$B/ps5-framegen" --jobs "$jobs" ||
+        { # what make stopped on, last, where the log's end shows it
+          echo "-- the errors in .deps/wine-ps5/make.log:"
+          grep -E "error:|\] Error [0-9]|No rule to make|undefined (symbol|reference)" "$work/make.log" | tail -25
+          return 1; }
     # The link is skipped, not failed, when something it needs is missing: check what it made.
     for module in ntdll win32u winevulkan libvulkan winedmo winegstreamer; do
         [[ -f $work/prx/sce_module/$module.prx ]] ||
