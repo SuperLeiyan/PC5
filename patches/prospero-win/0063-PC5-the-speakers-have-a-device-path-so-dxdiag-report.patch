@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 14:00:00 +0000
+Subject: [PATCH 63/63] PC5: the speakers have a device path, so dxdiag reports their
+ hardware ID
+
+wineps5 answered no property, so dxdiag's DxDiag_SoundDevices had no szHardwareID, and a game's system check that reads it (Splinter Cell: Conviction's) said no sound device was found. The speakers' device path is an HD Audio function's, as Windows reports HDMI audio from an AMD chip, and they are stereo.
+---
+ wine/wineps5/unix.c | 71 +++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 69 insertions(+), 2 deletions(-)
+
+diff --git a/wine/wineps5/unix.c b/wine/wineps5/unix.c
+index 0b9457c..05129fc 100644
+--- a/wine/wineps5/unix.c
++++ b/wine/wineps5/unix.c
+@@ -23,6 +23,7 @@
+ #endif
+ 
+ #include <stdarg.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <dlfcn.h>
+@@ -852,12 +853,49 @@ static NTSTATUS ps5_is_started(void *args)
+     return unlock_result(&params->result, stream->playing ? S_OK : S_FALSE);
+ }
+ 
++/* The speakers' device path, as Windows has one for each endpoint: dxdiag reports its hardware ID
++ * from it (DxDiag_SoundDevices' szHardwareID), and a game's system check may count a device
++ * without one as no sound device (Splinter Cell: Conviction's says "no sound device was found").
++ * The console's output is HDMI audio from its AMD chip, named as an HD Audio function; the last
++ * part is from the endpoint's GUID, as Windows uses a persistent random number. Their speakers
++ * are stereo, as the mixer plays. */
+ static NTSTATUS ps5_get_prop_value(void *args)
+ {
++    static const GUID PKEY_AudioEndpoint_GUID = {
++        0x1da5d803, 0xd492, 0x4edd, {0x8c, 0x23, 0xe0, 0xc0, 0xff, 0xee, 0x7f, 0x0e}
++    };
++    static const PROPERTYKEY devicepath_key = { /* {b3f8fa53-0004-438e-9003-51a46e139bfc},2 */
++        {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
++    };
+     struct get_prop_value_params *params = args;
++    const GUID *guid = params->guid;
++    char path[96];
++    int len;
+ 
+     params->result = E_NOTIMPL;
+-
++    if (params->flow != eRender || !params->device || strcmp(params->device, device_name))
++        return STATUS_SUCCESS;
++    if (!memcmp(&params->prop->fmtid, &devicepath_key.fmtid, sizeof(GUID)) && params->prop->pid == devicepath_key.pid)
++    {
++        UINT serial = guid ? (guid->Data4[4] << 24) | (guid->Data4[5] << 16) | (guid->Data4[6] << 8) | guid->Data4[7] : 0;
++        len = snprintf(path, sizeof(path), "{1}.HDAUDIO\\FUNC_01&VEN_1002&DEV_AA01\\0&%08X", serial) + 1;
++        if (*params->buffer_size < len * sizeof(WCHAR))
++        {
++            *params->buffer_size = len * sizeof(WCHAR);
++            params->result = E_NOT_SUFFICIENT_BUFFER;
++            return STATUS_SUCCESS;
++        }
++        params->value->vt = VT_LPWSTR;
++        params->value->pwszVal = params->buffer;
++        ntdll_umbstowcs(path, len, params->value->pwszVal, len);
++        params->result = S_OK;
++    }
++    else if (!memcmp(&params->prop->fmtid, &PKEY_AudioEndpoint_GUID, sizeof(GUID)) && params->prop->pid == 3)
++    {
++        params->value->vt = VT_UI4;   /* PhysicalSpeakers */
++        params->value->ulVal = 0x3;   /* SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT */
++        params->result = S_OK;
++    }
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -1307,8 +1345,37 @@ static NTSTATUS ps5_wow64_get_prop_value(void *args)
+         PTR32 buffer;
+         PTR32 buffer_size;
+     } *params32 = args;
++    struct
++    {
++        WORD vt;
++        WORD pad1, pad2, pad3;
++        union
++        {
++            ULONG ulVal;
++            PTR32 ptr;
++        };
++    } *value32;
++    PROPVARIANT value;
++    struct get_prop_value_params params =
++    {
++        .device = ULongToPtr(params32->device),
++        .flow = params32->flow,
++        .guid = ULongToPtr(params32->guid),
++        .prop = ULongToPtr(params32->prop),
++        .value = &value,
++        .buffer = ULongToPtr(params32->buffer),
++        .buffer_size = ULongToPtr(params32->buffer_size)
++    };
+ 
+-    params32->result = E_NOTIMPL;
++    ps5_get_prop_value(&params);
++    params32->result = params.result;
++    if (SUCCEEDED(params.result))
++    {
++        value32 = UlongToPtr(params32->value);
++        value32->vt = value.vt;
++        if (value.vt == VT_UI4) value32->ulVal = value.ulVal;
++        else if (value.vt == VT_LPWSTR) value32->ptr = params32->buffer;
++    }
+     return STATUS_SUCCESS;
+ }
+ 
+-- 
+2.43.0
+
