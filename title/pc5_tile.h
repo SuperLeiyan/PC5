@@ -3,7 +3,8 @@
  * folder registered under another title ID, with pc5-tile.json beside its
  * eboot naming one game:
  *
- *   {"format": "pc5-tile/1", "game": "<id>", "pc5": "<version that made it>"}
+ *   {"format": "pc5-tile/1", "game": "<id>", "prefix": "<its prefix>", "runtime": "<PC5's folder>",
+ *    "pc5": "<version that made it>"}
  *
  * Started from the home screen, the copy shows none of PC5's screens: it
  * readies that game as PC5's screens do before they start one (an
@@ -19,6 +20,9 @@
 #include "pc5_library.h"
 
 #define PC5_TILE_FILE "pc5-tile.json"
+/* The longest PC5 folder a tile can run from, with its end: the tile's eboot keeps it in this
+ * many bytes (tile_runtime, prospero-win patch 0058). */
+enum { PC5_TILE_RUNTIME = 128 };
 #define PC5_TILE_FORMAT "pc5-tile/1"
 
 /* The game of the tile app is (app/pc5-tile.json), in game: 1 when app is a
@@ -60,8 +64,9 @@ typedef struct Pc5TileMake {
     const char *pc5;             /* PC5's installed folder (pc5_upgrade_find): the tiles' runtime */
     const char *library_root;    /* /data/prospero-win */
     const char *id, *prefix, *name;   /* the game's */
-    /* The console's copies of registered apps' sce_sys (/user), for a tile made again in
-     * place: its new art there too. NULL: none. */
+    /* The console's copies of registered apps' sce_sys (/user): a new tile's ID is one no app
+     * registered there has, and a tile made again in place gets its new art there too. NULL:
+     * none. */
     const char *user;
 } Pc5TileMake;
 
@@ -88,7 +93,9 @@ int pc5_tile_art(const char *tile, const char *title_id, const char *library_roo
 
 /* Every tile under tiles whose runtime is a PC5 folder, given pc5's program, its
  * helper and its folder as runtime when its program isn't pc5's (PC5 updated, or
- * moved): a tile's program has to match its runtime. With library_root, also its
+ * moved): a tile's program has to match its runtime. A tile whose runtime is another PC5
+ * folder that is still there is that PC5's, and left alone. Leftovers of a tile made or
+ * replaced part way (.staging-<ID>, .old-<ID>) are deleted. With library_root, also its
  * art again (pc5_tile_art, with user) when one of its game's pictures is newer than
  * it. log, when given, gets a line for each. How many were refreshed. */
 int pc5_tile_refresh(const char *tiles, const char *pc5, const char *library_root, const char *user,

@@ -4683,6 +4683,108 @@ static void test_tile_make(void)
     Pc5TileMake relative = { tiles, "homebrew/PPSA11018", root, "plain", "plain", "Plain", NULL };
     CHECK(pc5_tile_make(&relative, again, error, sizeof(error)) == PC5_TILE_FAILED, "PC5's folder as an absolute path only");
 
+    /* A refresh cut short after its other files (here: the helper, gone): the tile keeps its old
+     * program, so the next refresh does it all again. */
+    path(file, sizeof(file), "%s/eboot.bin", pc5);
+    write_text(file, "PC5's third program");
+    path(file, sizeof(file), "%s/lapy.elf", pc5);
+    path(other, sizeof(other), "%s/lapy.elf.kept", pc5);
+    rename(file, other);
+    CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL) == 0, "the helper gone: not refreshed");
+    path(file, sizeof(file), "%s/%s/eboot.bin", tiles, id);
+    CHECK(!pc5_read_file(file, &text, 64) && text.len == 17 && !memcmp(text.data, "PC5's new program", 17),
+          "its old program kept, not half new");
+    pc5_buf_free(&text);
+    path(file, sizeof(file), "%s/lapy.elf", pc5);
+    rename(other, file);
+    CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL) == 1, "and done whole the next time");
+    path(file, sizeof(file), "%s/%s/eboot.bin", tiles, id);
+    CHECK(!pc5_read_file(file, &text, 64) && text.len == 19 && !memcmp(text.data, "PC5's third program", 19),
+          "its new program then");
+    pc5_buf_free(&text);
+    path(file, sizeof(file), "%s/%s/pc5-tile.json", tiles, id);
+    CHECK(!pc5_read_file(file, &text, 4096) && !pc5_buf_terminate(&text) && strstr((char *)text.data, "\"prefix\": \"neon\""),
+          "its game's prefix named: %s", text.len ? (char *)text.data : "");
+    pc5_buf_free(&text);
+
+    /* A second PC5 (a test build in another folder): its tiles stay its own while it is there,
+     * and come to this one once it is gone. */
+    {
+        char second_pc5[PC5_PATH], from[PC5_PATH], to[PC5_PATH];
+        static const char *const files[] = { "eboot.bin", "sce_module/libc.prx", "lapy.elf", "sce_sys/param.json" };
+        path(second_pc5, sizeof(second_pc5), "%s/PPSA11018-test", tiles);
+        for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+            path(from, sizeof(from), "%s/%s", pc5, files[i]);
+            path(to, sizeof(to), "%s/%s", second_pc5, files[i]);
+            copy_file(from, to);
+        }
+        path(to, sizeof(to), "%s/eboot.bin", second_pc5);
+        write_text(to, "the test build");
+        CHECK(pc5_tile_refresh(tiles, second_pc5, root, NULL, NULL, NULL) == 0, "the test build leaves this PC5's tile");
+        path(file, sizeof(file), "%s/%s", tiles, id);
+        CHECK(pc5_tile_read_all(file, game, runtime, sizeof(runtime), error, sizeof(error)) == 1 && !strcmp(runtime, pc5),
+              "still this PC5's: %s", runtime);
+        path(from, sizeof(from), "%s/eboot.bin", pc5);
+        path(to, sizeof(to), "%s/eboot.bin.away", pc5);
+        rename(from, to);
+        CHECK(pc5_tile_refresh(tiles, second_pc5, root, NULL, NULL, NULL) == 1, "this PC5 gone: the test build's now");
+        CHECK(pc5_tile_read_all(file, game, runtime, sizeof(runtime), error, sizeof(error)) == 1 &&
+              !strcmp(runtime, second_pc5), "its runtime the test build: %s", runtime);
+        rename(to, from);
+        CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL) == 0, "back: the test build's while it is there");
+        path(to, sizeof(to), "rm -rf '%s'", second_pc5);
+        run(to);
+        CHECK(pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL) == 1, "and this PC5's again once it is gone");
+    }
+
+    /* Left by a PC5 stopped part way: a staged tile and an old one put aside, deleted. */
+    path(file, sizeof(file), "%s/.staging-PPSA99777/eboot.bin", tiles);
+    write_text(file, "half a tile");
+    path(file, sizeof(file), "%s/.old-PPSA99778/eboot.bin", tiles);
+    write_text(file, "an old tile");
+    pc5_tile_refresh(tiles, pc5, root, NULL, NULL, NULL);
+    CHECK(count_entries(tiles, ".staging-") == 0 && count_entries(tiles, ".old-") == 0, "leftovers deleted");
+
+    /* A new tile's ID is none the console has registered, and its art goes only into its own
+     * folder: another app's registration under /user is left alone. */
+    {
+        char user[PC5_PATH], dir[PC5_PATH], made_id[16];
+        path(user, sizeof(user), "%s/tile-user-new", work);
+        for (int n = 99201; n < 99900; n += 2) {   /* every odd one registered by another app */
+            path(dir, sizeof(dir), "%s/app/PPSA%05d/sce_sys", user, n);
+            pc5_mkdirs(dir);
+            path(dir, sizeof(dir), "%s/appmeta/PPSA%05d", user, n);
+            pc5_mkdirs(dir);
+        }
+        int registered = 0;
+        for (int round = 0; round < 20; round++) {
+            Pc5TileMake fresh = { tiles, pc5, root, "fresh", "fresh", "Fresh", user };
+            made_id[0] = 0;
+            if (pc5_tile_make(&fresh, made_id, error, sizeof(error)) != PC5_TILE_MADE) { registered = 1; break; }
+            registered |= (made_id[8] - '0') % 2 == 1;
+            path(dir, sizeof(dir), "%s/app/%s/sce_sys/icon0.png", user, made_id);
+            registered |= pc5_exists(dir);
+            pc5_home_remove(tiles, "fresh");
+        }
+        CHECK(!registered, "20 new tiles: never a registered app's ID, no art under /user: %s %s", made_id, error);
+        path(dir, sizeof(dir), "%s/app/PPSA99201/sce_sys/icon0.png", user);
+        CHECK(!pc5_exists(dir), "another app's registration untouched");
+        path(dir, sizeof(dir), "rm -rf '%s'", user);
+        run(dir);
+    }
+
+    /* A PC5 folder whose path is longer than a tile's eboot holds: refused, nothing made. */
+    {
+        char long_pc5[PC5_PATH];
+        Pc5TileMake far = { tiles, long_pc5, root, "plain", "plain", "Plain", NULL };
+        int n = snprintf(long_pc5, sizeof(long_pc5), "%s/", work);
+        while (n < PC5_TILE_RUNTIME + 4) long_pc5[n++] = 'x';
+        long_pc5[n] = 0;
+        CHECK(pc5_tile_make(&far, again, error, sizeof(error)) == PC5_TILE_FAILED && strstr(error, "too long"),
+              "too long a path: %s", error);
+        CHECK(count_entries(tiles, ".staging-") == 0, "nothing staged left");
+    }
+
     /* Taken away: the tile goes, PC5 stays. */
     CHECK(pc5_home_remove(tiles, "neon") == 1, "taken away");
     path(file, sizeof(file), "%s/%s", tiles, id);

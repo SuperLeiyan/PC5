@@ -219,15 +219,6 @@ static void delete_tree(const char *path)
     pc5_remove_end(&remove);
 }
 
-/* from's file copied to to, runnable (an eboot or a module). */
-static int copy_program(const char *from, const char *to)
-{
-    Pc5Buf data = { 0 };
-    int status = pc5_read_file(from, &data, 64u << 20) || pc5_write_file(to, data.data, data.len) || chmod(to, 0755);
-    pc5_buf_free(&data);
-    return status ? -1 : 0;
-}
-
 /* The same file: the same size and bytes. */
 static int same_file(const char *a, const char *b)
 {
@@ -240,55 +231,93 @@ static int same_file(const char *a, const char *b)
 }
 
 /* The program the console starts, its runtime, and Lapy's helper for the tile's ID, from
- * PC5's folder into dir; then pc5-tile.json naming the game and PC5's folder. */
-static int program_files(const char *pc5, const char *dir, const char *title_id, const char *game, char *error,
-                         size_t size)
+ * PC5's folder into dir; then pc5-tile.json naming the game, its prefix and PC5's folder.
+ * Everything is read (and the helper patched) before anything is written, and eboot.bin is
+ * written last: a tile refreshed only in part keeps its old program, so the next refresh sees
+ * it differs and does it all again. */
+static int program_files(const char *pc5, const char *dir, const char *title_id, const char *game, const char *prefix,
+                         char *error, size_t size)
 {
-    static const char *const programs[] = { "eboot.bin", "sce_module/libc.prx" };
     char from[PC5_PATH], to[PC5_PATH];
-    Pc5Buf data = { 0 };
-    int status = -1;
+    Pc5Buf eboot = { 0 }, libc = { 0 }, lapy = { 0 }, text = { 0 };
+    int status = -1, failed;
 
-    if (pc5_format(to, sizeof(to), "%s/sce_module", dir) || pc5_mkdirs(to)) {
-        snprintf(error, size, "PC5 can't make the tile's folders.");
+    /* The tile finds its runtime with this path: as long as Wine's own (tile_runtime in
+     * wine64_main.c, 128 bytes) holds it. */
+    if (strlen(pc5) >= PC5_TILE_RUNTIME) {
+        snprintf(error, size, "PC5's folder path is too long for a tile (%d characters at most).", PC5_TILE_RUNTIME - 1);
         return -1;
     }
-    for (size_t i = 0; i < sizeof(programs) / sizeof(programs[0]); i++)
-        if (pc5_format(from, sizeof(from), "%s/%s", pc5, programs[i]) ||
-            pc5_format(to, sizeof(to), "%s/%s", dir, programs[i]) || copy_program(from, to)) {
-            snprintf(error, size, "PC5 can't copy its %s into the tile.", programs[i]);
-            return -1;
-        }
+    if (pc5_format(from, sizeof(from), "%s/eboot.bin", pc5) || pc5_read_file(from, &eboot, 64u << 20) ||
+        pc5_format(from, sizeof(from), "%s/sce_module/libc.prx", pc5) || pc5_read_file(from, &libc, 64u << 20)) {
+        snprintf(error, size, "PC5 can't read its own program to copy into the tile.");
+        goto done;
+    }
     /* lapy.elf: a copy, with the tile's ID in place of PC5's. */
-    if (pc5_format(from, sizeof(from), "%s/lapy.elf", pc5) || pc5_read_file(from, &data, 16u << 20)) {
+    if (pc5_format(from, sizeof(from), "%s/lapy.elf", pc5) || pc5_read_file(from, &lapy, 16u << 20)) {
         snprintf(error, size, "PC5's folder has no lapy.elf.");
         goto done;
     }
-    if (pc5_tile_lapy_patch(data.data, data.len, title_id, error, size)) goto done;
-    if (pc5_format(to, sizeof(to), "%s/lapy.elf", dir) || pc5_write_file(to, data.data, data.len) || chmod(to, 0755)) {
+    if (pc5_tile_lapy_patch(lapy.data, lapy.len, title_id, error, size)) goto done;
+    /* PC5's folder as the tile's runtime: a path in JSON, its quotes and backslashes escaped. */
+    failed = pc5_buf_printf(&text, "{\n  \"format\": \"" PC5_TILE_FORMAT "\",\n  \"game\": \"%s\",\n  \"prefix\": \"%s\",\n"
+                                   "  \"runtime\": \"", game, prefix && valid_id(prefix) ? prefix : game);
+    for (const char *c = pc5; !failed && *c; c++)
+        failed = *c == '"' || *c == '\\' ? pc5_buf_printf(&text, "\\%c", *c) : pc5_buf_put(&text, c, 1);
+    if (!failed) failed = pc5_buf_printf(&text, "\",\n  \"pc5\": \"" PC5_VERSION "\"\n}\n");
+    if (failed) {
+        snprintf(error, size, "PC5 ran out of memory making the tile.");
+        goto done;
+    }
+    if (pc5_format(to, sizeof(to), "%s/sce_module", dir) || pc5_mkdirs(to)) {
+        snprintf(error, size, "PC5 can't make the tile's folders.");
+        goto done;
+    }
+    if (pc5_format(to, sizeof(to), "%s/sce_module/libc.prx", dir) || pc5_write_file(to, libc.data, libc.len) ||
+        chmod(to, 0755)) {
+        snprintf(error, size, "PC5 can't copy its sce_module/libc.prx into the tile.");
+        goto done;
+    }
+    if (pc5_format(to, sizeof(to), "%s/lapy.elf", dir) || pc5_write_file(to, lapy.data, lapy.len) || chmod(to, 0755)) {
         snprintf(error, size, "PC5 can't write the tile's lapy.elf.");
         goto done;
     }
-    pc5_buf_free(&data);
-    /* PC5's folder as the tile's runtime: a path in JSON, its quotes and backslashes escaped. */
-    {
-        Pc5Buf text = { 0 };
-        int failed = pc5_buf_printf(&text, "{\n  \"format\": \"" PC5_TILE_FORMAT "\",\n  \"game\": \"%s\",\n  \"runtime\": \"",
-                                    game);
-        for (const char *c = pc5; !failed && *c; c++)
-            failed = *c == '"' || *c == '\\' ? pc5_buf_printf(&text, "\\%c", *c) : pc5_buf_put(&text, c, 1);
-        if (!failed) failed = pc5_buf_printf(&text, "\",\n  \"pc5\": \"" PC5_VERSION "\"\n}\n");
-        if (failed || pc5_format(to, sizeof(to), "%s/" PC5_TILE_FILE, dir) || pc5_write_file(to, text.data, text.len)) {
-            pc5_buf_free(&text);
-            snprintf(error, size, "PC5 can't write the tile's " PC5_TILE_FILE ".");
-            goto done;
-        }
-        pc5_buf_free(&text);
+    if (pc5_format(to, sizeof(to), "%s/" PC5_TILE_FILE, dir) || pc5_write_file(to, text.data, text.len)) {
+        snprintf(error, size, "PC5 can't write the tile's " PC5_TILE_FILE ".");
+        goto done;
+    }
+    if (pc5_format(to, sizeof(to), "%s/eboot.bin", dir) || pc5_write_file(to, eboot.data, eboot.len) || chmod(to, 0755)) {
+        snprintf(error, size, "PC5 can't copy its eboot.bin into the tile.");
+        goto done;
     }
     status = 0;
 done:
-    pc5_buf_free(&data);
+    pc5_buf_free(&eboot);
+    pc5_buf_free(&libc);
+    pc5_buf_free(&lapy);
+    pc5_buf_free(&text);
     return status;
+}
+
+/* The game's prefix as the tile names it (pc5-tile.json's "prefix"), or "" when it doesn't
+ * (a tile made before it did: its game's id is its prefix then, as PC5 makes them). */
+static void tile_prefix(const char *folder, char *out, size_t size)
+{
+    char path[PC5_PATH];
+    Pc5Buf text = { 0 };
+    Pc5Json json = { 0 };
+    uint32_t value;
+    out[0] = 0;
+    if (pc5_format(path, sizeof(path), "%s/" PC5_TILE_FILE, folder) || pc5_read_file(path, &text, 64 * 1024) ||
+        pc5_json_parse(&json, (const char *)text.data, text.len, 256)) {
+        pc5_buf_free(&text);
+        return;
+    }
+    value = pc5_json_get(&json, 0, "prefix");
+    if (!value || json.tokens[value].type != PC5_JSON_STRING || pc5_json_text(&json, value, out, size) || !valid_id(out))
+        out[0] = 0;
+    pc5_json_free(&json);
+    pc5_buf_free(&text);
 }
 
 /* ---- the tile's art --------------------------------------------------------------- */
@@ -424,9 +453,40 @@ done:
     return status;
 }
 
+/* A title ID for a new tile, in psfwd's range (PPSA99200 to PPSA99899, not a known app's), that
+ * nothing under tiles has, nor the console's registrations (user/app, user/appmeta: an app
+ * registered from another folder or drive keeps its ID there). 1 with it in out, or 0. */
+static int new_tile_id(const char *tiles, const char *user, char out[16])
+{
+    char first[16];
+    int start;
+    if (!psfwd_new_title_id(tiles, first)) return 0;
+    start = atoi(first + 4);
+    /* From psfwd's pick on, through its range (it picks the same one again within a second). */
+    for (int step = 0; step < 700; step++) {
+        char path[PC5_PATH];
+        int number = 99200 + (start - 99200 + step) % 700, taken = 0;
+        snprintf(out, 16, "PPSA%05d", number);
+        /* psfwd's IDs of known apps in its range, which it never picks */
+        if (!strcmp(out, "PPSA99203") || !strcmp(out, "PPSA99764")) continue;
+        if (!pc5_format(path, sizeof(path), "%s/%s", tiles, out)) taken |= pc5_exists(path);
+        if (!pc5_format(path, sizeof(path), "%s/.staging-%s", tiles, out)) taken |= pc5_exists(path);
+        if (!pc5_format(path, sizeof(path), "%s/.old-%s", tiles, out)) taken |= pc5_exists(path);
+        if (user && user[0]) {
+            if (!pc5_format(path, sizeof(path), "%s/app/%s", user, out)) taken |= pc5_exists(path);
+            if (!pc5_format(path, sizeof(path), "%s/appmeta/%s", user, out)) taken |= pc5_exists(path);
+        }
+        if (!taken) return 1;
+    }
+    out[0] = 0;
+    return 0;
+}
+
 int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t size)
 {
-    char stage[PC5_PATH], final[PC5_PATH];
+    char stage[PC5_PATH], final[PC5_PATH], old[PC5_PATH];
+    Pc5TileMake tile = *make;
+    int again;
 
     out[0] = 0;
     error[0] = 0;
@@ -435,37 +495,51 @@ int pc5_tile_make(const Pc5TileMake *make, char out[16], char *error, size_t siz
         snprintf(error, size, "PC5 doesn't know where to make the tile.");
         return PC5_TILE_FAILED;
     }
-    if (!pc5_home_find(make->tiles, make->id, out) && (pc5_mkdirs(make->tiles) || !psfwd_new_title_id(make->tiles, out))) {
-        snprintf(error, size, "PC5 can't use %s: %s.", make->tiles, strerror(errno));
+    again = pc5_home_find(make->tiles, make->id, out);
+    if (!again && (pc5_mkdirs(make->tiles) || !new_tile_id(make->tiles, make->user, out))) {
+        snprintf(error, size, "PC5 can't find a free title ID for the tile in %s.", make->tiles);
         out[0] = 0;
         return PC5_TILE_FAILED;
     }
+    /* Only the game's own tile, made again in place, has its art updated in the console's
+     * registrations: a new ID's are someone else's, should the console have one. */
+    if (!again) tile.user = NULL;
     if (pc5_format(stage, sizeof(stage), "%s/.staging-%s", make->tiles, out) ||
+        pc5_format(old, sizeof(old), "%s/.old-%s", make->tiles, out) ||
         pc5_format(final, sizeof(final), "%s/%s", make->tiles, out)) {
         snprintf(error, size, "The tiles' folder path is too long.");
         out[0] = 0;
         return PC5_TILE_FAILED;
     }
     delete_tree(stage);
-    if (pc5_mkdirs(stage) || program_files(make->pc5, stage, out, make->id, error, size) ||
-        tile_sce_sys(make, stage, out, error, size)) {
+    delete_tree(old);
+    if (pc5_mkdirs(stage) || program_files(make->pc5, stage, out, make->id, make->prefix, error, size) ||
+        tile_sce_sys(&tile, stage, out, error, size)) {
         if (!error[0]) snprintf(error, size, "PC5 can't make %s: %s.", stage, strerror(errno));
         delete_tree(stage);
         out[0] = 0;
         return PC5_TILE_FAILED;
     }
-    /* The old tile goes only once the new one is whole. */
-    delete_tree(final);
-    if (rename(stage, final)) {
-        snprintf(error, size, "PC5 can't put the tile in place: %s.", strerror(errno));
+    /* The old tile goes only once the new one is in its place: moved aside first, and put
+     * back should the new one not go in. */
+    if (pc5_exists(final) && rename(final, old)) {
+        snprintf(error, size, "PC5 can't replace the tile: %s.", strerror(errno));
         delete_tree(stage);
         out[0] = 0;
         return PC5_TILE_FAILED;
     }
+    if (rename(stage, final)) {
+        snprintf(error, size, "PC5 can't put the tile in place: %s.", strerror(errno));
+        delete_tree(stage);
+        if (pc5_exists(old)) (void)rename(old, final);
+        out[0] = 0;
+        return PC5_TILE_FAILED;
+    }
+    delete_tree(old);
     return PC5_TILE_MADE;
 }
 
-/* 1 when one of the game's pictures is newer than the tile's art (its icon0.png). */
+/* 1 when one of the game's pictures (in its prefix) is newer than the tile's art (its icon0.png). */
 static int art_stale(const char *folder, const char *library_root, const char *game)
 {
     static const char *const pictures[] = { "cover.bin", "background.bin", "icon.bin", "background-none.txt" };
@@ -490,19 +564,35 @@ int pc5_tile_refresh(const char *tiles, const char *pc5, const char *library_roo
 
     if (!tiles || !pc5 || !absolute_path(pc5) || !(dir = opendir(tiles))) return 0;
     while ((entry = readdir(dir))) {
-        char folder[PC5_PATH], game[PC5_ID], runtime[PC5_PATH], error[PC5_ERROR], ours[PC5_PATH], theirs[PC5_PATH];
+        char folder[PC5_PATH], game[PC5_ID], prefix[PC5_ID], runtime[PC5_PATH], error[PC5_ERROR], ours[PC5_PATH],
+             theirs[PC5_PATH];
+        /* A tile made or replaced when PC5 stopped part way: the new one, or the old one put
+         * aside, left beside the tile. */
+        if ((!strncmp(entry->d_name, ".staging-", 9) && tile_id(entry->d_name + 9)) ||
+            (!strncmp(entry->d_name, ".old-", 5) && tile_id(entry->d_name + 5))) {
+            if (!pc5_join(folder, sizeof(folder), tiles, entry->d_name)) delete_tree(folder);
+            continue;
+        }
         if (!tile_id(entry->d_name) || pc5_join(folder, sizeof(folder), tiles, entry->d_name) ||
             pc5_tile_read_all(folder, game, runtime, sizeof(runtime), error, sizeof(error)) != 1 || !runtime[0])
             continue;
+        /* A tile another PC5 made runs from that PC5's folder while it is there (a second PC5,
+         * a test build): it stays that one's. It comes to this PC5 once that folder is gone. */
+        if (strcmp(runtime, pc5) && pc5_format(theirs, sizeof(theirs), "%s/eboot.bin", runtime) == 0 &&
+            pc5_is_file(theirs) && pc5_format(theirs, sizeof(theirs), "%s/sce_sys/param.json", runtime) == 0 &&
+            pc5_is_file(theirs))
+            continue;
+        tile_prefix(folder, prefix, sizeof(prefix));
+        if (!prefix[0]) pc5_copy(prefix, sizeof(prefix), game);
         /* This PC5's program, with this folder as its runtime. */
         int program = strcmp(runtime, pc5) || pc5_format(ours, sizeof(ours), "%s/eboot.bin", pc5) ||
                       pc5_format(theirs, sizeof(theirs), "%s/eboot.bin", folder) || !same_file(ours, theirs);
         /* The game's pictures, changed since (a background found while the library showed). */
-        int art = library_root && art_stale(folder, library_root, game);
+        int art = library_root && art_stale(folder, library_root, prefix);
         if (!program && !art) continue;
-        int status = program ? program_files(pc5, folder, entry->d_name, game, error, sizeof(error)) : 0;
+        int status = program ? program_files(pc5, folder, entry->d_name, game, prefix, error, sizeof(error)) : 0;
         if (!status && art)
-            status = pc5_tile_art(folder, entry->d_name, library_root, game, pc5, user, error, sizeof(error));
+            status = pc5_tile_art(folder, entry->d_name, library_root, prefix, pc5, user, error, sizeof(error));
         snprintf(line, sizeof(line), "PC5 tile refreshed %s game=%s runtime=%s program=%d art=%d%s%s", entry->d_name, game,
                  pc5, program, art, status ? " failed: " : "", status ? error : "");
         if (log) log(context, line);

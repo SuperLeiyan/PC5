@@ -49,7 +49,7 @@ typedef enum Screen {
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
     S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE, S_FILES, S_FILES_MENU,
-    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING
+    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING, S_TILE_ART
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -60,7 +60,7 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
                                             "compatibility", "graphics-api", "report-check", "report-update", "files",
                                             "files-menu", "files-typing", "files-conflict", "files-delete",
-                                            "files-working" };
+                                            "files-working", "tile-art" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;
@@ -1453,14 +1453,20 @@ static void pick_fetch(Pc5Ui *ui, const Pc5Game *game, int step)
 
 /* The game's tile, an app of its own, gets the pictures just changed: its icon0.png and
  * background, in its folder and in the console's copies. A forwarder tile is left as it was. */
+/* 1 when the game has a tile of that kind (its folder in dir, its runtime in runtime). */
+static int tile_app(Pc5Ui *ui, const Pc5Game *game, char dir[PC5_PATH], char runtime[PC5_PATH])
+{
+    char tile_game[PC5_ID], error[PC5_ERROR];
+    return ui->config.tiles_root && ui->tile[0] && !pc5_join(dir, PC5_PATH, ui->config.tiles_root, ui->tile) &&
+           pc5_tile_read_all(dir, tile_game, runtime, PC5_PATH, error, sizeof(error)) == 1 &&
+           !strcmp(tile_game, game->id) && runtime[0];
+}
+
 static void tile_art_refresh(Pc5Ui *ui, const Pc5Game *game)
 {
-    char dir[PC5_PATH], tile_game[PC5_ID], runtime[PC5_PATH], error[PC5_ERROR];
+    char dir[PC5_PATH], runtime[PC5_PATH], error[PC5_ERROR];
 
-    if (!ui->config.tiles_root || !ui->tile[0] || pc5_join(dir, sizeof(dir), ui->config.tiles_root, ui->tile) ||
-        pc5_tile_read_all(dir, tile_game, runtime, sizeof(runtime), error, sizeof(error)) != 1 ||
-        strcmp(tile_game, game->id) || !runtime[0])
-        return;
+    if (!tile_app(ui, game, dir, runtime)) return;
     int status = pc5_tile_art(dir, ui->tile, ui->root, game->prefix, runtime, ui->config.user, error, sizeof(error));
     say(ui, "PC5 tile art tile=%s game=%s status=%d%s%s", ui->tile, game->id, status, status ? " why=" : "",
         status ? error : "");
@@ -1522,8 +1528,13 @@ static void pick_use(Pc5Ui *ui, const Pc5Game *game)
                 S_PICTURE);
         return;
     }
-    tile_art_refresh(ui, game);
-    picture_leave(ui);
+    /* The tile's 4K background takes a few seconds to make: said on a screen of its own. */
+    {
+        char dir[PC5_PATH], runtime[PC5_PATH];
+        int tile = tile_app(ui, game, dir, runtime);
+        picture_leave(ui);
+        if (tile) go(ui, S_TILE_ART);
+    }
 }
 
 static void speed_reset(Pc5Ui *ui)
@@ -3796,6 +3807,14 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_FILES_WORKING:
         files_update(ui, k);
         break;
+    case S_TILE_ART:
+        if (!ui->drawn) break;
+        {
+            int index = pc5_library_find(&ui->library, ui->launch_id);
+            if (index >= 0) tile_art_refresh(ui, &ui->library.games[index]);
+        }
+        go(ui, S_GAME_MENU);   /* on the row picture_leave chose */
+        break;
     case S_REPORT_CHECK:
         if (!ui->drawn) break;
         update_check_now(ui, 2);
@@ -5702,6 +5721,10 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_FILES_DELETE:
     case S_FILES_WORKING:
         files_draw(ui, c);
+        break;
+    case S_TILE_ART:
+        game_menu_screen(ui, c, ui->menu);
+        busy_dialog(ui, c, "Updating the home screen tile", "Its picture and background", 0);
         break;
     case S_REPORT_CHECK: message_dialog(ui, c); busy_dialog(ui, c, "Checking for a newer PC5", "A newer one may have fixed it", 0); break;
     case S_REPORT_UPDATE: {
