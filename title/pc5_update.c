@@ -48,10 +48,12 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
     {
         /* The release the update zip holds the changes since, in a line of the notes GitHub
          * doesn't show (from 1.9.8's releases): "<!-- pc5-update-from: 1.9.7 -->". */
-        static char notes[64 * 1024];
+        /* On the heap: the check may run on a thread of its own, and once at a time on each. */
+        enum { NOTES = 64 * 1024 };
         static const char mark[] = "<!-- pc5-update-from: ";
+        char *notes = pc5_alloc(NOTES);
         const char *at;
-        if (!pc5_json_text(&json, pc5_json_get(&json, 0, "body"), notes, sizeof(notes)) && (at = strstr(notes, mark))) {
+        if (notes && !pc5_json_text(&json, pc5_json_get(&json, 0, "body"), notes, NOTES) && (at = strstr(notes, mark))) {
             char from[32];
             size_t n = 0;
             at += sizeof(mark) - 1;
@@ -65,6 +67,7 @@ void pc5_update_check(const Pc5Http *http, const char *current, Pc5Update *updat
             from[n] = 0;
             if (n && !strncmp(at + n, " -->", 4)) pc5_copy(update->delta_from, sizeof(update->delta_from), from);
         }
+        pc5_free(notes);
     }
     /* The app's zip and the update zip among the release's files. */
     uint32_t assets = pc5_json_get(&json, 0, "assets");

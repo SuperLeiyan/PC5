@@ -488,3 +488,11 @@ controller's speaker.
 | 261 | A .NET game installed with this build | it starts | no `mscoree` errors |
 | 262 | A game installed before this build | it starts as before | |
 | 263 | A game installed with this build that ships its own `d3dx9_43.dll` or `xinput1_3.dll` | its own one is used | `Loaded L"C:\\Games\\…\\d3dx9_43.dll" … native` |
+
+## 2.0.3-test3: Wine's DLLs listed, and copied before a game changes one
+
+| # | Do | Expect | Expect in the log |
+| --- | --- | --- | --- |
+| 264 | File manager (or a game's own file dialog) on a game installed with this build: `drive_c/windows/system32` from the game's side, a program that lists it (`dir C:\windows\system32\d3dx9_*.dll` in a game's console) | Wine's DLLs are listed | |
+| 265 | A game (or its setup) that writes one of Windows' DLLs into system32 | it can; another game still uses Wine's own | `wine-ps5: …system32/….dll copied into the game's Windows before it changes it` |
+| 266 | Settings › System › Check now while PC5 has just opened | one answer, the newest PC5 named right | `PC5 update state=…` |

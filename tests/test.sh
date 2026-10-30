@@ -113,8 +113,9 @@ else
     echo "test_wine_fs: left out, no Wine source at $wine (tools/build.sh sources fetches it)"
 fi
 
-# Wine patch 0985: a name missing from a game's system32 or syswow64 is Wine's own file,
-# taken from Wine's file.c with prospero-win's patches applied (as for 0935 above).
+# Wine patches 0985 and 0986: a name missing from a game's system32 or syswow64 is Wine's own
+# file, and an open that changes it copies it in first, taken from Wine's file.c with
+# prospero-win's patches applied (as for 0935 above).
 if [[ -f $wine/dlls/ntdll/unix/file.c ]]; then
     mkdir -p "$out/wine-system/dlls/ntdll/unix"
     cp "$wine/dlls/ntdll/unix/file.c" "$out/wine-system/dlls/ntdll/unix/"
@@ -122,8 +123,12 @@ if [[ -f $wine/dlls/ntdll/unix/file.c ]]; then
         grep -q '^+++ b/dlls/ntdll/unix/file\.c' "$patch" || continue
         GIT_CEILING_DIRECTORIES=$out git -C "$out/wine-system" apply --include=dlls/ntdll/unix/file.c "$patch"
     done
-    awk '/^static NTSTATUS ps5_wine_system_file/{p=1} p{print} p&&/^}/{exit}' \
-        "$out/wine-system/dlls/ntdll/unix/file.c" > "$out/wine-system/system_func.c"
+    for func in "static NTSTATUS ps5_wine_system_file" "static BOOL ps5_is_wine_own" "static BOOL ps5_open_changes" \
+                "static NTSTATUS ps5_copy_wine_own"; do
+        awk -v head="^$func\\(" '$0 ~ head {p=1} p{print} p&&/^}/{exit}' "$out/wine-system/dlls/ntdll/unix/file.c"
+    done > "$out/wine-system/system_func.c"
+    grep -q ps5_copy_wine_own "$out/wine-system/system_func.c" ||
+        { echo "test_wine_system: Wine patch 0986 isn't applied" >&2; exit 1; }
     grep -q ps5_wine_system_file "$out/wine-system/system_func.c" ||
         { echo "test_wine_system: Wine patch 0985 isn't applied" >&2; exit 1; }
     cc -std=c11 -Wall -Wextra -Werror -I"$out/wine-system" tests/test_wine_system.c -o "$out/test_wine_system"

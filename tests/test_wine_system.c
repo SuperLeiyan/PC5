@@ -18,8 +18,41 @@ typedef long NTSTATUS;
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define TRACE(...) ((void)0)
 #define debugstr_wn(name, length) ((void)(name), (void)(length), "")
+#define STATUS_DISK_FULL 0xc000007fL
+typedef int BOOL;
+typedef unsigned int ULONG, ACCESS_MASK;
+typedef int LONG;
+#define TRUE 1
+#define FALSE 0
+#define GENERIC_WRITE 0x40000000u
+#define GENERIC_ALL 0x10000000u
+#define MAXIMUM_ALLOWED 0x02000000u
+#define GENERIC_READ 0x80000000u
+#define FILE_READ_DATA 0x0001u
+#define FILE_WRITE_DATA 0x0002u
+#define FILE_APPEND_DATA 0x0004u
+#define FILE_WRITE_EA 0x0010u
+#define FILE_READ_ATTRIBUTES 0x0080u
+#define FILE_WRITE_ATTRIBUTES 0x0100u
+#define DELETE 0x00010000u
+#define WRITE_DAC 0x00040000u
+#define WRITE_OWNER 0x00080000u
+#define SYNCHRONIZE 0x00100000u
+#define FILE_SUPERSEDE 0
+#define FILE_OPEN 1
+#define FILE_CREATE 2
+#define FILE_OPEN_IF 3
+#define FILE_OVERWRITE 4
+#define FILE_OVERWRITE_IF 5
+#define FILE_DELETE_ON_CLOSE 0x1000u
+#define MESSAGE(...) ((void)0)
+static LONG InterlockedExchange(LONG *target, LONG value) { LONG old = *target; *target = value; return old; }
+static NTSTATUS errno_to_status(int error) { return error ? 0xc0000001L : 0; }
 static const char *config_dir;
 static const char **dll_paths;
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "system_func.c"
 
 static int failures;
@@ -101,6 +134,33 @@ int main(void)
     CHECK(served_from("/dosdevices/c:/windows/system32/drivers", "kernel32.dll", NULL));
     CHECK(served_from("/dosdevices/c:/Games/system32", "kernel32.dll", NULL));
     CHECK(served_from("/dosdevices/c:/windows/system3", "kernel32.dll", NULL));
+    /* 0986: which paths are Wine's own, which opens change a file, and the copy made first. */
+    CHECK(ps5_is_wine_own(dll64) && ps5_is_wine_own(dll32));
+    snprintf(path, sizeof(path), "%s/drive_c/windows/system32/kernel32.dll", prefix);
+    CHECK(!ps5_is_wine_own(path));
+    snprintf(path, sizeof(path), "%s/x86_64-windowsX/kernel32.dll", wine);
+    CHECK(!ps5_is_wine_own(path));
+    CHECK(!ps5_open_changes(GENERIC_READ | SYNCHRONIZE, FILE_OPEN, 0));
+    CHECK(!ps5_open_changes(FILE_READ_DATA | FILE_READ_ATTRIBUTES, FILE_OPEN, 0));
+    CHECK(ps5_open_changes(GENERIC_READ | GENERIC_WRITE, FILE_OPEN, 0));
+    CHECK(ps5_open_changes(DELETE, FILE_OPEN, 0) && ps5_open_changes(FILE_READ_DATA, FILE_OPEN, FILE_DELETE_ON_CLOSE));
+    CHECK(ps5_open_changes(FILE_WRITE_ATTRIBUTES, FILE_OPEN, 0) && ps5_open_changes(GENERIC_READ, FILE_OVERWRITE, 0));
+    {
+        FILE *f = fopen(dll64, "w");
+        struct stat a, b;
+        char copy[300], text[16] = "";
+        fputs("MZ wine", f);
+        fclose(f);
+        snprintf(path, sizeof(path), "mkdir -p '%s/drive_c/windows/system32' && touch -d 2020-01-02 '%s'", prefix, dll64);
+        CHECK(!system(path));
+        snprintf(copy, sizeof(copy), "%s/drive_c/windows/system32/kernel32.dll", prefix);
+        CHECK(ps5_copy_wine_own(dll64, copy) == STATUS_SUCCESS);
+        f = fopen(copy, "r");
+        CHECK(f && fgets(text, sizeof(text), f) && !strcmp(text, "MZ wine"));
+        if (f) fclose(f);
+        CHECK(!stat(dll64, &a) && !stat(copy, &b) && a.st_mtime == b.st_mtime);
+        CHECK(ps5_copy_wine_own(dll64, copy) != STATUS_SUCCESS);   /* never over the game's own */
+    }
     config_dir = "/elsewhere";
     {
         char *got;

@@ -1,0 +1,358 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 22:00:00 +0000
+Subject: [PATCH 70/70] PC5: a game's system32 and syswow64 list Wine's own DLLs, and
+ a game that changes or replaces one changes its own copy (Wine patch 0986)
+
+---
+ PUBLICATION_ALLOWLIST.txt                     |   2 +
+ docs/WINE_PS5_BUILD.md                        |   2 +
+ ...-dlls-and-copy-one-before-it-changes.patch | 310 ++++++++++++++++++
+ 3 files changed, 314 insertions(+)
+ create mode 100644 wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index b8cb4fe..1b05969 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -607,6 +607,8 @@ wine/patches/0963-vkd3d-shader-hlsl-compile-ps-1-x-effect-shaders-as-ps-2-0.patc
+ wine/patches/0971-kernelbase-ps5-no-debugger-in-a-title.patch
+ wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch
+ wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
++wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
++wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 277ffde..7854795 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -160,6 +160,8 @@ before evaluating a candidate built from that cache.
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ | 0981 | `win32u`: the builtin window classes are registered without waiting on another thread under the loader lock: Source games hung at start. From Playden's prospero-win |
+ | 0984 | `win32u`: when a controller connects or disconnects (`pw_wine_pad_changes`), the driver posts `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED` to the top-level windows, as the plug and play service does on Windows: an Unreal Engine 4 game kept a controller that went off lost after it came back. From Playden's prospero-win |
++| 0985 | `ntdll`: on PS5, a name opened (`FILE_OPEN`) that a prefix's `windows/system32` or `windows/syswow64` doesn't have is Wine's own file of that name (in lower case) for that architecture, from the app's `lib/wine`: PC5's prefixes hold no copy of Wine's DLLs (some 300 MB a game). A file the game makes there is found first |
++| 0986 | `ntdll`: on PS5, a listing of a prefix's `system32` or `syswow64` also shows the files 0985 serves; an open that changes one of them (write, delete, attributes, overwrite, delete on close) copies Wine's file into the prefix first and opens the copy, so a game replaces or changes its own; `FILE_OVERWRITE` is served too; `NtDeleteFile` of one leaves Wine's file and succeeds. The first copy is logged |
+ 
+ ## Allocator
+ 
+diff --git a/wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch b/wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+new file mode 100644
+index 0000000..1c898f0
+--- /dev/null
++++ b/wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+@@ -0,0 +1,310 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 22:00:00 +0000
++Subject: [PATCH] ntdll: PS5: list Wine's DLLs in a prefix's system32, and
++ copy one in before a game changes it.
++
++Patch 0985 serves Wine's own DLLs for names missing from a PS5 prefix's
++system32 or syswow64, opened as they are. Three gaps remained:
++
++A listing of system32 or syswow64 didn't show them, so a program that
++looks for a system DLL by listing the folder (FindFirstFile on
++d3dx9_*.dll) found none. The listing now adds the files of Wine's folder
++for that architecture whose names the folder doesn't have, each with its
++own size and time.
++
++An open that changes the file (write, delete, attributes, overwrite, or
++delete on close) got Wine's own file, which every game shares, or failed
++where it's read-only. Such an open now copies Wine's file into the
++prefix's folder first, keeping its time, and opens the copy: what the
++game writes, replaces or deletes is its own, as on a Windows that held a
++copy. FILE_OVERWRITE (overwrite only what is there) is served too, so it
++finds the file it overwrites. A file opened by its own path in Wine's
++folder is left as asked.
++
++NtDeleteFile of one of them leaves Wine's file and succeeds: this
++Windows has no copy of it to delete. The first copy is logged.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++index e0ee85f..971f59e 100644
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -2726,6 +2726,107 @@ done:
++ }
++ 
++ 
+++#ifdef __PROSPERO__
+++static NTSTATUS read_directory_data_ps5( struct dir_data *data, int fd, const UNICODE_STRING *mask );
+++
+++/* The prefix's system32 or syswow64 that fd is, as Wine patch 0985 serves Wine's own DLLs
+++ * missing from it: Wine's folder for its architecture ("/x86_64-windows", "/i386-windows"),
+++ * or NULL for any other directory. */
+++static const char *ps5_wine_system_dir( int fd )
+++{
+++    static const struct { const char *folder, *pe_dir; } folders[] =
+++    {
+++        { "/drive_c/windows/system32", "/x86_64-windows" },
+++        { "/drive_c/windows/syswow64", "/i386-windows" },
+++    };
+++    struct stat st, dir;
+++    unsigned int i;
+++    char *path;
+++
+++    if (!config_dir || fstat( fd, &st ) == -1) return NULL;
+++    for (i = 0; i < ARRAY_SIZE(folders); i++)
+++    {
+++        int same;
+++        if (asprintf( &path, "%s%s", config_dir, folders[i].folder ) == -1) return NULL;
+++        same = !stat( path, &dir ) && dir.st_dev == st.st_dev && dir.st_ino == st.st_ino;
+++        free( path );
+++        if (same) return folders[i].pe_dir;
+++    }
+++    return NULL;
+++}
+++
+++/* An entry named name whose file is at unix_path, as append_entry adds one. */
+++static BOOL append_entry_at( struct dir_data *data, const char *name, const char *unix_path,
+++                             const UNICODE_STRING *mask )
+++{
+++    WCHAR long_nameW[MAX_DIR_ENTRY_LEN + 1], short_nameW[13];
+++    int long_len = ntdll_umbstowcs( name, strlen(name), long_nameW, ARRAY_SIZE(long_nameW) ), short_len = 0;
+++
+++    if (long_len <= 0 || long_len == ARRAY_SIZE(long_nameW)) return TRUE;
+++    long_nameW[long_len] = 0;
+++    if (!is_legal_8dot3_name( long_nameW, long_len ))
+++        short_len = hash_short_file_name( long_nameW, long_len, short_nameW );
+++    short_nameW[short_len] = 0;
+++    wcsupr( short_nameW );
+++    if (mask && !match_filename( long_nameW, long_len, mask ) &&
+++        (!short_len || !match_filename( short_nameW, short_len, mask )))
+++        return TRUE;
+++    return add_dir_data_names( data, long_nameW, short_nameW, unix_path );
+++}
+++
+++/* A listing of the prefix's system32 or syswow64 also has the DLLs Wine serves from its own
+++ * folder (Wine patch 0985), as a Windows that held copies of them listed them: a program that
+++ * looks for a system DLL by listing the folder finds it. A name the folder has is its own. */
+++static NTSTATUS ps5_list_wine_system_files( struct dir_data *data, int fd, const UNICODE_STRING *mask )
+++{
+++    const char *pe_dir = ps5_wine_system_dir( fd );
+++    unsigned int i, j, had = data->count;
+++    struct dirent *de;
+++    DIR *dir;
+++    char *path;
+++
+++    if (!pe_dir) return STATUS_SUCCESS;
+++    for (i = 0; dll_paths[i]; i++)
+++    {
+++        if (asprintf( &path, "%s%s", dll_paths[i], pe_dir ) == -1) return STATUS_NO_MEMORY;
+++        dir = opendir( path );
+++        if (!dir)
+++        {
+++            free( path );
+++            continue;
+++        }
+++        while ((de = readdir( dir )))
+++        {
+++            size_t len = strlen( de->d_name );
+++            char *file;
+++            struct stat st;
+++            BOOL have = FALSE;
+++
+++            if (de->d_name[0] == '.' || (len > 2 && !strcmp( de->d_name + len - 2, ".a" ))) continue;
+++            for (j = 0; j < data->count && !have; j++)
+++            {
+++                const char *seen = strrchr( data->names[j].unix_name, '/' );
+++                have = !strcasecmp( seen ? seen + 1 : data->names[j].unix_name, de->d_name );
+++            }
+++            if (have) continue;
+++            if (asprintf( &file, "%s/%s", path, de->d_name ) == -1) break;
+++            if (!stat( file, &st ) && S_ISREG( st.st_mode ) && !append_entry_at( data, de->d_name, file, mask ))
+++            {
+++                free( file );
+++                closedir( dir );
+++                free( path );
+++                return STATUS_NO_MEMORY;
+++            }
+++            free( file );
+++        }
+++        closedir( dir );
+++        free( path );
+++    }
+++    TRACE( "%u of Wine's own files listed\n", data->count - had );
+++    return STATUS_SUCCESS;
+++}
+++#endif
+++
++ /***********************************************************************
++  *           read_directory_data
++  *
++@@ -2734,6 +2835,15 @@ done:
++ static NTSTATUS read_directory_data( struct dir_data *data, int fd, const UNICODE_STRING *mask )
++ {
++     NTSTATUS status;
+++#ifdef __PROSPERO__
+++    if (!(status = read_directory_data_ps5( data, fd, mask ))) status = ps5_list_wine_system_files( data, fd, mask );
+++    return status;
+++}
+++
+++static NTSTATUS read_directory_data_ps5( struct dir_data *data, int fd, const UNICODE_STRING *mask )
+++{
+++    NTSTATUS status;
+++#endif
++ 
++ #ifdef VFAT_IOCTL_READDIR_BOTH
++     if (!(status = read_directory_data_vfat( data, fd, mask ))) return status;
++@@ -4118,7 +4228,8 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
++         if (!name_len)
++         {
++ #ifdef __PROSPERO__
++-            if (status == STATUS_OBJECT_NAME_NOT_FOUND && disposition == FILE_OPEN && root_fd == AT_FDCWD &&
+++            if (status == STATUS_OBJECT_NAME_NOT_FOUND && (disposition == FILE_OPEN || disposition == FILE_OVERWRITE) &&
+++                root_fd == AT_FDCWD &&
++                 !is_unix && end == next)
++             {
++                 unix_name[pos] = 0;
++@@ -5125,6 +5236,87 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
++ }
++ 
++ 
+++#ifdef __PROSPERO__
+++/* 1 when unix_name is one of Wine's own files, which Wine patch 0985 serves for a name missing
+++ * from the prefix's system32 or syswow64. */
+++static BOOL ps5_is_wine_own( const char *unix_name )
+++{
+++    unsigned int i;
+++    for (i = 0; dll_paths[i]; i++)
+++    {
+++        size_t len = strlen( dll_paths[i] );
+++        if (!strncmp( unix_name, dll_paths[i], len ) &&
+++            (!strncmp( unix_name + len, "/x86_64-windows/", 16 ) || !strncmp( unix_name + len, "/i386-windows/", 14 )))
+++            return TRUE;
+++    }
+++    return FALSE;
+++}
+++
+++/* 1 when an open would change the file or its name: then a game's own copy is made first. */
+++static BOOL ps5_open_changes( ACCESS_MASK access, ULONG disposition, ULONG options )
+++{
+++    return (access & (GENERIC_WRITE | GENERIC_ALL | MAXIMUM_ALLOWED | FILE_WRITE_DATA | FILE_APPEND_DATA |
+++                      FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | DELETE | WRITE_DAC | WRITE_OWNER)) ||
+++           (options & FILE_DELETE_ON_CLOSE) || (disposition != FILE_OPEN && disposition != FILE_OPEN_IF);
+++}
+++
+++/* Copies Wine's own file from to the game's to (in its system32 or syswow64), keeping its time:
+++ * what the game then writes, renames or deletes is its own, and Wine's file, which every game
+++ * shares, stays as it is. */
+++static NTSTATUS ps5_copy_wine_own( const char *from, const char *to )
+++{
+++    char buffer[65536];
+++    struct stat st;
+++    ssize_t got;
+++    int in, out;
+++    NTSTATUS status = STATUS_SUCCESS;
+++
+++    if ((in = open( from, O_RDONLY )) == -1) return errno_to_status( errno );
+++    if (fstat( in, &st ) == -1 || (out = open( to, O_WRONLY | O_CREAT | O_EXCL, 0644 )) == -1)
+++    {
+++        status = errno_to_status( errno );
+++        close( in );
+++        return status;
+++    }
+++    while ((got = read( in, buffer, sizeof(buffer) )) != 0)
+++    {
+++        if (got == -1)
+++        {
+++            if (errno == EINTR) continue;
+++            status = errno_to_status( errno );
+++            break;
+++        }
+++        for (ssize_t done = 0; done < got;)
+++        {
+++            ssize_t put = write( out, buffer + done, got - done );
+++            if (put == -1 && errno == EINTR) continue;
+++            if (put <= 0)
+++            {
+++                status = put ? errno_to_status( errno ) : STATUS_DISK_FULL;
+++                break;
+++            }
+++            done += put;
+++        }
+++        if (status) break;
+++    }
+++    if (!status)
+++    {
+++        struct timespec times[2] = { st.st_atim, st.st_mtim };
+++        futimens( out, times );
+++    }
+++    close( out );
+++    close( in );
+++    if (status) unlink( to );
+++    else
+++    {
+++        static LONG logged;
+++        if (!InterlockedExchange( &logged, 1 ))
+++            MESSAGE( "wine-ps5: %s copied into the game's Windows before it changes it (later ones are not logged)\n", to );
+++    }
+++    return status;
+++}
+++#endif
+++
++ /******************************************************************************
++  *              NtCreateFile   (NTDLL.@)
++  */
++@@ -5215,6 +5407,36 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
++         status = get_nt_and_unix_names( &new_attr, &nt_name, &unix_name, disposition,
++                                         options & FILE_OPEN_REPARSE_POINT );
++     }
+++    /* One of Wine's own files served for the prefix's system32 (Wine patch 0985), opened to
+++     * change it: the game gets its own copy there, which is what it then changes. */
+++    if (status == STATUS_SUCCESS && !(options & FILE_OPEN_BY_FILE_ID) && unix_name && ps5_is_wine_own( unix_name ) &&
+++        ps5_open_changes( access, disposition, options ))
+++    {
+++        char *own = unix_name;
+++        UNICODE_STRING own_nt = nt_name;
+++
+++        unix_name = NULL;
+++        new_attr = *attr;
+++        status = get_nt_and_unix_names( &new_attr, &nt_name, &unix_name, FILE_OPEN_IF,
+++                                        options & FILE_OPEN_REPARSE_POINT );
+++        if (status == STATUS_NO_SUCH_FILE && unix_name && strcmp( unix_name, own ))
+++            status = ps5_copy_wine_own( own, unix_name );
+++        else if (status == STATUS_SUCCESS || status == STATUS_NO_SUCH_FILE)
+++        {
+++            /* not a name in the prefix (Wine's file by its own path): as asked */
+++            free( unix_name );
+++            free( nt_name.Buffer );
+++            unix_name = own;
+++            nt_name = own_nt;
+++            own = NULL;
+++            status = STATUS_SUCCESS;
+++        }
+++        if (own)
+++        {
+++            free( own );
+++            free( own_nt.Buffer );
+++        }
+++    }
++ #endif
++ 
++     if (status == STATUS_BAD_DEVICE_TYPE)
++@@ -5398,6 +5620,16 @@ NTSTATUS WINAPI NtDeleteFile( OBJECT_ATTRIBUTES *attr )
++ 
++     if (!(status = get_nt_and_unix_names( &new_attr, &nt_name, &unix_name, FILE_OPEN, FALSE )))
++     {
+++#ifdef __PROSPERO__
+++        /* Wine's own file served for the prefix's system32 (Wine patch 0985), which every game
+++         * shares: not deleted, as there is no copy of it in this Windows to delete. */
+++        if (ps5_is_wine_own( unix_name ))
+++        {
+++            free( unix_name );
+++            free( nt_name.Buffer );
+++            return STATUS_SUCCESS;
+++        }
+++#endif
++         if (!(status = open_unix_file( &handle, unix_name, GENERIC_READ | GENERIC_WRITE | DELETE, &new_attr,
++                                        0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
++                                        FILE_DELETE_ON_CLOSE, NULL, 0 )))
++-- 
++2.43.0
++
+-- 
+2.43.0
+
