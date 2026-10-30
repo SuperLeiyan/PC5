@@ -1714,6 +1714,42 @@ static int update_recover(const char *root, const char *name)
     return update_complete(root, id, staging, error, sizeof(error)) ? -1 : 1;
 }
 
+/* PC5's INSTALL folder (pc5_install_take_from), when it has one. */
+static char take_dir[PC5_PATH];
+
+/* An install's note that it moved a game from the INSTALL folder: where from, and its folder. */
+#define TAKEN_FILE "pc5-taken.txt"
+
+/* An install's folder (staging) that moved a game from the INSTALL folder (its TAKEN_FILE): the
+ * game moved back. 1 when the folder can be deleted now; 0 when it was kept aside, renamed in
+ * prefixes from .installing-<id> to .taken-<id>. */
+static int untake(const char *staging, const char *prefixes)
+{
+    char marker[PC5_PATH], games[PC5_PATH], aside[PC5_PATH];
+    Pc5Buf text = { 0 };
+    char *source, *folder, *end;
+    const char *name = strrchr(staging, '/');
+
+    if (pc5_format(marker, sizeof(marker), "%s/" TAKEN_FILE, staging) || pc5_read_file(marker, &text, 8192) ||
+        pc5_buf_terminate(&text)) {
+        pc5_buf_free(&text);
+        return 1;   /* nothing was moved */
+    }
+    source = (char *)text.data;
+    folder = strchr(source, '\n');
+    if (folder) *folder++ = 0;
+    if (folder && (end = strchr(folder, '\n'))) *end = 0;
+    int back = folder && folder[0] && source[0] == '/' && !pc5_exists(source) &&
+               !pc5_format(games, sizeof(games), "%s/drive_c/Games/%s", staging, folder) &&
+               (!pc5_exists(games) || !rename(games, source));
+    pc5_buf_free(&text);
+    if (back) return 1;
+    if (name && !strncmp(name + 1, ".installing-", 12) &&
+        !pc5_format(aside, sizeof(aside), "%s/.taken-%s", prefixes, name + 13))
+        (void)rename(staging, aside);
+    return 0;
+}
+
 int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms)
 {
     char path[PC5_PATH], leftover[PC5_PATH] = "";
@@ -1751,6 +1787,9 @@ int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms)
                 break;
             }
         }
+        /* An install from the INSTALL folder cut short: the game goes back there first, or, when
+         * it can't, the install is kept aside (.taken-<id>), never deleted with the game in it. */
+        if (leftover[0] && !untake(leftover, path)) leftover[0] = 0;
     }
     if (!leftover[0]) {
         /* A PC5 game whose folder is in place but whose profile is not (the
@@ -1770,6 +1809,15 @@ int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms)
         }
     }
     closedir(dir);
+    /* A game copied from the INSTALL folder on another drive, whose copy there wasn't deleted yet. */
+    if (!leftover[0] && take_dir[0] && (dir = opendir(take_dir))) {
+        while ((entry = readdir(dir)))
+            if (!strncmp(entry->d_name, ".installed-", 11) && entry->d_name[11]) {
+                pc5_join(leftover, sizeof(leftover), take_dir, entry->d_name);
+                break;
+            }
+        closedir(dir);
+    }
     if (!leftover[0]) return 0;
     remove->failed = 0;
     if (pc5_tree_delete_begin(remove, leftover)) return 0;
@@ -1845,11 +1893,37 @@ static int template_paths(Pc5Install *install)
     return 0;
 }
 
+void pc5_install_take_from(const char *dir)
+{
+    pc5_copy(take_dir, sizeof(take_dir), dir ? dir : "");
+}
+
+const char *pc5_install_take_dir(void)
+{
+    return take_dir[0] ? take_dir : NULL;
+}
+
+/* 1 when the folder at path is in PC5's INSTALL folder and on the same drive as root's
+ * prefixes: moved, not copied. */
+static int in_take_dir(const char *path)
+{
+    size_t n = strlen(take_dir);
+    return n && !strncmp(path, take_dir, n) && path[n] == '/' && path[n + 1] && !strstr(path + n, "/..");
+}
+
+static int takes(const char *path, const char *root)
+{
+    char prefixes[PC5_PATH];
+    struct stat from, to;
+    return in_take_dir(path) && !pc5_format(prefixes, sizeof(prefixes), "%s/prefixes", root) && !stat(path, &from) && !stat(prefixes, &to) &&
+           from.st_dev == to.st_dev;
+}
+
 static int install_begin(Pc5Install *install, const char *root, const char *template_prefix, const Pc5Folder *folder,
                          int exe, Pc5Image *cover, uint32_t tint, const char *cover_source, int in_place)
 {
     char path[PC5_PATH], exe_path[PC5_PATH + 32];
-    uint64_t free_bytes = 0, needs = in_place ? pc5_install_needs_usb(folder) : pc5_install_needs(folder);
+    uint64_t free_bytes = 0, needs;
 
     memset(install, 0, sizeof(*install));
     install->in_fd = install->out_fd = -1;
@@ -1872,6 +1946,11 @@ static int install_begin(Pc5Install *install, const char *root, const char *temp
     info->files = folder->files;
     pc5_copy(info->cover, sizeof(info->cover), cover_source && cover_source[0] ? cover_source : "icon");
     install->in_place = in_place;
+    if (pc5_format(path, sizeof(path), "%s/prefixes", root) || pc5_mkdirs(path))
+        return fail(install, "PC5 can't make its folders in %s: %s.", root, strerror(errno));
+    install->take = !in_place && takes(folder->path, root);
+    /* Its Windows only, for a game played from its drive or moved from the INSTALL folder. */
+    needs = in_place || install->take ? pc5_install_needs_usb(folder) : pc5_install_needs(folder);
     if (in_place && pc5_usb_relative(folder->path, info->usb, sizeof(info->usb)))
         return fail(install, "Only a game on a USB drive can play from it: this folder isn't on one.");
     windows_path(info->folder, info->exe, 1, exe_path, sizeof(exe_path));
@@ -2041,6 +2120,21 @@ static int copy_piece(Pc5Install *install, int verify, const char *relative)
 static void start_cleanup(Pc5Install *install, int cancelled)
 {
     close_files(install);
+    /* A game moved from the INSTALL folder goes back there before anything is deleted; one that
+     * can't is kept where it is, and said. */
+    if (install->taken) {
+        char games[PC5_PATH];
+        if (!pc5_format(games, sizeof(games), "%s/drive_c/Games/%s", install->staging, install->info.folder) &&
+            !rename(games, install->source)) {
+            install->taken = 0;
+        } else {
+            snprintf(install->error, sizeof(install->error),
+                     "The game couldn't be put back in the INSTALL folder: it is in %.180s.", games);
+            install->cancelled = 0;
+            install->phase = PC5_INSTALL_FAILED;
+            return;
+        }
+    }
     if (cancelled) install->error[0] = 0;
     install->cancelled = cancelled;
     if (!install->cleanup) install->cleanup = pc5_alloc(sizeof(Pc5Remove));
@@ -2081,6 +2175,8 @@ static int finish(Pc5Install *install)
     if (pc5_format(target, sizeof(target), "%s/prefixes/%s", install->root, install->id) || rename(install->staging, target))
         return fail(install, "PC5 can't put the game in place: %s.", strerror(errno));
     pc5_copy(install->staging, sizeof(install->staging), target);
+    install->taken = 0;   /* the game is the library's now */
+    if (!pc5_format(path, sizeof(path), "%s/" TAKEN_FILE, target)) unlink(path);
     if (pc5_profile_refresh(install->root, install->id, error, sizeof(error))) {
         /* The folder is in place: the next start writes the profile again. */
         return fail(install, "%s", error);
@@ -2092,6 +2188,21 @@ static int finish(Pc5Install *install)
         if (!pc5_format(prefixes, sizeof(prefixes), "%s/prefixes", install->root) &&
             !free_name(prefixes, base, leaf, sizeof(leaf)) && !pc5_join(path, sizeof(path), prefixes, leaf) &&
             !rename(install->kept, path)) {
+            if (!install->cleanup) install->cleanup = pc5_alloc(sizeof(Pc5Remove));
+            if (install->cleanup) {
+                memset(install->cleanup, 0, sizeof(*install->cleanup));
+                if (!pc5_tree_delete_begin(install->cleanup, path)) install->tidying = 1;
+            }
+        }
+    }
+    /* Copied from the INSTALL folder on another drive: the copy there is set aside
+     * (.installed-<name>, which nothing lists) and deleted, now or when PC5 next opens. */
+    if (in_take_dir(install->source) && pc5_exists(install->source)) {
+        const char *leaf = strrchr(install->source, '/');
+        char base[PC5_PATH], aside[PC5_PATH];
+        snprintf(base, sizeof(base), ".installed-%.200s", leaf + 1);
+        if (!free_name(take_dir, base, aside, sizeof(aside)) && !pc5_join(path, sizeof(path), take_dir, aside) &&
+            !rename(install->source, path) && !install->tidying) {
             if (!install->cleanup) install->cleanup = pc5_alloc(sizeof(Pc5Remove));
             if (install->cleanup) {
                 memset(install->cleanup, 0, sizeof(*install->cleanup));
@@ -2304,6 +2415,29 @@ Pc5InstallPhase pc5_install_step(Pc5Install *install, int budget_ms)
             }
             install->at = 0;
             install->file_index = 0;
+            /* From the INSTALL folder on the same drive: the folder moved in its place, at once,
+             * noted first, so a cut-short install puts it back (pc5_recover_step). */
+            char marker[PC5_PATH], note[PC5_PATH * 2 + 4];
+            if (install->take &&
+                (pc5_format(marker, sizeof(marker), "%s/" TAKEN_FILE, install->staging) ||
+                 pc5_format(note, sizeof(note), "%s\n%s\n", install->source, install->info.folder) ||
+                 pc5_write_file(marker, note, strlen(note))))
+                install->take = 0;
+            if (install->take && !rmdir(games) && !rename(install->source, games)) {
+                install->taken = 1;
+                install->bytes_done = install->bytes_total;
+                install->files_done = install->files_total;
+                install->phase = PC5_INSTALL_FINISH;
+                return install->phase;
+            }
+            if (install->take && !pc5_format(marker, sizeof(marker), "%s/" TAKEN_FILE, install->staging))
+                unlink(marker);   /* not moved after all: nothing to put back */
+            if (install->take && pc5_mkdirs(games)) {
+                fail(install, "PC5 can't make the game's folder: %s.", strerror(errno));
+                start_cleanup(install, 0);
+                break;
+            }
+            install->take = 0;   /* not moved: copied, as from a USB drive */
             install->phase = PC5_INSTALL_COPY;
             return install->phase;   /* the listing may have taken a while: show it */
         }

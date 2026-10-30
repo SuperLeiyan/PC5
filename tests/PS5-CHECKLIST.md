@@ -440,3 +440,10 @@ controller's speaker.
 | 218 | `env.txt` with `MEMORIES_NO_MONITOR=1` in Yu-Gi-Oh! Forbidden Memories Recompiled's `pc5` folder | it starts without its crash monitor | `PC5 env.txt set=1 MEMORIES_NO_MONITOR` |
 | 219 | A game that stops with an uncaught C++ exception (Call of Juarez Gunslinger) | its log names it | `wine: crash report: C++ exception …` (and `its message:` for a std::exception) |
 | 220 | Far Cry | its log shows the code at the fault | `wine: crash report: flags=… code at it: …` |
+| 221 | Call of Juarez Gunslinger (no `AppData\Local\Techland` in its prefix) | it gets past its intro | `made …\Techland\COJGunslinger, which … is in` |
+| 222 | Far Cry (Steam 1.4) | it no longer crashes in CrySystem.dll as it starts | `wine-ps5: the nested-task flag a program set made a return to it fault at …: cleared` |
+| 223 | Put a game's folder in `PPSA11018/INSTALL` on the drive, then open PC5 | PC5 asks to install it; Install moves it into the library and INSTALL is empty after | `PC5 install folder … games=1` |
+| 224 | Later on that question, then open PC5 again | it asks again; the folder is untouched | |
+| 225 | INSTALL on a different drive from PC5's library | it is copied instead of moved, and the copy is left in INSTALL | |
+| 226 | Cancel while a game from INSTALL is installing | the game is back in INSTALL | |
+| 227 | Update PC5 with a game in INSTALL | INSTALL and its game survive the update | |

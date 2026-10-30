@@ -180,6 +180,10 @@ typedef struct Pc5Install {
     uint32_t skipped;
     /* pc5_install_begin_usb: the game played from its USB drive, nothing copied */
     int in_place;
+    /* A game in PC5's INSTALL folder (pc5_install_take_from) on the drive the library is on: its
+     * folder moved into the game's Windows, not copied (take); and moved there now (taken), so
+     * a cleanup moves it back first. */
+    int take, taken;
 } Pc5Install;
 
 /* Checks the space and starts. -1 (with error set) when it can't begin. The
@@ -193,6 +197,12 @@ int pc5_install_begin_usb(Pc5Install *install, const char *root, const char *tem
 /* Bytes an install of folder to play from its USB drive needs on the console: its Windows
  * and some room. */
 uint64_t pc5_install_needs_usb(const Pc5Folder *folder);
+/* PC5's INSTALL folder (in PC5's own folder: a game put there over FTP is installed from it
+ * when PC5 opens), or NULL for none. A game installed from there is moved into the library,
+ * not copied, when they are on the same drive: no second copy, and done at once. */
+void pc5_install_take_from(const char *dir);
+#define PC5_INSTALL_FOLDER "INSTALL"
+const char *pc5_install_take_dir(void);
 /* Works for about budget_ms. Returns the phase reached. */
 Pc5InstallPhase pc5_install_step(Pc5Install *install, int budget_ms);
 void pc5_install_cancel(Pc5Install *install);

@@ -1005,6 +1005,111 @@ static int wine_d3d_vulkan(const PwGameProfile *profile)
            !strcmp(profile->debug_env[0].value, "renderer=vulkan");
 }
 
+/* PC5's INSTALL folder: a game put there is moved into the library, not copied; one whose
+ * install is cut short after the move goes back there. */
+static void install_from(const char *dir, const char *root2, Pc5Install *install, int stop_when_taken, int copy)
+{
+    Pc5Folder folder;
+    Pc5Image cover = { 0 };
+    CHECK(!pc5_folder_inspect(dir, "NeonDrift", &folder), "the INSTALL folder's game read");
+    CHECK(!pc5_install_begin(install, root2, template_prefix, &folder, 0, &cover, 0xff336699u, "icon"), "begun: %s",
+          install->error);
+    if (copy) install->take = 0;   /* as on another drive */
+    for (int i = 0; i < 100000; i++) {
+        Pc5InstallPhase phase = pc5_install_step(install, 5);
+        if (phase == PC5_INSTALL_DONE || phase == PC5_INSTALL_FAILED || phase == PC5_INSTALL_CANCELLED) break;
+        if (stop_when_taken && install->taken) break;
+    }
+}
+
+static void test_install_folder(void)
+{
+    char take[PC5_PATH], root2[PC5_PATH], game[PC5_PATH], file[PC5_PATH], from[PC5_PATH];
+    Pc5Install install;
+
+    path(take, sizeof(take), "%s/take-app/INSTALL", work);
+    path(root2, sizeof(root2), "%s/take-data/prospero-win", work);
+    path(file, sizeof(file), "rm -rf '%s/take-app' '%s/take-data' && mkdir -p '%s' '%s/profiles' && cp -r '%s/NeonDrift' '%s/'",
+         work, work, take, root2, usb, take);
+    run(file);
+    path(game, sizeof(game), "%s/NeonDrift", take);
+    pc5_install_take_from(take);
+    CHECK(pc5_install_take_dir() && !strcmp(pc5_install_take_dir(), take), "the INSTALL folder named");
+
+    install_from(game, root2, &install, 0, 0);
+    CHECK(install.phase == PC5_INSTALL_DONE && install.take, "installed by moving it: %s", install.error);
+    path(file, sizeof(file), "%s/prefixes/neondrift/drive_c/Games/NeonDrift/data/level1.pak", root2);
+    path(from, sizeof(from), "%s/NeonDrift/data/level1.pak", usb);
+    CHECK(same_files(file, from), "its files in the library");
+    CHECK(!pc5_exists(game), "and no longer in the INSTALL folder");
+    path(file, sizeof(file), "%s/prefixes/neondrift/pc5-taken.txt", root2);
+    CHECK(!pc5_exists(file), "no note left");
+    path(file, sizeof(file), "%s/prefixes/neondrift/pc5/files.txt", root2);
+    CHECK(pc5_exists(file), "its files listed, as a copied game's are");
+    pc5_install_end(&install);
+
+    /* Cut short after the move (the console turned off): put back at the next start. */
+    path(file, sizeof(file), "cp -r '%s/NeonDrift' '%s/'", usb, take);
+    run(file);
+    install_from(game, root2, &install, 1, 0);
+    CHECK(install.taken && !pc5_exists(game), "moved in, then cut short");
+    {
+        Pc5Remove remove = { 0 };
+        int steps = 0;
+        while (pc5_recover_step(root2, &remove, 50) && steps++ < 1000) {}
+        pc5_remove_end(&remove);
+    }
+    path(file, sizeof(file), "%s/data/level1.pak", game);
+    CHECK(same_files(file, from), "back in the INSTALL folder, whole");
+    {
+        char prefixes[PC5_PATH];
+        path(prefixes, sizeof(prefixes), "%s/prefixes", root2);
+        CHECK(count_entries(prefixes, ".installing-") == 0 && count_entries(prefixes, ".taken-") == 0, "nothing left");
+    }
+    pc5_install_end(&install);
+
+    /* Stopped once moved: the move is the whole copy, so it finishes. */
+    install_from(game, root2, &install, 1, 0);
+    CHECK(install.taken, "moved in");
+    pc5_install_cancel(&install);
+    for (int i = 0; i < 10000; i++) {
+        Pc5InstallPhase phase = pc5_install_step(&install, 5);
+        if (phase == PC5_INSTALL_DONE || phase == PC5_INSTALL_FAILED || phase == PC5_INSTALL_CANCELLED) break;
+    }
+    CHECK(install.phase == PC5_INSTALL_DONE && !pc5_exists(game), "stopped once moved: installed all the same");
+    pc5_install_end(&install);
+
+    /* On another drive: copied, then its copy in the INSTALL folder deleted. */
+    path(file, sizeof(file), "cp -r '%s/NeonDrift' '%s/' && rm -rf '%s/prefixes/neondrift' '%s/profiles/neondrift.profile'",
+         usb, take, root2, root2);
+    run(file);
+    install_from(game, root2, &install, 0, 1);
+    path(file, sizeof(file), "%s/prefixes/%s/drive_c/Games/NeonDrift/data/level1.pak", root2, install.id);
+    path(from, sizeof(from), "%s/NeonDrift/data/level1.pak", usb);
+    CHECK(install.phase == PC5_INSTALL_DONE && !install.take && same_files(file, from), "copied from the INSTALL folder: %s",
+          install.error);
+    CHECK(!pc5_exists(game) && count_entries(take, ".installed-") == 0, "and gone from the INSTALL folder");
+    pc5_install_end(&install);
+    /* Its copy set aside but not yet deleted (PC5 closed): deleted as PC5 opens. */
+    path(file, sizeof(file), "cp -r '%s/NeonDrift' '%s/.installed-NeonDrift'", usb, take);
+    run(file);
+    {
+        Pc5Remove remove = { 0 };
+        int steps = 0;
+        while (pc5_recover_step(root2, &remove, 50) && steps++ < 1000) {}
+        pc5_remove_end(&remove);
+    }
+    CHECK(count_entries(take, ".installed-") == 0, "a copy set aside, deleted at the next start");
+
+    /* A game elsewhere (a USB drive) is copied, as before. */
+    path(from, sizeof(from), "%s/NeonDrift", usb);
+    install_from(from, root2, &install, 0, 0);
+    CHECK(install.phase == PC5_INSTALL_DONE && !install.take && pc5_is_dir(from), "from a USB drive: copied");
+    pc5_install_end(&install);
+    pc5_install_take_from(NULL);
+    CHECK(!pc5_install_take_dir(), "and none named after");
+}
+
 static void test_install(void)
 {
     char id[PC5_ID], file[PC5_PATH], other[PC5_PATH], prefixes[PC5_PATH];
@@ -7016,6 +7121,63 @@ static void test_files_screens(const char *fonts)
     pc5_free(canvas.px);
 }
 
+/* PC5's INSTALL folder as PC5 opens: asked about, listed as the INSTALL folder's, moved in. */
+static void test_install_folder_screens(const char *fonts)
+{
+    FakeConsole console = { 0 };
+    FakeNet net = { 0 };
+    Pc5Platform platform = { &console, { &net, fake_get, NULL, fake_get_authorized }, fake_clock, fake_play, fake_log, fake_notify, fake_time, 0, NULL,
+                             NULL, fake_keyboard_open_text, fake_keyboard_state_text, fake_keyboard_close_text };
+    const char *roots[] = { usb, NULL };
+    char app[PC5_PATH], drive[PC5_PATH], folder[PC5_PATH], file[PC5_PATH], install_dir[PC5_PATH];
+    Pc5Canvas canvas = { pc5_alloc(1920u * 1080u * 4u), 1920, 1080, 1920, 0, 0 };
+    Pc5Library library;
+
+    path(app, sizeof(app), "%s/app0", work);
+    path(file, sizeof(file), "%s/eboot.bin", app);
+    if (!pc5_exists(file)) write_text(file, "PC5 SCREENS EBOOT\n");
+    path(drive, sizeof(drive), "%s/install-drive", work);
+    path(folder, sizeof(folder), "%s/homebrew/PPSA11018", drive);
+    make_installed(app, folder);
+    path(install_dir, sizeof(install_dir), "%s/INSTALL", folder);
+    path(file, sizeof(file), "mkdir -p '%s' && cp -r '%s/Starfall' '%s/'", install_dir, usb, install_dir);
+    run(file);
+    const char *drives[] = { drive, NULL };
+    Pc5UiConfig config = { root, template_prefix, fonts, roots, NULL, NULL, NULL, drives, NULL, NULL, 0, 1 };
+    pc5_library_load(root, &library);
+    int before = library.count;
+    Pc5Ui *ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "install-ask", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "install-ask"), "as PC5 opens: the INSTALL folder's game offered: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "install-ask");
+    frames(ui, 0, 0, 25, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Install, chosen first */
+    until_screen(ui, "sources", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "sources"), "its games listed: %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "install-folder-sources");
+    press(ui, PC5_KEY_ACCEPT, &canvas);      /* Starfall */
+    until_screen(ui, "review", &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    until_screen(ui, "message", &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "message"), "installed: %s", pc5_ui_screen(ui));
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    pc5_library_load(root, &library);
+    path(file, sizeof(file), "%s/Starfall", install_dir);
+    CHECK(library.count == before + 1 && !pc5_exists(file), "in the library, moved out of the INSTALL folder: %d then %d",
+          before, library.count);
+    pc5_ui_destroy(ui);
+    /* Opened again with nothing in it: nothing asked. */
+    ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "library", &canvas);
+    frames(ui, 0, 0, 10, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "an empty INSTALL folder: straight to the library: %s", pc5_ui_screen(ui));
+    pc5_ui_destroy(ui);
+    pc5_install_take_from(NULL);
+    pc5_free(canvas.px);
+}
+
 int main(int argc, char **argv)
 {
     char fonts[PC5_PATH];
@@ -7035,6 +7197,7 @@ int main(int argc, char **argv)
     make_usb();
     test_sources();
     test_install();
+    test_install_folder();
     test_uninstall();
     test_game_update();
     test_keep_saves();
@@ -7071,6 +7234,7 @@ int main(int argc, char **argv)
     test_upgrade_screens(fonts);
     test_background_screen(fonts);
     test_files_screens(fonts);
+    test_install_folder_screens(fonts);
     printf("test_pc5: %d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }
