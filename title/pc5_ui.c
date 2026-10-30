@@ -61,7 +61,7 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
                                             "compatibility", "graphics-api", "report-check", "report-update", "files",
                                             "files-menu", "files-typing", "files-conflict", "files-delete",
-                                            "files-working", "tile-art", "install-ask" };
+                                            "files-working", "tile-art", "install-ask", "settings-typing" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;

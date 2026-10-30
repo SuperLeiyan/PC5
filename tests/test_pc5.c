@@ -6243,13 +6243,13 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
     rows_uncut(ui, &canvas, "Settings", 0);
-    for (int row = 0; row < 5; row++) {     /* Game maintenance, In games, Overlay, File manager's places, and System last */
-        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "File manager", "System" };
+    for (int row = 0; row < 6; row++) {     /* Game maintenance, In games, Overlay, File manager's places, System, and Network last */
+        static const char *const pages[] = { "Game maintenance", "In games", "Overlay", "File manager", "System", "Network" };
         for (int i = 0; i < 12; i++) press(ui, PC5_KEY_UP, &canvas);
         for (int i = 0; i < row; i++) press(ui, PC5_KEY_DOWN, &canvas);
         press(ui, PC5_KEY_ACCEPT, &canvas);
         rows_uncut(ui, &canvas, pages[row], row > 0 && row != 3);
-        if (row < 4) press(ui, PC5_KEY_BACK, &canvas);
+        if (row < 5) press(ui, PC5_KEY_BACK, &canvas);
     }
     press(ui, PC5_KEY_BACK, &canvas);
     press(ui, PC5_KEY_BACK, &canvas);
@@ -7317,15 +7317,15 @@ static void test_install_folder_screens(const char *fonts)
     CHECK(!strcmp(pc5_ui_screen(ui), "library"), "an empty INSTALL folder: straight to the library: %s", pc5_ui_screen(ui));
     pc5_ui_destroy(ui);
 
-    /* The FTP server, on in Game maintenance: the INSTALL folder at the address it shows; a game
+    /* The FTP server, on in Settings › Network: the INSTALL folder at the address it shows; a game
      * sent to it offered once the upload has settled, as when PC5 opens. */
     pc5_ftp_host_init();
     ui = pc5_ui_create(&config, &platform);
     until_screen(ui, "library", &canvas);
     press(ui, PC5_KEY_OPTIONS, &canvas);
-    press(ui, PC5_KEY_ACCEPT, &canvas);                               /* Game maintenance */
-    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);     /* FTP server */
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);     /* Network */
     press(ui, PC5_KEY_ACCEPT, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);                               /* FTP server */
     Pc5FtpStatus ftp;
     pc5_ftp_status(&ftp);
     CHECK(ftp.running && !strcmp(ftp.address, "127.0.0.1:2125"), "on: %d %s", ftp.running, ftp.address);
@@ -7337,8 +7337,39 @@ static void test_install_folder_screens(const char *fonts)
     pc5_ui_draw(ui, &canvas);
     save_shot(&canvas, "settings-ftp");
     CHECK(!cuts_after(ui, 0, &canvas), "its row: no text cut short");
+    /* Without a username or password set, any login will do. */
+    run("python3 -I -c \"import ftplib; f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10); f.login(); f.nlst(); f.quit()\"");
+    /* A username and a password typed: both asked for; a wrong one refused. */
+    press(ui, PC5_KEY_DOWN, &canvas);                                 /* Username */
+    console.typed = "  kevin ";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    CHECK(!strcmp(console.keyboard_title, "Username (empty: any)"), "the keyboard for the username: %s", console.keyboard_title);
+    press(ui, PC5_KEY_DOWN, &canvas);                                 /* Password */
+    console.typed = "pass word";
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    frames(ui, 0, 0, 3, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back on Network: %s", pc5_ui_screen(ui));
+    {
+        Pc5Settings set;
+        pc5_settings_load(root, &set);
+        CHECK(!strcmp(set.remote_user, "kevin") && !strcmp(set.remote_password, "pass word"), "kept: '%s' '%s'",
+              set.remote_user, set.remote_password);
+    }
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "settings-network");
+    CHECK(!cuts_after(ui, 0, &canvas), "Network's rows: no text cut short");
+    run("python3 -I -c \"import ftplib, sys\n"
+        "for user, word in (('kevin', 'nope'), ('other', 'pass word'), ('anonymous', '')):\n"
+        "    f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10)\n"
+        "    try: f.login(user, word); sys.exit('let in: ' + user)\n"
+        "    except ftplib.error_perm: pass\n"
+        "f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10)\n"
+        "try: f.nlst(); sys.exit('listed before logging in')\n"
+        "except ftplib.error_perm: pass\n"
+        "f.login('kevin', 'pass word'); f.nlst(); f.quit()\"");
     path(file, sizeof(file),
-         "python3 -I -c \"import ftplib, io; f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10); f.login(); "
+         "python3 -I -c \"import ftplib, io; f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10); f.login('kevin', 'pass word'); "
          "f.mkd('Starfall'); f.mkd('Starfall/bin'); f.storbinary('STOR Starfall/bin/gl32.exe', open('%s/Starfall/bin/gl32.exe', 'rb')); f.quit()\"",
          usb);
     run(file);
@@ -7362,6 +7393,7 @@ static void test_install_folder_screens(const char *fonts)
         Pc5Settings set;
         pc5_settings_load(root, &set);
         set.ftp_server = 0;
+        set.remote_user[0] = set.remote_password[0] = 0;
         pc5_settings_save(root, &set);
     }
     pc5_install_take_from(NULL);
