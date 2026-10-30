@@ -447,3 +447,6 @@ controller's speaker.
 | 225 | INSTALL on a different drive from PC5's library | it is copied instead of moved, and the copy is left in INSTALL | |
 | 226 | Cancel while a game from INSTALL is installing | the game is back in INSTALL | |
 | 227 | Update PC5 with a game in INSTALL | INSTALL and its game survive the update | |
+| 231 | Install games from USB with PC5 and other homebrew or game dumps on the drive | the list shows at once, without them | `PC5 usb folders=…` |
+| 232 | A game in a USB 2.0 port (front USB-A on the original PS5) › △ Play from USB | refused: too slow, plug it into a port on the back; Install still works | `PC5 problem install …: The drive reads at …` |
+| 233 | The same game in a back port › △ Play from USB | it plays | `PC5 install id=… usb=1` |

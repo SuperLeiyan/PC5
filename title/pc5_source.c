@@ -21,6 +21,14 @@ static int system_folder(const char *name)
     return 0;
 }
 
+/* A PS5 app or game (sce_sys/param.json in it): PC5 itself, other homebrew, a game's dump.
+ * Never a PC game, and big: not looked through. */
+static int ps5_app(const char *path)
+{
+    char param[PC5_PATH];
+    return !pc5_format(param, sizeof(param), "%s/sce_sys/param.json", path) && pc5_is_file(param);
+}
+
 /* Is there a .exe somewhere in path, depth levels down at most? */
 static int holds_program(const char *path, int depth)
 {
@@ -39,7 +47,7 @@ static int holds_program(const char *path, int depth)
         rewinddir(dir);
         while (!found && (entry = readdir(dir))) {
             if (entry->d_name[0] == '.' || pc5_join(inner, sizeof(inner), path, entry->d_name)) continue;
-            if (pc5_is_dir(inner)) found = holds_program(inner, depth - 1);
+            if (pc5_is_dir(inner) && !ps5_app(inner)) found = holds_program(inner, depth - 1);
         }
     }
     closedir(dir);
@@ -62,7 +70,7 @@ static void scan_folder(const char *path, int drive, Pc5Source *out, int max, in
         if (system_folder(entry->d_name) || pc5_join(inner, sizeof(inner), path, entry->d_name) || !pc5_is_dir(inner))
             continue;
         if (!pc5_casecmp(entry->d_name, "Games")) continue;   /* gone into below */
-        if (strlen(entry->d_name) >= PC5_NAME || !holds_program(inner, PC5_DEPTH)) continue;
+        if (strlen(entry->d_name) >= PC5_NAME || ps5_app(inner) || !holds_program(inner, PC5_DEPTH)) continue;
         Pc5Source *source = &out[(*count)++];
         pc5_copy(source->name, sizeof(source->name), entry->d_name);
         pc5_copy(source->path, sizeof(source->path), inner);

@@ -745,6 +745,31 @@ static void make_usb(void)
     write_text(file, "x");
 }
 
+/* PS5 apps on a drive (PC5 itself in homebrew, other homebrew, a game's dump) aren't looked
+ * through for games: they never hold one, and going through them took minutes. */
+static void test_sources_skip_apps(void)
+{
+    char drive[PC5_PATH], file[PC5_PATH];
+    Pc5Source sources[8];
+
+    path(drive, sizeof(drive), "%s/apps-drive", work);
+    path(file, sizeof(file), "rm -rf '%s'", drive);
+    run(file);
+    path(file, sizeof(file), "%s/homebrew/PPSA11018/sce_sys/param.json", drive);
+    write_text(file, "{}");
+    path(file, sizeof(file), "%s/homebrew/PPSA11018/win/wine/winecfg.exe", drive);
+    write_text(file, "MZ");
+    path(file, sizeof(file), "%s/PPSA12345-app/sce_sys/param.json", drive);
+    write_text(file, "{}");
+    path(file, sizeof(file), "%s/PPSA12345-app/tools/setup.exe", drive);
+    write_text(file, "MZ");
+    path(file, sizeof(file), "%s/Lantern Road/Lantern.exe", drive);
+    write_text(file, "MZ");
+    const char *roots[] = { drive, NULL };
+    int n = pc5_source_scan(roots, sources, 8);
+    CHECK(n == 1 && !strcmp(sources[0].name, "Lantern Road"), "only the game: %d %s", n, n ? sources[0].name : "");
+}
+
 static void test_sources(void)
 {
     const char *roots[] = { usb, "/nonexistent/usb1", NULL };
@@ -1819,6 +1844,60 @@ static void test_game_update(void)
     path(file, sizeof(file), "%s/data/level1.pak", game);
     CHECK(file_is(file, "LEVEL ONE v3\n") && count_entries(prefixes, ".updating-") == 0, "a whole copy put in place");
     CHECK(!pc5_info_read(root, id, &info) && info.files == 99, "its notes too: %u", (unsigned)info.files);
+    pc5_copy(root, sizeof(root), kept_root);
+}
+
+/* Playing from a USB drive reads a little of the game's biggest file first: a drive too slow
+ * (a USB 2.0 port) is refused, saying why and where to plug it in; a game with no big file
+ * isn't timed. A game in PC5's INSTALL folder is never played from there. */
+static void test_play_speed(void)
+{
+    char drive[PC5_PATH], dir[PC5_PATH], file[PC5_PATH], take[PC5_PATH], kept_root[PC5_PATH];
+    Pc5Folder folder;
+    Pc5Install install;
+    Pc5Image cover = { 0 };
+
+    pc5_copy(kept_root, sizeof(kept_root), root);
+    path(root, sizeof(root), "%s/data-speed/prospero-win", work);
+    path(drive, sizeof(drive), "%s/speed-drive", work);
+    path(file, sizeof(file), "rm -rf '%s' '%s/data-speed' && mkdir -p '%s/Big/data' && cp '%s/NeonDrift/NeonDrift.exe' "
+         "'%s/Big/' && head -c 20000000 /dev/urandom > '%s/Big/data/big.pak'", drive, work, drive, usb, drive, drive);
+    run(file);
+    path(dir, sizeof(dir), "%s/Big", drive);
+    double speed = pc5_usb_read_speed(dir);
+    CHECK(speed > 0, "a big file is timed: %.0f MB/s", speed);
+    path(file, sizeof(file), "%s/NeonDrift", usb);
+    CHECK(pc5_usb_read_speed(file) == 0, "a small game isn't");
+    const char *roots[] = { drive, NULL };
+    pc5_usb_roots(roots);
+    CHECK(!pc5_folder_inspect(dir, "Big", &folder), "read");
+    double kept = pc5_play_min_speed;
+    pc5_play_min_speed = 1e9;
+    CHECK(pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon") &&
+              strstr(install.error, "too slow to play from") && strstr(install.error, "on the back") &&
+              strstr(install.error, "Install still works"),
+          "too slow: refused, saying why: %s", install.error);
+    pc5_install_end(&install);
+    pc5_play_min_speed = kept;
+    CHECK(!pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon"), "fast enough: %s",
+          install.error);
+    pc5_install_end(&install);
+
+    /* The INSTALL folder on a drive: its games are installed, never played from there (and so
+     * never deleted as an install from it would). */
+    path(take, sizeof(take), "%s/INSTALL", drive);
+    path(file, sizeof(file), "mkdir -p '%s' && cp -r '%s/NeonDrift' '%s/'", take, usb, take);
+    run(file);
+    pc5_install_take_from(take);
+    path(dir, sizeof(dir), "%s/NeonDrift", take);
+    CHECK(!pc5_folder_inspect(dir, "NeonDrift", &folder), "read in INSTALL");
+    CHECK(pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon") &&
+              strstr(install.error, "INSTALL"), "not played from INSTALL: %s", install.error);
+    pc5_install_end(&install);
+    path(file, sizeof(file), "%s/NeonDrift.exe", dir);
+    CHECK(pc5_exists(file), "and still there");
+    pc5_install_take_from(NULL);
+    pc5_usb_roots(NULL);
     pc5_copy(root, sizeof(root), kept_root);
 }
 
@@ -7202,6 +7281,8 @@ int main(int argc, char **argv)
     test_game_update();
     test_keep_saves();
     test_usb_play();
+    test_sources_skip_apps();
+    test_play_speed();
     test_controls();
     test_settings();
     test_api_keys();

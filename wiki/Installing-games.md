@@ -119,6 +119,8 @@ A game can also play straight from its USB drive, without being copied to the co
 Good to know:
 
 - It is for USB drives (exFAT), not a drive the PS5 formatted as extended storage.
+- It needs a fast USB port. PC5 times a short read first: a drive in a USB 2.0 port (the front USB-A port on the original PS5) is too slow to play from, and PC5 says so. Plug it into a port on the back, or the front USB-C port. Installing from a slow port still works.
+- Games in PC5's INSTALL folder are always installed: Play from USB isn't offered for them.
 - Keep the drive plugged in to play. It can be in any USB port. With it unplugged, PC5 asks you to plug it in instead of starting the game.
 - Loading is as fast as the drive is: a USB hard drive is slower than the console.
 - The game can write to its own folder on the drive (some keep their saves or settings there).

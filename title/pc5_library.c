@@ -1831,6 +1831,69 @@ uint64_t pc5_install_needs(const Pc5Folder *folder)
     return folder->bytes + TEMPLATE_ROOM + SPARE_ROOM;
 }
 
+double pc5_play_min_speed = 50.0;
+
+/* The biggest file in dir, depth levels down at most, looking at no more than *budget entries. */
+static void biggest_file(const char *dir, int depth, int *budget, char *out, size_t size, off_t *best)
+{
+    DIR *d = opendir(dir);
+    struct dirent *entry;
+    char path[PC5_PATH];
+    struct stat st;
+
+    if (!d) return;
+    while (*budget > 0 && (entry = readdir(d))) {
+        if (entry->d_name[0] == '.' || pc5_join(path, sizeof(path), dir, entry->d_name) || stat(path, &st)) continue;
+        --*budget;
+        if (S_ISREG(st.st_mode) && st.st_size > *best) {
+            *best = st.st_size;
+            pc5_copy(out, size, path);
+        } else if (S_ISDIR(st.st_mode) && depth > 0) {
+            biggest_file(path, depth - 1, budget, out, size, best);
+        }
+    }
+    closedir(d);
+}
+
+static uint64_t now_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+
+double pc5_usb_read_speed(const char *folder)
+{
+    char file[PC5_PATH] = "";
+    off_t size = 0;
+    int budget = 4000;
+    uint64_t want, got = 0, start, took;
+    char *buffer;
+    int fd;
+
+    biggest_file(folder, 6, &budget, file, sizeof(file), &size);
+    if (!file[0] || size < PC5_SPEED_SMALLEST) return 0;
+    want = (uint64_t)size / 2 < PC5_SPEED_READ ? (uint64_t)size / 2 : PC5_SPEED_READ;
+    if (want < PC5_SPEED_SMALLEST / 2 || (fd = open(file, O_RDONLY)) < 0) return 0;
+    if (!(buffer = pc5_alloc(1 << 20))) {
+        close(fd);
+        return 0;
+    }
+    /* From its second half: the folder's reading took its headers, not this. */
+    if (lseek(fd, (off_t)(((uint64_t)size - want) & ~(uint64_t)0xfffff), SEEK_SET) < 0) want = 0;
+    start = now_us();
+    while (got < want) {
+        ssize_t n = read(fd, buffer, 1 << 20);
+        if (n <= 0) break;
+        got += (uint64_t)n;
+    }
+    took = now_us() - start;
+    pc5_free(buffer);
+    close(fd);
+    if (got < want || !want) return 0;
+    return (double)got / (1024.0 * 1024.0) / ((double)(took ? took : 1) / 1e6);
+}
+
 uint64_t pc5_install_needs_usb(const Pc5Folder *folder)
 {
     (void)folder;
@@ -1953,6 +2016,17 @@ static int install_begin(Pc5Install *install, const char *root, const char *temp
     needs = in_place || install->take ? pc5_install_needs_usb(folder) : pc5_install_needs(folder);
     if (in_place && pc5_usb_relative(folder->path, info->usb, sizeof(info->usb)))
         return fail(install, "Only a game on a USB drive can play from it: this folder isn't on one.");
+    if (in_place && take_dir[0] && !strncmp(folder->path, take_dir, strlen(take_dir)))
+        return fail(install, "A game in PC5's INSTALL folder is installed, not played from there.");
+    if (in_place) {
+        /* A slow port (USB 2.0) can't keep a game fed: refused, with where to plug in instead. */
+        double speed = pc5_usb_read_speed(folder->path);
+        if (speed > 0 && speed < pc5_play_min_speed)
+            return fail(install, "The drive reads at %.0f MB/s in this USB port, too slow to play from (at least "
+                        "%.0f is needed). On the original PS5 the front USB-A port is the slow one: plug the drive "
+                        "into a port on the back, or the front USB-C port. Install still works from this port.",
+                        speed, pc5_play_min_speed);
+    }
     windows_path(info->folder, info->exe, 1, exe_path, sizeof(exe_path));
     if (strlen(exe_path) >= 260) return fail(install, "The game's program is too deep in its folder for Windows.");
     if (pc5_format(path, sizeof(path), "%s/profiles", root) || pc5_mkdirs(path) ||
@@ -2197,7 +2271,7 @@ static int finish(Pc5Install *install)
     }
     /* Copied from the INSTALL folder on another drive: the copy there is set aside
      * (.installed-<name>, which nothing lists) and deleted, now or when PC5 next opens. */
-    if (in_take_dir(install->source) && pc5_exists(install->source)) {
+    if (!install->in_place && in_take_dir(install->source) && pc5_exists(install->source)) {
         const char *leaf = strrchr(install->source, '/');
         char base[PC5_PATH], aside[PC5_PATH];
         snprintf(base, sizeof(base), ".installed-%.200s", leaf + 1);

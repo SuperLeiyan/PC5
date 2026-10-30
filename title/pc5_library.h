@@ -194,6 +194,15 @@ int pc5_install_begin(Pc5Install *install, const char *root, const char *templat
  * on the console, and its folder there is a link to the drive's (pc5_usb_link). */
 int pc5_install_begin_usb(Pc5Install *install, const char *root, const char *template_prefix,
                           const Pc5Folder *folder, int exe, Pc5Image *cover, uint32_t tint, const char *cover_source);
+/* How fast the drive reads the folder's biggest file (at most PC5_SPEED_READ of it, from
+ * past its start, so not what reading the folder left in memory): MB a second, or 0 when it
+ * has no file big enough to tell (PC5_SPEED_SMALLEST) or can't be read. */
+double pc5_usb_read_speed(const char *folder);
+/* Playing from a USB drive needs this much (MB a second): a drive on a USB 2.0 port (the
+ * original PS5's front USB-A) reads at about 40 at most, one on a fast port several times
+ * more. Settable for tests. */
+extern double pc5_play_min_speed;
+enum { PC5_SPEED_READ = 32 << 20, PC5_SPEED_SMALLEST = 8 << 20 };
 /* Bytes an install of folder to play from its USB drive needs on the console: its Windows
  * and some room. */
 uint64_t pc5_install_needs_usb(const Pc5Folder *folder);

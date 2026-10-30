@@ -1559,6 +1559,9 @@ static void speed_reset(Pc5Ui *ui)
 static int review_on_usb(const Pc5Ui *ui)
 {
     char relative[PC5_PATH];
+    /* A game in PC5's INSTALL folder is installed, never played from there. */
+    size_t n = strlen(ui->install_dir);
+    if (n && !strncmp(ui->folder.path, ui->install_dir, n) && ui->folder.path[n] == '/') return 0;
     return ui->queue_review < 0 && !pc5_usb_relative(ui->folder.path, relative, sizeof(relative));
 }
 
