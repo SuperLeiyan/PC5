@@ -133,8 +133,5 @@ payload SDK and boilerplate, and the Lapy helper. Also:
 - the PS5 Forwarder Format by heydemoura (GPL 3.0 or later)
 - the Liberation fonts (SIL OFL 1.1), Droid Sans Fallback (Apache 2.0) and Inter (SIL OFL 1.1)
 
-Blur5 and sahin were inspiration only; no code was taken from them. Licence texts are in the
-app's `LICENSES/` folder and in `fonts/`; see [NOTICE.md](NOTICE.md).
-
 PC5 is not made by or connected to Sony, Valve, GOG, GitHub, PCGamingWiki or the Wikimedia
 Foundation.

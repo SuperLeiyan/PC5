@@ -32,9 +32,8 @@ from its own folder on the console: its eboot.bin (prospero-win's, LGPL 2.1 or l
 changed only where it names the app's title ID, so that it serves the tile. Their source is
 the app's, in PPSA11018-sources.tar.xz.
 
-Blur5 (<https://github.com/bornaradusin/Blur5>) and sahin (<https://github.com/7tg/sahin>)
-were looked at for ideas only. None of their code is in PC5. PS5_MihawkOS's own code (GPL
-3.0) is not in PC5 either: only the Wine patches above, which are under Wine's licence.
+PS5_MihawkOS's own code (GPL 3.0) is not in PC5: only the Wine patches above, which are under
+Wine's licence.
 
 Game covers are not part of PC5. On the console it downloads them, for the games the player
 installs, from Steam's store, SteamGridDB (with the player's own key), GOG's catalogue,
