@@ -645,6 +645,11 @@ static void test_pe(void)
         CHECK(pc5_pe_unreal_d3d12(ue, PC5_IMPORT_DXGI), "one with the Agility SDK's D3D12 folder");
         CHECK(!pc5_pe_unreal_d3d12(other, PC5_IMPORT_DXGI), "not outside Binaries\\Win64");
         unlink(sdk);
+        /* in its x64 folder, as Gears of War: E-Day ships it */
+        path(sdk, sizeof(sdk), "%s/ue5/Game/Binaries/Win64/d3d12/x64/D3D12Core.dll", work);
+        write_text(sdk, "MZ");
+        CHECK(pc5_pe_unreal_d3d12(ue, PC5_IMPORT_DXGI), "one with D3D12\\x64\\D3D12Core.dll");
+        unlink(sdk);
         /* or its export in the program (a real PE file, made by MinGW) */
         char agility[PC5_PATH];
         path(file, sizeof(file), "%s/agility.exe", programs);

@@ -454,7 +454,7 @@ static int entry_ci(const char *dir, const char *name, char *out, size_t size)
  * case), or the SDK's export in it. Only a program that draws with Direct3D 12 has either. */
 static int agility_sdk(const char *path)
 {
-    char dir[PC5_PATH], sub[PC5_PATH], core[PC5_PATH];
+    char dir[PC5_PATH], sub[PC5_PATH], core[PC5_PATH], x64[PC5_PATH];
     char *slash;
     Pe pe;
     int found = 0;
@@ -463,7 +463,11 @@ static int agility_sdk(const char *path)
     slash = strrchr(dir, '/');
     if (slash) {
         *slash = 0;
-        if (entry_ci(dir, "d3d12", sub, sizeof(sub)) && entry_ci(sub, "d3d12core.dll", core, sizeof(core))) return 1;
+        /* D3D12\D3D12Core.dll, or D3D12\x64\D3D12Core.dll as some ship it (Gears of War: E-Day). */
+        if (entry_ci(dir, "d3d12", sub, sizeof(sub)) &&
+            (entry_ci(sub, "d3d12core.dll", core, sizeof(core)) ||
+             (entry_ci(sub, "x64", x64, sizeof(x64)) && entry_ci(x64, "d3d12core.dll", core, sizeof(core)))))
+            return 1;
     }
     if (!pe_open(path, &pe)) {
         found = exports(&pe, "d3d12sdkversion");
