@@ -136,6 +136,9 @@ int pc5_controls_load(const char *root, const char *id, Pc5Controls *controls)
              * default): it is left out, so such a game is Auto now. */
             if (!strcmp(value, "4gb")) controls->memory_4gb = 1;
             else if (!strcmp(value, "auto")) controls->memory_4gb = 0;
+        } else if (!strcmp(name, "video_memory")) {
+            if (!strcmp(value, "full")) controls->video_memory_full = 1;
+            else if (!strcmp(value, "auto")) controls->video_memory_full = 0;
         } else if (!strcmp(name, "cpu_sharing")) {
             if (!strcmp(value, "on")) controls->cpu_sharing = 1;
             else if (!strcmp(value, "off")) controls->cpu_sharing = 0;
@@ -175,6 +178,8 @@ int pc5_controls_save(const char *root, const char *id, const Pc5Controls *contr
                                    "mode = %s\nleft_stick = %s\nright_stick = %s\npointer_speed = %d\n"
                                    "# Triangle on the game, then Frame generation\nframe_generation = %s\n"
                                    "# Triangle on a 32-bit game, then Memory: auto (as Windows) or 4gb\nmemory = %s\n"
+                                   "# Triangle on a 32-bit game, then Video memory: auto (2 GB at most) or full\n"
+                                   "video_memory = %s\n"
                                    "# Triangle on the game, then Resolution\nresolution = %s\n"
                                    "# Triangle on the game, then Aspect ratio\naspect_ratio = %s\n"
                                    "# Triangle on the game, then CPU sharing\ncpu_sharing = %s\n"
@@ -182,6 +187,7 @@ int pc5_controls_save(const char *root, const char *id, const Pc5Controls *contr
                             mode_keys[controls->mode % PC5_PAD_MODES], stick_keys[controls->stick[0] % PC5_STICK_USES],
                             stick_keys[controls->stick[1] % PC5_STICK_USES], controls->speed,
                             controls->frame_generation ? "on" : "off", controls->memory_4gb ? "4gb" : "auto",
+                            controls->video_memory_full ? "full" : "auto",
                             controls->resolution == 2 ? "2160p" : controls->resolution == 1 ? "1440p" : "1080p",
                             controls->stretch ? "stretch" : "keep", controls->cpu_sharing ? "on" : "off",
                             graphics_keys[controls->graphics % PC5_GRAPHICS_COUNT]);

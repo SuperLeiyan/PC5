@@ -63,6 +63,11 @@ typedef struct Pc5Controls {
      * address above 2 GB for a negative number or size what it asks for by the room it sees.
      * 1: 4 GB for any, room for big textures and mods (the default from 1.4.0 to 1.9.7). */
     int memory_4gb;
+    /* A 32-bit game's video memory, as Wine's own Direct3D (its DirectDraw, its hardware check,
+     * dxdiag) tells it. 0, Auto: at most 2 GB, a number an older game's check can take (the
+     * console's 8 GB, past what a 32-bit number holds, reads to it as none or as negative).
+     * 1, Full: all of it. A 64-bit game is always told all of it. */
+    int video_memory_full;
     int resolution;               /* 0: 1920x1080, 1: 2560x1440, 2: 3840x2160 (games drawn through Vulkan) */
     int stretch;                  /* 1: the picture stretched to fill the 16:9 screen, 0: its own shape */
     int cpu_sharing;              /* 1: the game's threads take turns on the CPUs, as on a PC (prospero-win's

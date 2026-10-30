@@ -153,11 +153,11 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
  * and mouse) and the three groups on the first; each group's rows on a page of its own. */
 typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
-    GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_CPU_SHARING,
+    GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_VIDEO_MEMORY, GR_CPU_SHARING,
     GR_COVER, GR_BACKGROUND, GR_HOME, GR_ICON,
     GR_PROGRAM, GR_FILES, GR_UPDATE, GR_UNINSTALL
 } GameRow;
-enum { GAME_ROWS = 6, GAME_PAGES = 4, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3 };
+enum { GAME_ROWS = 7, GAME_PAGES = 4, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3 };
 static const char *const game_page_titles[GAME_PAGES] = { "", "Graphics", "Appearance", "Manage" };
 /* The first page's row that opens each page. */
 static const GameRow game_page_rows[GAME_PAGES] = { GR_PLAY, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE };
@@ -176,6 +176,7 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         if (kind & GAME_VULKAN) rows[n++] = GR_RESOLUTION;
         rows[n++] = GR_ASPECT;
         if (kind & GAME_32BIT) rows[n++] = GR_MEMORY;
+        if (kind & GAME_32BIT) rows[n++] = GR_VIDEO_MEMORY;
         rows[n++] = GR_CPU_SHARING;
         break;
     case GP_APPEARANCE:
@@ -2161,10 +2162,10 @@ static void controls_changed(Pc5Ui *ui)
 {
     const Pc5Controls *k = &ui->controls;
     if (pc5_controls_save(ui->root, ui->launch_id, k)) say(ui, "PC5 problem controls %s: can't write them", ui->launch_id);
-    say(ui, "PC5 controls id=%s mode=%s left=%s right=%s speed=%d frame_generation=%d memory_32bit=%s resolution=%s "
-        "aspect_ratio=%s cpu_sharing=%d graphics_api=%s", ui->launch_id, pc5_pad_mode_name(k->mode),
+    say(ui, "PC5 controls id=%s mode=%s left=%s right=%s speed=%d frame_generation=%d memory_32bit=%s video_memory=%s "
+        "resolution=%s aspect_ratio=%s cpu_sharing=%d graphics_api=%s", ui->launch_id, pc5_pad_mode_name(k->mode),
         pc5_stick_use_name(k->stick[0]), pc5_stick_use_name(k->stick[1]), k->speed, k->frame_generation,
-        k->memory_4gb ? "4gb" : "auto", k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p",
+        k->memory_4gb ? "4gb" : "auto", k->video_memory_full ? "full" : "auto", k->resolution == 2 ? "2160p" : k->resolution == 1 ? "1440p" : "1080p",
         k->stretch ? "stretch" : "keep", k->cpu_sharing, pc5_graphics_name(k->graphics, ui_game_api(ui)));
 }
 
@@ -3467,6 +3468,10 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->controls.memory_4gb = !ui->controls.memory_4gb;
             controls_changed(ui);
             ui->dirty = 1;
+        } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_VIDEO_MEMORY) {
+            ui->controls.video_memory_full = !ui->controls.video_memory_full;
+            controls_changed(ui);
+            ui->dirty = 1;
         } else if ((k & (PC5_KEY_LEFT | PC5_KEY_RIGHT | accept)) && row == GR_CPU_SHARING) {
             ui->controls.cpu_sharing = !ui->controls.cpu_sharing;
             controls_changed(ui);
@@ -3886,7 +3891,16 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 break;
             }
             remember_played(ui, ui->launch_id);
-            say(ui, "PC5 play id=%s", ui->launch_id);
+            if (index >= 0) {
+                /* What it draws with, as PC5 saw it, and the Graphics API chosen for it. */
+                Pc5Controls chosen;
+                const Pc5Game *game = &ui->library.games[index];
+                pc5_controls_load(ui->root, ui->launch_id, &chosen);
+                say(ui, "PC5 play id=%s api=%s graphics=%s bits=%d", ui->launch_id, pc5_api_name(game->api),
+                    pc5_graphics_name(chosen.graphics, game->api), game->bits);
+            } else {
+                say(ui, "PC5 play id=%s", ui->launch_id);
+            }
             if (ui->platform.play) ui->platform.play(ui->platform.context, ui->launch_id);
             snprintf(title, sizeof(title), "%s didn't start", index >= 0 ? ui->library.games[index].title : "The game");
             say(ui, "PC5 problem play %s: the console refused to start it", ui->launch_id);
@@ -4487,6 +4501,12 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
                                         : "As Windows: 4 GB for a game made for it, otherwise 2 GB";
         *value = ui->controls.memory_4gb ? "4 GB" : "Auto";
         break;
+    case GR_VIDEO_MEMORY:
+        *label = "Video memory";
+        *text = ui->controls.video_memory_full ? "All the console's; Auto if the game says there is too little"
+                                               : "2 GB at most, a number older games' checks can read";
+        *value = ui->controls.video_memory_full ? "Full" : "Auto";
+        break;
     case GR_CPU_SHARING:
         *label = "CPU sharing";
         *text = ui->controls.cpu_sharing ? "Its threads take turns on the CPUs, as on a PC" : "Each thread keeps its CPU; On if the game stalls";
@@ -4562,7 +4582,7 @@ static void game_menu_screen(Pc5Ui *ui, Pc5Canvas *c, int chosen)
     }
     GameRow row = chosen >= 0 && chosen < count ? rows[chosen] : GR_PLAY;
     int changes = row == GR_CONTROLLER || row == GR_FRAMEGEN || row == GR_RESOLUTION || row == GR_ASPECT ||
-                  row == GR_MEMORY || row == GR_CPU_SHARING || row == GR_HOME;
+                  row == GR_MEMORY || row == GR_VIDEO_MEMORY || row == GR_CPU_SHARING || row == GR_HOME;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);
 }

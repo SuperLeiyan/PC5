@@ -5,6 +5,7 @@
 #include "pc5_pe.h"
 #include "pc5_image.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -417,6 +418,60 @@ Pc5Api pc5_api_from_imports(uint32_t imports)
     return PC5_API_GDI;
 }
 
+/* 1 when the program exports name (lower case), as the Direct3D 12 Agility SDK has a program
+ * export D3D12SDKVersion: the runtime looks it up by that name, so no packer hides it. */
+static int exports(const Pe *pe, const char *name)
+{
+    uint8_t d[40];
+    char got[64];
+    uint32_t count, names;
+
+    if (!pe->dir_rva[0] || read_rva(pe, pe->dir_rva[0], d, sizeof(d))) return 0;
+    count = u32(d + 24);
+    names = u32(d + 32);
+    for (uint32_t i = 0; i < count && i < 65536; i++) {
+        uint8_t at[4];
+        if (read_rva(pe, names + 4 * i, at, sizeof(at))) return 0;
+        if (!read_name(pe, u32(at), got, sizeof(got)) && !strcmp(got, name)) return 1;
+    }
+    return 0;
+}
+
+/* name in dir, its case aside, into out: 1 when there is one. */
+static int entry_ci(const char *dir, const char *name, char *out, size_t size)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    int found = 0;
+    if (!d) return 0;
+    while (!found && (e = readdir(d)))
+        if (!pc5_casecmp(e->d_name, name)) found = !pc5_join(out, size, dir, e->d_name);
+    closedir(d);
+    return found;
+}
+
+/* 1 when the program ships the Direct3D 12 Agility SDK: D3D12\D3D12Core.dll beside it (any
+ * case), or the SDK's export in it. Only a program that draws with Direct3D 12 has either. */
+static int agility_sdk(const char *path)
+{
+    char dir[PC5_PATH], sub[PC5_PATH], core[PC5_PATH];
+    char *slash;
+    Pe pe;
+    int found = 0;
+
+    pc5_copy(dir, sizeof(dir), path);
+    slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = 0;
+        if (entry_ci(dir, "d3d12", sub, sizeof(sub)) && entry_ci(sub, "d3d12core.dll", core, sizeof(core))) return 1;
+    }
+    if (!pe_open(path, &pe)) {
+        found = exports(&pe, "d3d12sdkversion");
+        pe_close(&pe);
+    }
+    return found;
+}
+
 int pc5_pe_unreal_d3d12(const char *path, uint32_t imports)
 {
     char lower[PC5_PATH];
@@ -426,7 +481,9 @@ int pc5_pe_unreal_d3d12(const char *path, uint32_t imports)
     for (const char *p = path; *p && n + 1 < sizeof(lower); p++) lower[n++] = *p == '\\' ? '/' : (char)pc5_lower((unsigned char)*p);
     lower[n] = 0;
     if (!strstr(lower, "/binaries/win64/") && strncmp(lower, "binaries/win64/", 15)) return 0;
-    return (pc5_pe_named_libraries(path) & PC5_IMPORT_D3D12) != 0;
+    /* The Agility SDK first: some programs (a large or packed one) don't show d3d12.dll's
+     * name where pc5_pe_named_libraries looks. */
+    return agility_sdk(path) || (pc5_pe_named_libraries(path) & PC5_IMPORT_D3D12) != 0;
 }
 
 /* 1 when the file at path holds text (ASCII, as it is), in its first GB. */

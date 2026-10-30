@@ -160,6 +160,17 @@ int pc5_runtime_begin(Pc5Runtime *runtime, const char *root, const char *app, co
 /* Copies for about budget_ms: 1 when the copy is whole, 0 to go on, -1 on a failure. */
 int pc5_runtime_step(Pc5Runtime *runtime, int budget_ms);
 void pc5_runtime_end(Pc5Runtime *runtime);
+/* The game's own environment variables, from root/prefixes/<prefix>/pc5/env.txt: one
+ * NAME=value a line ("#" for a comment), set before Wine starts, which passes them to the
+ * game as Windows does its own. A game that reads a setting of its own from there (Yu-Gi-Oh!
+ * Forbidden Memories Recompiled's MEMORIES_NO_MONITOR) gets it. Names only of letters, digits
+ * and _, not starting with a digit; never one Wine, prospero-win or PC5 set (WINE..., PW_...,
+ * LD_..., PS5..., PC5..., PATH, HOME, TMPDIR). At most PC5_GAME_ENV_MAX. How many were set,
+ * their names in names (comma-separated). */
+enum { PC5_GAME_ENV_MAX = 32 };
+int pc5_game_env(const char *root, const char *prefix, char *names, size_t size);
+/* 1 when name can be set from env.txt. */
+int pc5_game_env_name_ok(const char *name);
 /* At the game's start: PC5's settings, the game's cover colour, its
  * prefix's media registrations and its DXVK, from root (/data/prospero-win),
  * the game's prefix and the app's folder. */

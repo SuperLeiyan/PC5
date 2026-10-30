@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -452,6 +453,57 @@ void pc5_runtime_end(Pc5Runtime *runtime)
     pc5_buf_free(&runtime->list);
 }
 
+int pc5_game_env(const char *root, const char *prefix, char *names, size_t size)
+{
+    char path[PC5_PATH];
+    Pc5Buf text = { 0 };
+    int set = 0;
+
+    if (names && size) names[0] = 0;
+    if (!prefix || !prefix[0] || pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/env.txt", root, prefix) ||
+        pc5_read_file(path, &text, 64 * 1024) || pc5_buf_terminate(&text)) {
+        pc5_buf_free(&text);
+        return 0;
+    }
+    for (char *line = (char *)text.data, *next; line && *line && set < PC5_GAME_ENV_MAX; line = next) {
+        char *equals, *end;
+        size_t n;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        while (*line == ' ' || *line == '\t') line++;
+        for (end = line + strlen(line); end > line && (end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t'); end--) {}
+        *end = 0;
+        if (!line[0] || line[0] == '#' || !(equals = strchr(line, '='))) continue;
+        *equals = 0;
+        for (n = strlen(line); n && (line[n - 1] == ' ' || line[n - 1] == '\t'); n--) line[n - 1] = 0;
+        char *value = equals + 1;
+        while (*value == ' ' || *value == '\t') value++;
+        if (!pc5_game_env_name_ok(line)) continue;
+        if (setenv(line, value, 1)) continue;
+        set++;
+        if (names && size) {
+            size_t at = strlen(names);
+            snprintf(names + at, size - at, "%s%s", at ? "," : "", line);
+        }
+    }
+    pc5_buf_free(&text);
+    return set;
+}
+
+int pc5_game_env_name_ok(const char *name)
+{
+    /* What Wine, prospero-win and PC5 set themselves, and what finds programs and libraries. */
+    static const char *const kept[] = { "WINE", "PW_", "LD_", "PS5", "PC5" };
+    if (!name[0] || strlen(name) > 64 || !((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z') ||
+                                           name[0] == '_'))
+        return 0;
+    for (const char *c = name; *c; c++)
+        if (!((*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '_')) return 0;
+    for (size_t i = 0; i < sizeof(kept) / sizeof(kept[0]); i++)
+        if (!strncasecmp(name, kept[i], strlen(kept[i]))) return 0;
+    return pc5_casecmp(name, "PATH") && pc5_casecmp(name, "HOME") && pc5_casecmp(name, "TMPDIR");
+}
+
 void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *root, const char *app,
                     const char *prefix, const char *title)
 {
@@ -514,6 +566,12 @@ void pc5_game_begin(Pc5GameSession *game, const Pc5GameOps *ops, const char *roo
     else setenv("PW_LARGE_ADDRESS_AWARE", "0", 1);
     if (cpu_sharing) setenv("WINE_PS5_SCHED", "1", 1);
     else unsetenv("WINE_PS5_SCHED");
+    /* The game's own settings it reads from its environment (pc5/env.txt, pc5_game.h). */
+    {
+        char names[512];
+        int set = pc5_game_env(root, prefix, names, sizeof(names));
+        if (set) say(game, "PC5 env.txt set=%d %s", set, names);
+    }
     /* A Java game's launcher made with jpackage: its app folder in PATH from the start, which
      * Wine takes from WINEPATH (pc5_game_winepath). */
     char winepath[PC5_PATH + 40];

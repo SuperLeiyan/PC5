@@ -54,9 +54,11 @@ uint32_t pc5_pe_named_libraries(const char *path);
 /* The most capable API among the imports. */
 Pc5Api pc5_api_from_imports(uint32_t imports);
 /* 1 when the program at path (a path on the disk, or relative, either slash) is an Unreal
- * Engine game's, in a Binaries\Win64 folder, whose imports don't name Direct3D 12 but whose
- * code does (d3d12.dll): Unreal Engine 5 loads d3d12.dll itself and draws with it, while
- * its imports name only Direct3D 11 or DXGI. imports: the program's own. */
+ * Engine game's, in a Binaries\Win64 folder, whose imports don't name Direct3D 12 but that
+ * draws with it: it ships the Direct3D 12 Agility SDK (D3D12\D3D12Core.dll beside it, or
+ * the SDK's D3D12SDKVersion export), or its code names d3d12.dll. Unreal Engine 5 loads
+ * d3d12.dll itself, while its imports name only Direct3D 11 or DXGI. imports: the
+ * program's own. */
 int pc5_pe_unreal_d3d12(const char *path, uint32_t imports);
 /* 1 when the program at path is a Godot Engine game's: its data beside it (<name>.pck) or
  * the engine's name in it ("Godot Engine"). Its imports name Direct3D, but a Godot game

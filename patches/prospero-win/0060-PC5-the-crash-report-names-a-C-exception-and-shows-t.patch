@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 09:00:00 +0000
+Subject: [PATCH 60/60] PC5: the crash report names a C++ exception and shows the
+ code at the fault (Wine patch 0939)
+
+A game's engine that stopped itself with a C++ exception it didn't catch
+was reported only by the exception's code and address (Call of Juarez
+Gunslinger, the same in every log). Wine's crash report now names the
+exception's type and, for a std::exception, its message. A fault on an
+instruction the console refuses showed only as a read of FFFFFFFF (Far
+Cry's CrySystem.dll): the report now has the flags register and the
+code at the fault, so the next log says which instruction it was. Both
+only add lines to a report that is made anyway.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...mes-a-c-exception-and-shows-the-code.patch | 111 ++++++++++++++++++
+ 3 files changed, 113 insertions(+)
+ create mode 100644 wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index d138cd2..b2036a6 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -586,6 +586,7 @@ wine/patches/0935-ntdll-ps5-do-the-fs-access-a-repair-didn-t-take-for.patch
+ wine/patches/0936-ntdll-ps5-list-a-directory-by-its-nt-name.patch
+ wine/patches/0937-win32u-ps5-ordinary-memory-when-it-can-t-be-exported.patch
+ wine/patches/0938-ntdll-ps5-log-which-step-refuses-a-directory-listing.patch
++wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 4b1b38b..afb24fe 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -142,6 +142,7 @@ before evaluating a candidate built from that cache.
+ | 0936 | `ntdll`: a directory whose handle the server keeps no Unix name for (patch 0140 enters directories by that name) is entered by the Unix name of its NT name (`\??\C:\...`), as `NtCreateFile` resolves it; `NtQueryDirectoryFile` failed with `STATUS_INVALID_HANDLE` (`fchdir`'s `EBADF`), and .NET's `FileSystemEnumerator` threw "invalid handle" for a game's folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`), whose maps then never loaded. A directory still not entered is logged with which name failed and why |
+ | 0937 | `win32u`: memory a program asks `vkAllocateMemory` for as shareable (`VkExportMemoryAllocateInfo` with Win32 handle types) is an ordinary allocation when the host can't export memory: the PS5's RADV has no `VK_KHR_external_memory_fd`, so the export failed ("Unsupported handle type 0") and the allocation with it. DXVK making a shared texture for an Unreal Engine 5 game on Direct3D 12 (STRETCHER.MEN) got no memory, and the game crashed calling a null function; now it gets its memory, and a handle for it can't be had |
+ | 0938 | `ntdll`: `NtQueryDirectoryFile` logs an error, with the directory's name when the server keeps one, the step and the status, when it fails before patch 0936's logging: the server gives no descriptor for the handle, it isn't a directory, or its names aren't read (the directory cache refuses the handle). A .NET game reported only "invalid handle" for its folder (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936). A listing that works, or only ends, logs nothing |
++| 0939 | `kernelbase`: the crash report (0912, 0924) names a C++ exception a program threw and didn't catch (0xe06d7363): its type as the compiler names it and, for a `std::exception`, its message; and it shows the flags register and the 16 bytes of code at the fault. Call of Juarez Gunslinger's engine gave up with an uncaught C++ exception in every log, none saying why; Far Cry's CrySystem.dll faulted on an instruction reported only as a read of FFFFFFFF. Both are read under an exception handler and only add lines to the report |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch b/wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch
+new file mode 100644
+index 0000000..be8477e
+--- /dev/null
++++ b/wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code.patch
+@@ -0,0 +1,111 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 09:00:00 +0000
++Subject: [PATCH] kernelbase: The crash report names a C++ exception and shows the code at the fault.
++
++A game's engine that stops itself with a C++ exception it doesn't catch
++(0xe06d7363) was reported only by its code and address: Call of Juarez
++Gunslinger's common.dll gave up the same way in every log, and none said
++why. The crash report now names the exception's type, as the compiler
++does (".?AVruntime_error@std@@"), and, for a std::exception, its
++message. A fault on an instruction the console refuses was reported as a
++read of FFFFFFFF with no way to tell which (Far Cry's CrySystem.dll):
++the report now has the flags register and the 16 bytes of code at the
++fault. Both are read under an exception handler, from the program's own
++data, and only add lines to a report that is made anyway.
++---
++diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
++--- a/dlls/kernelbase/debug.c
+++++ b/dlls/kernelbase/debug.c
++@@ -558,6 +558,79 @@ static const WCHAR *code_module( ULONG_PTR addr, ULONG_PTR *base, USHORT *len )
++     return NULL;
++ }
++ 
+++#if defined(__i386__) || defined(__x86_64__)
+++/* The flags register and the 16 bytes of code at the fault: an instruction the console refuses
+++ * (a privileged one, or one the kernel doesn't emulate) shows there, and the flags a program set
+++ * (NT, which makes the kernel's return fault) with it. */
+++static void crash_code( const CONTEXT *ctx, ULONG_PTR pc )
+++{
+++    unsigned char code[16];
+++
+++    __TRY
+++    {
+++        memcpy( code, (const void *)pc, sizeof(code) );
+++        MESSAGE( "wine: crash report: flags=%08lx code at it: %02x %02x %02x %02x %02x %02x %02x %02x "
+++                 "%02x %02x %02x %02x %02x %02x %02x %02x\n", (unsigned long)ctx->EFlags,
+++                 code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7],
+++                 code[8], code[9], code[10], code[11], code[12], code[13], code[14], code[15] );
+++    }
+++    __EXCEPT_PAGE_FAULT
+++    {
+++        MESSAGE( "wine: crash report: flags=%08lx, no code at it\n", (unsigned long)ctx->EFlags );
+++    }
+++    __ENDTRY
+++}
+++
+++/* A C++ exception a program threw and didn't catch (0xe06d7363, as MSVC throws them): its type,
+++ * as the compiler names it (".?AVruntime_error@std@@"), and the message of a std::exception,
+++ * which says why a game's engine gave up. Read with care: a program's own data. */
+++static void crash_cxx( const EXCEPTION_RECORD *rec )
+++{
+++    ULONG_PTR image = 0;
+++    const char *name = NULL, *what = NULL;
+++    BOOL is_std = FALSE;
+++
+++    if (rec->ExceptionCode != 0xe06d7363 || rec->NumberParameters < 3 ||
+++        rec->ExceptionInformation[0] < 0x19930520 || rec->ExceptionInformation[0] > 0x19930522 ||
+++        !rec->ExceptionInformation[2])
+++        return;
+++#ifdef _WIN64
+++    if (rec->NumberParameters < 4) return;
+++    image = rec->ExceptionInformation[3];   /* 64-bit: what follows are offsets from the module */
+++#endif
+++    __TRY
+++    {
+++        /* ThrowInfo: attributes, unwind, forward compatibility, the catchable types; each a
+++         * 32-bit pointer, or an offset on 64-bit. */
+++        const DWORD *throw_info = (const DWORD *)rec->ExceptionInformation[2];
+++        const DWORD *types = (const DWORD *)(image + throw_info[3]);
+++        unsigned int count = types[0], i;
+++
+++        for (i = 0; i < count && i < 16; i++)
+++        {
+++            /* CatchableType: properties, its type_info (a vtable, a pointer, then the name) */
+++            const DWORD *catchable = (const DWORD *)(image + types[1 + i]);
+++            const char *type_name = (const char *)(image + catchable[1]) + 2 * sizeof(void *);
+++            if (!i) name = type_name;
+++            if (!strcmp( type_name, ".?AVexception@std@@" )) is_std = TRUE;
+++        }
+++        if (name) MESSAGE( "wine: crash report: C++ exception %s\n", debugstr_an( name, 120 ) );
+++        /* std::exception: its vtable, then its message */
+++        if (is_std && rec->ExceptionInformation[1])
+++            what = ((const char *const *)rec->ExceptionInformation[1])[1];
+++        if (what) MESSAGE( "wine: crash report: its message: %s\n", debugstr_an( what, 200 ) );
+++    }
+++    __EXCEPT_PAGE_FAULT
+++    {
+++        MESSAGE( "wine: crash report: the C++ exception's type can't be read\n" );
+++    }
+++    __ENDTRY
+++}
+++#else
+++static void crash_code( const CONTEXT *ctx, ULONG_PTR pc ) {}
+++static void crash_cxx( const EXCEPTION_RECORD *rec ) {}
+++#endif
+++
++ static void crash_report( EXCEPTION_POINTERS *epointers )
++ {
++     const CONTEXT *ctx = epointers->ContextRecord;
++@@ -580,6 +653,8 @@ static void crash_report( EXCEPTION_POINTERS *epointers )
++ #endif
++     if ((name = code_module( pc, &base, &len )))
++         MESSAGE( "wine: crash report: at %s+0x%Ix\n", debugstr_wn( name, len ), pc - base );
+++    crash_code( ctx, pc );
+++    crash_cxx( epointers->ExceptionRecord );
++     slot = (ULONG_PTR *)sp;
++     top = NtCurrentTeb()->Tib.StackBase;
++     if (slot < (ULONG_PTR *)NtCurrentTeb()->Tib.StackLimit || slot >= top || (sp & (sizeof(ULONG_PTR) - 1)))
++-- 
++2.43.0
++
+-- 
+2.43.0
+

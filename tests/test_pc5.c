@@ -635,6 +635,25 @@ static void test_pe(void)
         CHECK(pc5_pe_unreal_d3d12("Game\\Binaries\\Win64\\missing.exe", PC5_IMPORT_D3D11) == 0, "nor a missing one");
         write_text(ue, "MZ ... d3d11.dll only ...");
         CHECK(!pc5_pe_unreal_d3d12(ue, PC5_IMPORT_D3D11), "nor one that doesn't name it");
+        /* One that doesn't name it where PC5 looks (Gears of War: E-Day's) but ships the
+         * Direct3D 12 Agility SDK: its D3D12 folder beside it, any case. */
+        char sdk[PC5_PATH];
+        path(sdk, sizeof(sdk), "%s/ue5/Game/Binaries/Win64/d3d12/D3D12Core.DLL", work);
+        write_text(sdk, "MZ");
+        CHECK(pc5_pe_unreal_d3d12(ue, PC5_IMPORT_DXGI), "one with the Agility SDK's D3D12 folder");
+        CHECK(!pc5_pe_unreal_d3d12(other, PC5_IMPORT_DXGI), "not outside Binaries\\Win64");
+        unlink(sdk);
+        /* or its export in the program (a real PE file, made by MinGW) */
+        char agility[PC5_PATH];
+        path(file, sizeof(file), "%s/agility.exe", programs);
+        path(agility, sizeof(agility), "%s/ue5/Game/Binaries/Win64/Agility-Win64-Shipping.exe", work);
+        copy_file(file, agility);
+        CHECK(!pc5_pe_read(agility, &pe) && pe.imports == PC5_IMPORT_DXGI && pc5_pe_unreal_d3d12(agility, pe.imports),
+              "one exporting D3D12SDKVersion: %#x", (unsigned)pe.imports);
+        path(file, sizeof(file), "%s/game64.exe", programs);
+        path(agility, sizeof(agility), "%s/ue5/Game/Binaries/Win64/Plain-Win64-Shipping.exe", work);
+        copy_file(file, agility);
+        CHECK(!pc5_pe_unreal_d3d12(agility, PC5_IMPORT_D3D11), "and not a Direct3D 11 program without it");
         /* A Godot game: the engine's name in its program, or its data beside it. */
         char godot[PC5_PATH], pck[PC5_PATH];
         path(godot, sizeof(godot), "%s/godot/Mega Game 1.0.exe", work);
@@ -1372,8 +1391,25 @@ static void test_install(void)
         CHECK(!pc5_profile_refresh(root, "starfall", why, sizeof(why)), "refreshed: %s", why);
         pw_wine_library_load(pw, root);
         profile = pw_wine_library_find(pw, "starfall");
-        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_ZINK && !profile->debug_env_count, "OpenGL: as it was");
+        /* (a 32-bit game: told at most 2 GB of video memory, Video memory's Auto) */
+        CHECK(profile && profile->app.graphics == PW_APP_GRAPHICS_ZINK && profile->debug_env_count == 1 &&
+              !strcmp(profile->debug_env[0].name, "WINE_D3D_CONFIG") &&
+              !strcmp(profile->debug_env[0].value, "VideoMemorySize=2048"), "OpenGL: as it was, 2 GB of video memory told: %s",
+              profile && profile->debug_env_count ? profile->debug_env[0].value : "-");
+        /* Video memory: Full: told all of it. */
         k.graphics = PC5_GRAPHICS_AUTO;
+        k.video_memory_full = 1;
+        pc5_controls_save(root, "starfall", &k);
+        CHECK(!pc5_profile_refresh(root, "starfall", why, sizeof(why)), "refreshed: %s", why);
+        pw_wine_library_load(pw, root);
+        profile = pw_wine_library_find(pw, "starfall");
+        CHECK(profile && !profile->debug_env_count, "Video memory: Full: nothing told");
+        {
+            Pc5Controls back;
+            pc5_controls_load(root, "starfall", &back);
+            CHECK(back.video_memory_full == 1, "kept in its controls");
+        }
+        k.video_memory_full = 0;
         pc5_controls_save(root, "starfall", &k);
         CHECK(!pc5_profile_refresh(root, "starfall", why, sizeof(why)), "refreshed: %s", why);
     }
@@ -3868,6 +3904,27 @@ static void test_java(void)
     write_text(file, "[Application]\napp.mainclass=com.example.Main\n");
     CHECK(!pc5_game_winepath(root, "pixel", winepath, sizeof(winepath)) &&
           !strcmp(winepath, "C:\\Games\\Pixel Dungeon\\app"), "jpackage's app folder: %s", winepath);
+
+    /* env.txt: the game's own settings in its environment, never what Wine or PC5 set. */
+    {
+        char names[256];
+        unsetenv("MEMORIES_NO_MONITOR");
+        unsetenv("GAME_LOG");
+        CHECK(pc5_game_env(root, "pixel", names, sizeof(names)) == 0 && !names[0], "no env.txt: nothing");
+        path(file, sizeof(file), "%s/prefixes/pixel/pc5/env.txt", root);
+        write_text(file, "# the game's own\nMEMORIES_NO_MONITOR=1\n  GAME_LOG = C:\\logs\\a b.txt  \r\n\n"
+                         "WINEDEBUG=+all\nPW_LARGE_ADDRESS_AWARE=1\nLD_PRELOAD=x\nPath=C:\\\n9LIVES=1\nBAD-NAME=1\nno equals\n");
+        CHECK(pc5_game_env(root, "pixel", names, sizeof(names)) == 2 && !strcmp(names, "MEMORIES_NO_MONITOR,GAME_LOG"),
+              "two set: %s", names);
+        CHECK(getenv("MEMORIES_NO_MONITOR") && !strcmp(getenv("MEMORIES_NO_MONITOR"), "1") && getenv("GAME_LOG") &&
+              !strcmp(getenv("GAME_LOG"), "C:\\logs\\a b.txt"), "with their values, spaces around them left out");
+        CHECK(!getenv("PW_LARGE_ADDRESS_AWARE") || strcmp(getenv("PW_LARGE_ADDRESS_AWARE"), "1"), "never what PC5 sets");
+        CHECK(!pc5_game_env_name_ok("WineDllOverrides") && !pc5_game_env_name_ok("pw_x") && !pc5_game_env_name_ok("PATH") &&
+              pc5_game_env_name_ok("SteamAppId") && pc5_game_env_name_ok("_X1"), "the names it takes");
+        unsetenv("MEMORIES_NO_MONITOR");
+        unsetenv("GAME_LOG");
+        unlink(file);
+    }
 }
 
 /* A game started from a batch file runs with the bits of the program the batch file starts,

@@ -22,6 +22,7 @@ PROGRAMS = {
     "gl32.exe": ("i686-w64-mingw32-gcc", "opengl", ["-lopengl32"], True, False),
     "tool.exe": ("x86_64-w64-mingw32-gcc", "plain", [], False, False),
     "dotnet.exe": ("x86_64-w64-mingw32-gcc", "dotnet", ["-L.", "-lmscoree"], True, False),
+    "agility.exe": ("x86_64-w64-mingw32-gcc", "agility", ["-ldxgi"], True, False),
 }
 
 SOURCES = {
@@ -30,6 +31,9 @@ SOURCES = {
     "d3d12": "#include <windows.h>\nextern HRESULT WINAPI D3D12CreateDevice();\nextern HRESULT WINAPI CreateDXGIFactory1();\n__declspec(dllexport) int engine(void) { return (int)(INT_PTR)&D3D12CreateDevice + (int)(INT_PTR)&CreateDXGIFactory1; }\nBOOL WINAPI DllMain(HINSTANCE a, DWORD b, LPVOID c) { return TRUE; }\n",
     "opengl": "#include <windows.h>\nextern void WINAPI glClear(unsigned);\nint WINAPI WinMain(HINSTANCE a, HINSTANCE b, LPSTR c, int d) { glClear(0); return 0; }\n",
     "plain": "#include <windows.h>\nint main(void) { return 0; }\n",
+    # The Direct3D 12 Agility SDK's exports, as an Unreal Engine 5 game's program has them; it
+    # imports only DXGI, and loads d3d12.dll itself.
+    "agility": "#include <windows.h>\nextern HRESULT WINAPI CreateDXGIFactory1();\n__declspec(dllexport) const UINT D3D12SDKVersion = 614;\n__declspec(dllexport) const char *D3D12SDKPath = \".\\\\D3D12\\\\\";\nint WINAPI WinMain(HINSTANCE a, HINSTANCE b, LPSTR c, int d) { return (int)(INT_PTR)&CreateDXGIFactory1; }\n",
     "dotnet": "#include <windows.h>\nextern int WINAPI _CorExeMain(void);\nint WINAPI WinMain(HINSTANCE a, HINSTANCE b, LPSTR c, int d) { return _CorExeMain(); }\n",
 }
 
