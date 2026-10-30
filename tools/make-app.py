@@ -178,7 +178,8 @@ def main() -> int:
                    "win/wine/share/wine/fonts/LiberationSans-Regular.ttf",
                    "win/wine/share/wine/fonts/LiberationMono-BoldItalic.ttf",
                    "win/wine/share/wine/fonts/DroidSansFallbackFull.ttf",
-                   "LICENSES/liberation-fonts/LICENSE", "LICENSES/droid-sans-fallback/NOTICE"):
+                   "LICENSES/liberation-fonts/LICENSE", "LICENSES/droid-sans-fallback/NOTICE",
+                   "pc5/steam/steam_api.dll", "pc5/steam/steam_api64.dll", "LICENSES/gbe_fork/LICENSE"):
         if not (app / needed).is_file():
             problems.append(f"no {needed}")
     if (app / "dev.conf").exists():
@@ -264,6 +265,11 @@ Built from <https://github.com/bornaradusin/PC5> at commit {repo_commit}:
   `LICENSES/droid-sans-fallback/NOTICE`), unchanged. Games find them as Arial, Times New
   Roman, Courier New and Windows' Chinese, Japanese and Korean fonts; `pc5/prefix-fonts.reg`
   gives them those names, which PC5 adds to the prefix of a game installed before.
+- `pc5/steam`: gbe_fork's Steamworks emulator (<https://github.com/Detanup01/gbe_fork>, LGPL
+  3.0, `LICENSES/gbe_fork/LICENSE`), its release build's `steam_api.dll` and
+  `steam_api64.dll`, unchanged. PC5 puts one in place of Valve's library in a game that has
+  it before the game starts, and keeps Valve's beside it; its source is in the sources
+  archive.
 - `pc5/fonts.bin`: Inter 4.1 (<https://github.com/rsms/inter>, SIL Open Font License 1.1)
   drawn into an atlas by `tools/make-font.py`.
 - `pc5/ca-certificates.crt`: Mozilla's root certificates as Debian's ca-certificates

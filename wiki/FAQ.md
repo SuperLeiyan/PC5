@@ -6,7 +6,7 @@ Short answers to questions people often ask about PC5, with links to the pages t
 No. PC5 contains no games and downloads none. You install the games you own, from a USB drive.
 
 **Which games run?**
-Whether a game runs is only known by trying it. PC5 makes no promise about any game. Games that need Steam, Epic, EA or Ubisoft's launcher running, online DRM or anti-cheat don't run. See [What runs and what doesn't](Installing-games#what-runs-and-what-doesnt).
+Whether a game runs is only known by trying it. PC5 makes no promise about any game. Games that need Epic, EA or Ubisoft's launcher running, Steam's DRM (SteamStub), online DRM or anti-cheat don't run; a game that only uses Steam's library gets a [Steam emulator](Playing-games#games-made-for-steam). See [What runs and what doesn't](Installing-games#what-runs-and-what-doesnt).
 
 **Is there a list of games that work?**
 Yes: the [Game compatibility list](Game-compatibility). A game that runs comes from a player's report in Discussions: to add one, open [the report form](https://github.com/bornaradusin/PC5/discussions/new?category=game-compatibility), fill it in and post it, and the game appears in the list within a minute or two. A game that doesn't run comes from its [issue](https://github.com/bornaradusin/PC5/issues): being looked at while it is open, then working perfectly once it is closed as completed, unresolved (it doesn't run) once it is closed as not planned, or needing testing when its reporter didn't answer for two days.
@@ -15,7 +15,10 @@ Yes: the [Game compatibility list](Game-compatibility). A game that runs comes f
 No. PC5 itself only goes online to find covers and to check for a newer version. Without internet, games get a cover made from their icon, or [your own picture](Covers#using-your-own-cover).
 
 **Do I need a Steam, GOG or other account?**
-No. Covers come from public sources with no account and no key, and PC5 doesn't run any store's launcher.
+No. Covers come from public sources with no account and no key, and PC5 doesn't run any store's launcher. A game made for Steam plays offline with a [Steam emulator](Playing-games#games-made-for-steam) in place of Steam.
+
+**A game says PhysX is missing. What do I do?**
+Nothing, usually: if the game carries NVIDIA's PhysX System Software (in `_CommonRedist`, `Redist` or `PhysX`), PC5 installs it the first time the game starts. If the game doesn't carry it, put NVIDIA's PhysX System Software installer (`PhysX_*_SystemSoftware.exe` or `.msi`) in a `Redist` folder in the game's folder (with the [File manager](File-manager)), and start the game again.
 
 **How many games can PC5 hold?**
 Up to 128, as long as the console has the space.

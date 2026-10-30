@@ -64,6 +64,10 @@ int pc5_pe_unreal_d3d12(const char *path, uint32_t imports);
  * the engine's name in it ("Godot Engine"). Its imports name Direct3D, but a Godot game
  * draws with OpenGL or Vulkan; PC5 gives it OpenGL (Zink), which has Vulkan too. */
 int pc5_pe_godot(const char *path);
+/* 1 when the program has a section of that name (".bind": Steam's DRM wrapper, SteamStub). */
+int pc5_pe_section(const char *path, const char *name);
+/* 1 when the program's signature (its certificate table) names who ("Valve"). */
+int pc5_pe_signed_by(const char *path, const char *who);
 /* "DirectX 11", "OpenGL", ... */
 const char *pc5_api_name(Pc5Api api);
 /* The program's icon, the largest it has, as pixels; -1 if it has none. */

@@ -78,6 +78,7 @@ typedef struct Pc5Controls {
     int cpu_sharing;              /* 1: the game's threads take turns on the CPUs, as on a PC (prospero-win's
                                    * [runtime] thread_scheduling); 0: each keeps its CPU until it waits */
     Pc5Graphics graphics;         /* who turns the game's Direct3D or DirectDraw into Vulkan */
+    int steam_off;                /* 1: Valve's steam_api DLL as the game has it; 0, Auto: the Steam emulator (pc5_steam.h) */
 } Pc5Controls;
 
 /* A key, mouse button or nothing, as prospero-win names it in a profile, and as

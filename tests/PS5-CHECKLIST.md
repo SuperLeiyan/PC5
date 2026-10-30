@@ -458,3 +458,8 @@ controller's speaker.
 | 236 | Leave PC5 during a transfer, open it again, resume in FileZilla | the transfer resumes and finishes | |
 | 237 | Splinter Cell: Conviction's system check | it finds the sound device (and 2 GB of video memory) | `dxdiag` (with `+dxdiag`): `szHardwareID` asked for and given |
 | 238 | Heroes of Might and Magic: Olden Era › Start Game › a mode | its maps load (Story_maps listed), no "invalid handle" | `wine-ps5: L"Story_maps" looked up in directory … by its name, not its descriptor: status 0` |
+| 239 | A game with `_CommonRedist/PhysX/…/PhysX…SystemSoftware.msi` (Prison Break), started the first time | "Installing PhysX for it, once", then the game starts and finds PhysX | `PC5 redist installed _CommonRedist/PhysX/… files=…`, `PC5 redist <id> installed=1` |
+| 240 | Start it again | no busy line: installed once | no `PC5 redist installed` line |
+| 241 | A game with Valve's `steam_api64.dll` (no SteamStub), started | it starts as without Steam's client; `steam_api64.dll.pc5-valve` and `steam_settings/` beside the DLL | `PC5 steam emulator on changed=1` |
+| 242 | △ › Manage › Steam emulator Off, start it | Valve's DLL back (and the game quits for want of Steam, as before) | `PC5 steam emulator off changed=1` |
+| 243 | A game whose program has SteamStub (a `.bind` section) | "… needs Steam", not started | `PC5 problem play …: SteamStub (.bind) in …` |
