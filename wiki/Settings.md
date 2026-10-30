@@ -21,7 +21,7 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 
 | Row | What it does |
 | --- | --- |
-| Game maintenance › | Installing and uninstalling games, and the game compatibility list. See [Game maintenance](#game-maintenance). |
+| Game maintenance › | Installing and uninstalling games, the game compatibility list and the FTP server. See [Game maintenance](#game-maintenance). |
 | In games › | Vibration, light bar and adaptive triggers. See [In games](#in-games). |
 | Overlay › | The overlay shown over every game. See [Overlay](#overlay). |
 | File manager › | Copy, move, rename and delete files on the console and its drives. See [File manager](File-manager). |
@@ -38,6 +38,7 @@ Changes are saved at once, in `/data/prospero-win/pc5/settings.txt`. Settings fo
 | Install games from USB | Copies one game, or several in a row, from a USB drive to the console. See [Installing games](Installing-games). |
 | Uninstall game | Lists your games to uninstall one, keeping its saves or not, then the saves kept from games uninstalled before, to delete them. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
 | Game compatibility list | Shows a QR code: scan it with your phone to open the [game compatibility list](Game-compatibility), the games players have tried, how each ran and the settings that helped. **Add a game** at the top of that page reports one of yours. |
+| FTP server | **Off** (the default) or **On**: send games from a PC to PC5's INSTALL folder, while PC5 is open. The row shows the address. See [Sending games over FTP](Installing-games#sending-games-over-ftp). |
 
 ![The game compatibility list's QR code](images/compatibility-list.png)
 *Game maintenance › Game compatibility list.*

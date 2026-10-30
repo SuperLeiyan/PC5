@@ -450,3 +450,6 @@ controller's speaker.
 | 231 | Install games from USB with PC5 and other homebrew or game dumps on the drive | the list shows at once, without them | `PC5 usb folders=…` |
 | 232 | A game in a USB 2.0 port (front USB-A on the original PS5) › △ Play from USB | refused: too slow, plug it into a port on the back; Install still works | `PC5 problem install …: The drive reads at …` |
 | 233 | The same game in a back port › △ Play from USB | it plays | `PC5 install id=… usb=1` |
+| 234 | Settings › Game maintenance › FTP server On | the row shows ftp://<console's address>:2125 | `PC5 ftp on address=…:2125 root=…/INSTALL` |
+| 235 | FileZilla from a PC to that address, drag a game's folder in | it lands in INSTALL; a few seconds after it finishes, PC5 asks to install it | `PC5 ftp received …`, `PC5 ftp uploads=… install folder games=1` |
+| 236 | Leave PC5 during a transfer, open it again, resume in FileZilla | the transfer resumes and finishes | |

@@ -2,6 +2,7 @@
 /* PC5: the launcher's screens (pc5_ui.h). */
 #include "pc5_ui.h"
 #include "pc5_backgrounds.h"
+#include "pc5_ftp.h"
 #include "pc5_files.h"
 #include "pc5_game.h"
 #include "pc5_home.h"
@@ -88,7 +89,7 @@ typedef enum SettingRow {
     SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_OVERLAY_SIZE, SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
-    SR_FILES,
+    SR_FILES, SR_FTP,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
@@ -100,7 +101,7 @@ static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", 
  * startup sound (system_row). */
 enum { ROW_MAINTENANCE = 0, ROW_GAMES = 1, ROW_OVERLAY = 2, ROW_FILES = 3, ROW_SYSTEM = 4, ROW_ABOUT = 5 };
 /* Game maintenance's rows. */
-enum { ROW_INSTALL = 0, ROW_UNINSTALL = 1, ROW_COMPATIBILITY = 2 };
+enum { ROW_INSTALL = 0, ROW_UNINSTALL = 1, ROW_COMPATIBILITY = 2, ROW_FTP = 3 };
 
 /* A page's rows: the triggers' strengths only while they are used, the startup sound's
  * volume only while there is one, Update now only while there is a newer PC5 it can install
@@ -138,6 +139,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_INSTALL;
         rows[n++] = SR_UNINSTALL;
         rows[n++] = SR_COMPATIBILITY;
+        rows[n++] = SR_FTP;
     } else {
         rows[n++] = SR_MAINTENANCE;
         rows[n++] = SR_GAMES;
@@ -372,6 +374,9 @@ struct Pc5Ui {
     char install_dir[PC5_PATH];
     char pc5_folder[PC5_PATH];     /* PC5's own folder on the console's drives, "" when not found */
     int install_waiting, install_looked, install_scanned;
+    /* The INSTALL folder's FTP server: why it didn't start, and the uploads already asked about. */
+    char ftp_error[PC5_ERROR];
+    unsigned ftp_uploads_seen;
     int install_only;              /* S_SCAN and S_SOURCES: the INSTALL folder's games only */
     const char *scan_roots[16];
     int removing_kind;             /* S_REMOVING: 0 an uninstall, 1 one that keeps the saves, 2 kept saves deleted */
@@ -770,6 +775,7 @@ Pc5Ui *pc5_ui_create(const Pc5UiConfig *config, const Pc5Platform *platform)
 void pc5_ui_destroy(Pc5Ui *ui)
 {
     if (!ui) return;
+    pc5_ftp_stop();
     /* The update's thread works in ui: it stops first (or finishes putting files in place). */
     if (pc5_upgrade_busy(&ui->upgrade)) {
         pc5_upgrade_cancel(&ui->upgrade);
@@ -1951,7 +1957,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_MAINTENANCE:
         *label = "Game maintenance";
-        pc5_copy(about, about_size, "Installing, uninstalling, the compatibility list");
+        pc5_copy(about, about_size, "Installing, uninstalling, the compatibility list, the FTP server");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
     case SR_GAMES:
@@ -1984,6 +1990,20 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
                                                    : "Sessions that went wrong, and each game's newest, for 7 days");
         pc5_copy(value, value_size, set->keep_logs ? "On" : "Off");
         break;
+    case SR_FTP: {
+        Pc5FtpStatus ftp;
+        pc5_ftp_status(&ftp);
+        *label = "FTP server";
+        if (ftp.running)
+            snprintf(about, about_size, "ftp://%s from a PC (FileZilla): the INSTALL folder, while PC5 is open",
+                     ftp.address);
+        else if (set->ftp_server && ui->ftp_error[0])
+            snprintf(about, about_size, "Not started: %.150s", ui->ftp_error);
+        else
+            pc5_copy(about, about_size, "Send games from a PC to PC5's INSTALL folder, then install them here");
+        pc5_copy(value, value_size, set->ftp_server ? "On" : "Off");
+        break;
+    }
     case SR_FILES:
         *label = "File manager";
         pc5_copy(about, about_size, "Copy, move, rename and delete files on the console and its drives");
@@ -2121,12 +2141,54 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
     }
 }
 
+/* The INSTALL folder's FTP server, as its setting says: started (on PC5's INSTALL folder) or stopped. */
+static void ftp_apply(Pc5Ui *ui)
+{
+    ui->ftp_error[0] = 0;
+    if (!ui->settings.ftp_server || !ui->install_dir[0]) {
+        pc5_ftp_stop();
+        if (ui->settings.ftp_server) pc5_copy(ui->ftp_error, sizeof(ui->ftp_error), "PC5's INSTALL folder isn't there.");
+        return;
+    }
+    Pc5FtpStatus status;
+    pc5_ftp_status(&status);
+    if (status.running) return;
+    if (pc5_ftp_start(ui->install_dir, PC5_FTP_PORT, ui->ftp_error, sizeof(ui->ftp_error)))
+        say(ui, "PC5 problem ftp: %s", ui->ftp_error);
+    ui->ftp_uploads_seen = 0;
+}
+
+/* Games sent over FTP: once nothing has moved for a few seconds after an upload, the INSTALL
+ * folder looked at again, and its games offered as when PC5 opens. */
+static void ftp_uploads_check(Pc5Ui *ui)
+{
+    Pc5FtpStatus status;
+    pc5_ftp_status(&status);
+    if (!status.running || status.uploads == ui->ftp_uploads_seen || status.transfers || status.idle_ms < 3000)
+        return;
+    ui->ftp_uploads_seen = status.uploads;
+    const char *only[] = { ui->install_dir, NULL };
+    Pc5Source *found = pc5_alloc(sizeof(*found) * PC5_SOURCES);
+    int games = found ? pc5_source_scan(only, found, PC5_SOURCES) : 0;
+    pc5_free(found);
+    say(ui, "PC5 ftp uploads=%u install folder games=%d", status.uploads, games);
+    if (games) {
+        ui->install_waiting = games;
+        ui->button = 1;   /* Install first */
+        go(ui, S_INSTALL_ASK);
+    }
+}
+
 /* A setting with values moves to its next (step 1) or previous (-1) one: 1 when it changed. */
 static int setting_change(Pc5Ui *ui, SettingRow row, int step)
 {
     Pc5Settings *set = &ui->settings;
     switch (row) {
     case SR_KEEP_LOGS: set->keep_logs = !set->keep_logs; break;
+    case SR_FTP:
+        set->ftp_server = !set->ftp_server;
+        ftp_apply(ui);
+        break;
     case SR_FPS: set->fps = !set->fps; break;
     case SR_FRAME_TIME: set->frame_time = !set->frame_time; break;
     case SR_CPU_USAGE: set->cpu_usage = !set->cpu_usage; break;
@@ -3039,6 +3101,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
                 pc5_copy(ui->pc5_folder, sizeof(ui->pc5_folder), folder);
                 if (!pc5_is_dir(ui->install_dir) && pc5_mkdirs(ui->install_dir)) say(ui, "PC5 problem: can't make %s", ui->install_dir);
                 pc5_install_take_from(ui->install_dir);
+                if (ui->settings.ftp_server) ftp_apply(ui);
             } else {
                 ui->install_dir[0] = 0;
             }
@@ -3184,6 +3247,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         break;
     case S_LIBRARY: {
         int before = ui->selected, count = ui->library.count;
+        ftp_uploads_check(ui);
         if (count) {
             if (k & PC5_KEY_LEFT && ui->selected > 0) ui->selected--;
             if (k & PC5_KEY_RIGHT && ui->selected + 1 < count) ui->selected++;
@@ -4538,7 +4602,7 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
                    i == ui->menu, label, about, value);
     }
     SettingRow row = rows[ui->menu < count ? ui->menu : 0];
-    int changes = row == SR_KEEP_LOGS || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
+    int changes = row == SR_KEEP_LOGS || row == SR_FTP || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
                   row == SR_STARTUP_SOUND || row == SR_STARTUP_VOLUME || row >= SR_SOURCE;
     Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
     hints(ui, c, (int)x + 64, 1012, list, 2);

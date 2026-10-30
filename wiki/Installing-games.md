@@ -143,6 +143,21 @@ If the install is stopped, or the console turns off part way, the game goes back
 
 The INSTALL folder and what is in it stay when PC5 updates. **Install games from USB** also lists the INSTALL folder's games, marked **INSTALL folder**.
 
+### Sending games over FTP
+
+PC5 has an FTP server of its own for the INSTALL folder, so you can send games from a PC with an FTP app such as [FileZilla](https://filezilla-project.org/), without knowing the folder's path.
+
+1. In PC5, turn on **Settings › Game maintenance › FTP server**. The row shows the address, for example `ftp://192.168.1.20:2125`.
+2. On the PC, connect to that address (in FileZilla: **Host** `192.168.1.20`, **Port** `2125`, no user name or password).
+3. Drag the game's installed folder into it, as you would onto a USB drive.
+4. When the transfer is done, PC5 asks to install the game, as when it opens.
+
+Good to know:
+
+- The server shows only the INSTALL folder, nothing else on the console. It runs while PC5 is open: leaving PC5 stops a transfer, and FileZilla can resume it once PC5 is open again.
+- It uses port 2125, so it doesn't clash with the FTP server of your jailbreak (often 2121 or 1337), which keeps working as before.
+- It is plain FTP with no password: use it on your home network only.
+
 ## Choosing the right program
 
 A game's folder often has several programs: the game, a launcher, a settings tool, an uninstaller. PC5 ranks them and starts the one most likely to be the game. It leaves out installers, uninstallers, crash reporters, redistributables and similar tools. A program named like its game's folder isn't taken for a tool because of a word in its name (`Crashlands2.exe` in `Crashlands 2`), and a folder with one program starts that program unless it is an installer.

@@ -136,6 +136,7 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
             settings->triggers = (Pc5Triggers)pick(value, trigger_keys, PC5_TRIGGERS_COUNT, (int)settings->triggers);
         else if (!strcmp(name, "check_updates")) settings->check_updates = on_off(value, settings->check_updates);
         else if (!strcmp(name, "keep_logs")) settings->keep_logs = on_off(value, settings->keep_logs);
+        else if (!strcmp(name, "ftp_server")) settings->ftp_server = on_off(value, settings->ftp_server);
         else if (!strcmp(name, "startup_volume")) settings->startup_volume = volume(value, settings->startup_volume);
         else if (!strncmp(name, "pictures_", 9)) {
             for (int i = 0; i < PC5_PICTURE_SOURCES; i++) {
@@ -162,7 +163,7 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
                       "fps = %s\nframe_time = %s\ncpu_usage = %s\ncpu_temperature = %s\nsoc_temperature = %s\n"
                       "memory = %s\nfps_corner = %s\noverlay_size = %s\nvibration = %d\nlight_bar = %s\ntriggers = %s\n"
                       "trigger_rumble = %d\ntrigger_resistance = %d\ncheck_updates = %s\nkeep_logs = %s\nstartup_sound = %s\n"
-                      "startup_volume = %d\n",
+                      "startup_volume = %d\nftp_server = %s\n",
                       settings->fps ? "on" : "off", settings->frame_time ? "on" : "off",
                       settings->cpu_usage ? "on" : "off", settings->cpu_temperature ? "on" : "off",
                       settings->soc_temperature ? "on" : "off", settings->memory ? "on" : "off",
@@ -170,7 +171,8 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
                       settings->vibration,
                       light_keys[settings->light_bar % PC5_LIGHTS], trigger_keys[settings->triggers % PC5_TRIGGERS_COUNT],
                       settings->trigger_rumble, settings->trigger_resistance, settings->check_updates ? "on" : "off",
-                      settings->keep_logs ? "on" : "off", settings->startup_sound, settings->startup_volume);
+                      settings->keep_logs ? "on" : "off", settings->startup_sound, settings->startup_volume,
+                      settings->ftp_server ? "on" : "off");
     for (int i = 0; i < PC5_PICTURE_SOURCES && length > 0 && (size_t)length < sizeof(text); i++)
         length += snprintf(text + length, sizeof(text) - (size_t)length, "pictures_%s = %s\n", pc5_picture_source_key(i),
                            settings->pictures_off & (1u << i) ? "off" : "on");

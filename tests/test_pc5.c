@@ -10,6 +10,8 @@
 #include "pc5_backgrounds.h"
 #include "pc5_cover.h"
 #include "pc5_files.h"
+#include "pc5_ftp.h"
+void pc5_ftp_host_init(void);   /* tests/pc5_ftp_host.c */
 #include "pc5_game.h"
 #include "pc5_home.h"
 #include "pc5_image.h"
@@ -7253,6 +7255,54 @@ static void test_install_folder_screens(const char *fonts)
     frames(ui, 0, 0, 10, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "library"), "an empty INSTALL folder: straight to the library: %s", pc5_ui_screen(ui));
     pc5_ui_destroy(ui);
+
+    /* The FTP server, on in Game maintenance: the INSTALL folder at the address it shows; a game
+     * sent to it offered once the upload has settled, as when PC5 opens. */
+    pc5_ftp_host_init();
+    ui = pc5_ui_create(&config, &platform);
+    until_screen(ui, "library", &canvas);
+    press(ui, PC5_KEY_OPTIONS, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);                               /* Game maintenance */
+    for (int i = 0; i < 3; i++) press(ui, PC5_KEY_DOWN, &canvas);     /* FTP server */
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    Pc5FtpStatus ftp;
+    pc5_ftp_status(&ftp);
+    CHECK(ftp.running && !strcmp(ftp.address, "127.0.0.1:2125"), "on: %d %s", ftp.running, ftp.address);
+    {
+        Pc5Settings set;
+        pc5_settings_load(root, &set);
+        CHECK(set.ftp_server, "kept on");
+    }
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "settings-ftp");
+    CHECK(!cuts_after(ui, 0, &canvas), "its row: no text cut short");
+    path(file, sizeof(file),
+         "python3 -I -c \"import ftplib, io; f = ftplib.FTP(); f.connect('127.0.0.1', 2125, timeout=10); f.login(); "
+         "f.mkd('Starfall'); f.mkd('Starfall/bin'); f.storbinary('STOR Starfall/bin/gl32.exe', open('%s/Starfall/bin/gl32.exe', 'rb')); f.quit()\"",
+         usb);
+    run(file);
+    press(ui, PC5_KEY_BACK, &canvas);
+    press(ui, PC5_KEY_BACK, &canvas);
+    until_screen(ui, "library", &canvas);
+    frames(ui, 0, 0, 5, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "not asked while the upload may go on: %s", pc5_ui_screen(ui));
+    usleep(3200 * 1000);
+    frames(ui, 0, 0, 5, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "install-ask"), "sent over FTP, then offered: %s", pc5_ui_screen(ui));
+    frames(ui, 0, 0, 25, &canvas);
+    press(ui, PC5_KEY_LEFT, &canvas);
+    press(ui, PC5_KEY_ACCEPT, &canvas);                               /* Later */
+    frames(ui, 0, 0, 5, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "library"), "later: %s", pc5_ui_screen(ui));
+    pc5_ui_destroy(ui);
+    pc5_ftp_status(&ftp);
+    CHECK(!ftp.running, "stopped as PC5 closes");
+    {
+        Pc5Settings set;
+        pc5_settings_load(root, &set);
+        set.ftp_server = 0;
+        pc5_settings_save(root, &set);
+    }
     pc5_install_take_from(NULL);
     pc5_free(canvas.px);
 }

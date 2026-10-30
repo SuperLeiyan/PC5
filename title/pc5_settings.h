@@ -54,6 +54,7 @@ typedef struct Pc5Settings {
     int trigger_resistance;   /* how firmly they push back: 25, 50, 75, 100 % */
     int check_updates;        /* when PC5 opens */
     int keep_logs;            /* every session's log, not only those with a problem */
+    int ftp_server;           /* the INSTALL folder's FTP server, while PC5 is open (pc5_ftp.h) */
     /* The sound on the controller's speaker when PC5 is opened: a sound's name
      * (pc5_sound.h), or "off". */
     char startup_sound[64];

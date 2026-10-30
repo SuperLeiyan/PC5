@@ -41,6 +41,7 @@ typedef struct NotifyRequest {
 } NotifyRequest;
 int sceKernelSendNotificationRequest(int device, NotifyRequest *request, size_t size, int blocking);
 void pc5_net_ps5_init(const char *app, void (*log)(const char *line));
+void pc5_ftp_ps5_init(void (*log)(const char *line));
 void pc5_game_ps5_ops(Pc5GameOps *ops, void (*log)(const char *line));
 
 /* sceSystemServiceParamGetInt's ids, as the PS4 and PS5 SDKs number them. */
@@ -417,6 +418,7 @@ void pc5_console_run(const Pc5Console *config)
 
     console = config;
     pc5_net_ps5_init(config->app, plain_log);
+    pc5_ftp_ps5_init(plain_log);
     snprintf(template_prefix, sizeof(template_prefix), "%s/pc5/prefix", config->app);
     snprintf(tile_template, sizeof(tile_template), "%s/pc5/forwarder", config->app);
     snprintf(fonts, sizeof(fonts), "%s/pc5/fonts.bin", config->app);

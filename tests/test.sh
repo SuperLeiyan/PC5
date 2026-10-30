@@ -30,9 +30,13 @@ cc "${common[@]}" -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all 
     tests/test_pc5.c title/pc5_base.c title/pc5_controls.c title/pc5_cover.c title/pc5_draw.c title/pc5_game.c title/pc5_image.c title/pc5_json.c \
     title/pc5_library.c title/pc5_logs.c title/pc5_matrix.c title/pc5_pe.c title/pc5_settings.c title/pc5_source.c \
     title/pc5_stb.c title/pc5_ui.c title/pc5_update.c title/pc5_home.c title/pc5_psfwd.c title/pc5_zip.c title/pc5_qr.c title/pc5_report.c \
-    title/pc5_upgrade.c title/pc5_sound.c title/pc5_backgrounds.c title/pc5_tile.c title/pc5_dds.c title/pc5_files.c "${upstream[@]}" -lm -lpthread \
+    title/pc5_upgrade.c title/pc5_sound.c title/pc5_backgrounds.c title/pc5_tile.c title/pc5_dds.c title/pc5_files.c title/pc5_ftp.c tests/pc5_ftp_host.c "${upstream[@]}" -lm -lpthread \
     -o "$out/test_pc5"
 "$out/test_pc5" "$out/work" tests/fixtures "$out/programs" "$out/covers" "$out/fonts.bin"
+
+# The INSTALL folder's FTP server as a client sees it: Python's ftplib against a server of its own.
+cc "${common[@]}" -O2 -DPC5_FTP_SERVE tests/pc5_ftp_host.c title/pc5_ftp.c title/pc5_base.c -lm -lpthread -o "$out/ftp-serve"
+timeout 120 python3 -I tests/test_ftp.py "$out/ftp-serve" "$out"
 # The zip PC5 wrote (pc5_zip.c) opens as any zip does, with what was put in it.
 python3 -c "import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None
@@ -111,7 +115,7 @@ if [[ ${1:-} == --shots ]]; then
         title/pc5_image.c title/pc5_json.c title/pc5_library.c title/pc5_logs.c title/pc5_matrix.c title/pc5_pe.c \
         title/pc5_settings.c title/pc5_source.c title/pc5_stb.c title/pc5_ui.c title/pc5_update.c title/pc5_home.c \
         title/pc5_psfwd.c title/pc5_zip.c title/pc5_qr.c title/pc5_report.c title/pc5_upgrade.c title/pc5_sound.c title/pc5_backgrounds.c \
-        title/pc5_tile.c title/pc5_dds.c title/pc5_files.c "${upstream[@]}" -lm -lpthread -o "$out/draw-shots"
+        title/pc5_tile.c title/pc5_dds.c title/pc5_files.c title/pc5_ftp.c "${upstream[@]}" -lm -lpthread -o "$out/draw-shots"
     mkdir -p "$out/shots" "$out/shotwork"
     "$out/draw-shots" "$out/shots" "$out/shotwork" "$out/covers" "$out/programs" "$out/fonts.bin"
     python3 -c "import sys, pathlib; from PIL import Image
