@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 17:00:00 +0000
+Subject: [PATCH 65/65] PC5: a name in a folder opened by its handle is looked up by
+ the folder's name when its descriptor can't be used (Wine patch 0943)
+
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...e-up-in-a-root-directory-by-its-name.patch | 57 +++++++++++++++++++
+ 3 files changed, 59 insertions(+)
+ create mode 100644 wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index b8456a2..81ce6ec 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -590,6 +590,7 @@ wine/patches/0939-kernelbase-crash-report-names-a-c-exception-and-shows-the-code
+ wine/patches/0940-ntdll-ps5-make-the-missing-parents-of-a-folder-in-a-user-s-folders.patch
+ wine/patches/0941-ntdll-ps5-clear-the-nested-task-flag-a-program-set.patch
+ wine/patches/0942-win32u-ps5-turn-the-mouse-wheel.patch
++wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 8698717..03cde17 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -146,6 +146,7 @@ before evaluating a candidate built from that cache.
+ | 0940 | `ntdll`: a folder a program makes (or opens if there) as a folder, by its full name, under `C:\users\<name>\`, whose parent isn't there, gets its missing parents made first, as the program's installer would have made them on Windows: a game copied from a PC was never installed here. Call of Juarez Gunslinger's engine makes `AppData\Local\Techland\COJGunslinger`, whose `Techland` its installer makes, and stopped with an uncaught C++ exception when that failed. The users folder and a user's own folder are never made; each parent made is logged |
+ | 0941 | `ntdll`: a general protection fault with the nested-task flag (NT, 0x4000) set in the frame clears it and runs the instruction again, logged the first time. A program that sets NT with `popf` (Far Cry's CPU check in CrySystem.dll) made the next `iretq` back to it fault, from Wine's 64-bit side or the kernel's, reported as a read of FFFFFFFF (Wine bug 33275; Linux and Windows clear NT on entry). No program uses NT, and no fault without it changes |
+ | 0942 | `win32u`: input event 6 turns the mouse wheel, `x` notches away from the player positive (`MOUSEEVENTF_WHEEL` of `x` times `WHEEL_DELTA`): a USB mouse's wheel, or a controller button bound to `mouse_wheel_up` or `mouse_wheel_down`. Before, the title read a USB mouse's wheel and dropped it, and a button couldn't turn it |
++| 0943 | `ntdll`: a name opened relative to a directory handle (`RootDirectory`) whose descriptor from the in-process server this module can't use (`fstatat`/`openat` failing with `EBADF`, `STATUS_INVALID_HANDLE`) is looked up from the directory's own name, the server's or its NT name's, as patch 0936 enters such a directory; logged the first time. .NET's `FileSystemEnumerator` opens each subfolder that way, and a game's folder with subfolders couldn't be listed (Heroes of Might and Magic: Olden Era, `StreamingAssets\maps\Story_maps`, still after 0936 and 0938) |
+ | 0972 | `faudio` (Wine's bundled FAudio 26.09): upstream FAudio a3b49d6 and 2ead980 (2026-09-26). A source voice that played at the output rate never advanced `resampleOffset`, so when it started resampling, the tap loops of `FAudio_INTERNAL_MixSource` ran from the stale offset, `toResample - tap_samples` wrapped and the SSE2 resampler wrote far past `resampled_audio`. A game corrupted its process heap and crashed in the mixer, or in the heap. FAudio is a static library, so every `xaudio2_*` and `xactengine*` module is in `PE_MODULES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch b/wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
+new file mode 100644
+index 0000000..a7dca02
+--- /dev/null
++++ b/wine/patches/0943-ntdll-ps5-look-a-name-up-in-a-root-directory-by-its-name.patch
+@@ -0,0 +1,57 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 17:00:00 +0000
++Subject: [PATCH] ntdll: Look a name up in a root directory by its name when its descriptor can't be used on PS5.
++
++A name opened relative to a directory handle (OBJECT_ATTRIBUTES'
++RootDirectory) was looked up in the descriptor the in-process server
++gave for the handle, which this module's working-directory emulation
++knows no path for: fstatat and openat failed with EBADF, and the open
++with STATUS_INVALID_HANDLE. .NET's FileSystemEnumerator opens each
++subfolder that way, so a game's folder with subfolders couldn't be
++listed (Heroes of Might and Magic: Olden Era, StreamingAssets\maps\
++Story_maps, "invalid handle" after patches 0936 and 0938). As patch
++0936 enters such a directory, the name is now looked up from the
++directory's own name, the one the server opened it with or its NT
++name's, as a name without a root directory is; logged the first time.
++---
++diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
++--- a/dlls/ntdll/unix/file.c
+++++ b/dlls/ntdll/unix/file.c
++@@ -4072,6 +4072,33 @@ static NTSTATUS nt_to_unix_file_name( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
++             status = lookup_unix_name( root_fd, attr, nt_name, 0, &unix_name, unix_len,
++                                        1, disposition, open_reparse, FALSE, 0 );
++             if (needs_close) close( root_fd );
+++            /* The descriptor came from the in-process server, and this module's
+++             * working-directory emulation knows no path for it, so a name can't be
+++             * looked up in it (EBADF), as patch 0936 found for listing it: the name is
+++             * looked up from the directory's own, the one the server opened it with or
+++             * its NT name's, as a name without a root directory is. */
+++            if (status == STATUS_INVALID_HANDLE)
+++            {
+++                static LONG logged;
+++                char *root_name = NULL, *full;
+++                int root_len;
+++
+++                if ((!server_get_unix_name( attr->RootDirectory, &root_name ) ||
+++                     (root_name = unix_name_from_nt_name( attr->RootDirectory ))) &&
+++                    (root_len = strlen( root_name )) && (full = malloc( root_len + unix_len )))
+++                {
+++                    memcpy( full, root_name, root_len + 1 );
+++                    if (root_len > 1 && full[root_len - 1] == '/') full[--root_len] = 0;
+++                    free( unix_name );
+++                    unix_name = full;
+++                    status = lookup_unix_name( AT_FDCWD, attr, nt_name, 0, &unix_name, root_len + unix_len,
+++                                               root_len, disposition, open_reparse, FALSE, 0 );
+++                }
+++                if (!InterlockedExchange( &logged, 1 ))
+++                    ERR( "wine-ps5: %s looked up in directory %s by its name, not its descriptor: status %#x\n",
+++                         debugstr_us(attr->ObjectName), debugstr_a(root_name), (int)status );
+++                free( root_name );
+++            }
++         }
++     }
++     else if (status == STATUS_OBJECT_TYPE_MISMATCH) status = STATUS_BAD_DEVICE_TYPE;
++-- 
++2.43.0
++
+-- 
+2.43.0
+

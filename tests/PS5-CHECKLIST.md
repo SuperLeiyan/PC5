@@ -457,3 +457,4 @@ controller's speaker.
 | 235 | FileZilla from a PC to that address, drag a game's folder in | it lands in INSTALL; a few seconds after it finishes, PC5 asks to install it | `PC5 ftp received …`, `PC5 ftp uploads=… install folder games=1` |
 | 236 | Leave PC5 during a transfer, open it again, resume in FileZilla | the transfer resumes and finishes | |
 | 237 | Splinter Cell: Conviction's system check | it finds the sound device (and 2 GB of video memory) | `dxdiag` (with `+dxdiag`): `szHardwareID` asked for and given |
+| 238 | Heroes of Might and Magic: Olden Era › Start Game › a mode | its maps load (Story_maps listed), no "invalid handle" | `wine-ps5: L"Story_maps" looked up in directory … by its name, not its descriptor: status 0` |
