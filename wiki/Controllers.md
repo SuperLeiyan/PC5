@@ -16,7 +16,7 @@ Which one to try: start with **Xbox controller**. If the game doesn't react to t
 
 Older games that read controllers with DirectInput see the Xbox controller as Windows shows one: "Controller (XBOX 360 For Windows)", with both triggers on one axis (the left one up, the right one down), the D-pad as a hat and ten buttons. A mod that turns a game's DirectInput controls into XInput isn't needed for that from 1.6.5.
 
-A USB keyboard and mouse plugged into the PS5 work in every mode, alongside the controller.
+A USB keyboard and mouse plugged into the PS5 work in every mode, alongside the controller. The mouse wheel works too (from 2.0.2).
 
 ## Keyboard & mouse
 
@@ -46,7 +46,7 @@ With **Keyboard & mouse**, the game menu gets a **Button mapping** row.
 | □ | Set the button or direction to **Nothing** |
 | ○ | Back to the game's menu |
 
-The key picker has the letters A to Z, the digits 0 to 9, F1 to F12, Space, Enter, Esc, Tab, Backspace, Shift, Ctrl, Alt, the four arrows, Insert, Delete, Home, End, Page up, Page down, Pause, the punctuation keys `` ; = , - . / ` [ \ ] ' ``, left, right and middle click, and Nothing.
+The key picker has the letters A to Z, the digits 0 to 9, F1 to F12, Space, Enter, Esc, Tab, Backspace, Shift, Ctrl, Alt, the four arrows, Insert, Delete, Home, End, Page up, Page down, Pause, the punctuation keys `` ; = , - . / ` [ \ ] ' ``, left, right and middle click, **Wheel up** and **Wheel down** (each press turns the mouse wheel one notch: a visual novel's rollback, a map's zoom), and Nothing.
 
 ### The sticks
 
@@ -59,6 +59,8 @@ Each stick can be:
 | Nothing | Does nothing. |
 
 While a stick is the pointer, **Pointer speed** sets how fast it moves, from 1 to 10 (4 by default).
+
+**Slow pointer button** picks a button that slows the pointer while you hold it, for placing and aiming precisely (None by default). **Slower by** sets how much, from 10 % to 90 % (50 % by default). While a button is the slow button it does only that: its row says **Slows the pointer**.
 
 ### The default layout
 
