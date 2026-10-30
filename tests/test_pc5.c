@@ -7203,6 +7203,30 @@ static void test_files_screens(const char *fonts)
 }
 
 /* PC5's INSTALL folder as PC5 opens: asked about, listed as the INSTALL folder's, moved in. */
+/* The FTP server's paths never leave its folder; its listing lines are as ls writes them. */
+static void test_ftp_paths(void)
+{
+    char out[PC5_PATH], line[256];
+    struct stat st;
+
+    CHECK(!pc5_ftp_path("/", "Neon Drift/data", out, sizeof(out)) && !strcmp(out, "/Neon Drift/data"), "%s", out);
+    CHECK(!pc5_ftp_path("/a/b", "../c", out, sizeof(out)) && !strcmp(out, "/a/c"), "%s", out);
+    CHECK(!pc5_ftp_path("/a", "../../../x", out, sizeof(out)) && !strcmp(out, "/x"), "never above the top: %s", out);
+    CHECK(!pc5_ftp_path("/a", "/", out, sizeof(out)) && !strcmp(out, "/"), "%s", out);
+    CHECK(!pc5_ftp_path("/a", "./b//c/.", out, sizeof(out)) && !strcmp(out, "/a/b/c"), "%s", out);
+    CHECK(pc5_ftp_path("/", "abcdefgh", out, 6), "too long");
+    memset(&st, 0, sizeof(st));
+    st.st_mode = S_IFREG | 0644;
+    st.st_size = 1234;
+    st.st_mtime = 1761818400;   /* 2025-10-30 10:00 UTC */
+    pc5_ftp_list_line("game.exe", &st, 1761818400 + 3600, line, sizeof(line));
+    CHECK(!strcmp(line, "-rw-r--r-- 1 pc5 pc5 1234 Oct 30 10:00 game.exe\r\n"), "recent: %s", line);
+    st.st_mode = S_IFDIR | 0755;
+    st.st_mtime = 951782400;    /* 2000-02-29 */
+    pc5_ftp_list_line("old", &st, 1761818400, line, sizeof(line));
+    CHECK(!strcmp(line, "drwxr-xr-x 1 pc5 pc5 4096 Feb 29  2000 old\r\n"), "older: %s", line);
+}
+
 static void test_install_folder_screens(const char *fonts)
 {
     FakeConsole console = { 0 };
@@ -7327,6 +7351,7 @@ int main(int argc, char **argv)
     test_sources();
     test_install();
     test_install_folder();
+    test_ftp_paths();
     test_uninstall();
     test_game_update();
     test_keep_saves();

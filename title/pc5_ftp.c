@@ -78,6 +78,30 @@ static void count(int *what, int by)
     pthread_mutex_unlock(&ftp.lock);
 }
 
+/* UTC calendar time (Howard Hinnant's civil_from_days): the console's C library has no gmtime_r. */
+static void utc(time_t t, struct tm *tm)
+{
+    int64_t secs = (int64_t)t, days = secs / 86400, rem = secs % 86400;
+    if (rem < 0) {
+        rem += 86400;
+        days--;
+    }
+    memset(tm, 0, sizeof(*tm));
+    tm->tm_hour = (int)(rem / 3600);
+    tm->tm_min = (int)(rem % 3600 / 60);
+    tm->tm_sec = (int)(rem % 60);
+    days += 719468;
+    int64_t era = (days >= 0 ? days : days - 146096) / 146097;
+    int64_t doe = days - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    int64_t d = doy - (153 * mp + 2) / 5 + 1, m = mp < 10 ? mp + 3 : mp - 9;
+    tm->tm_year = (int)(yoe + era * 400 + (m <= 2) - 1900);
+    tm->tm_mon = (int)m - 1;
+    tm->tm_mday = (int)d;
+}
+
 /* ---- paths ---------------------------------------------------------------------------- */
 
 int pc5_ftp_path(const char *cwd, const char *arg, char *out, size_t size)
@@ -165,7 +189,7 @@ void pc5_ftp_list_line(const char *name, const struct stat *st, time_t now, char
     struct tm tm;
     char when[32];
     time_t t = st->st_mtime;
-    gmtime_r(&t, &tm);
+    utc(t, &tm);
     /* As ls does: the time for the last six months, else the year. */
     if (t <= now && now - t < 182 * 24 * 3600)
         snprintf(when, sizeof(when), "%s %2d %02d:%02d", months[tm.tm_mon % 12], tm.tm_mday, tm.tm_hour, tm.tm_min);
@@ -420,7 +444,7 @@ static void session_command(Session *s, char *command, char *arg, int *quit)
         } else {
             struct tm tm;
             time_t t = st.st_mtime;
-            gmtime_r(&t, &tm);
+            utc(t, &tm);
             reply(s, "213 %04d%02d%02d%02d%02d%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
                   tm.tm_min, tm.tm_sec);
         }
