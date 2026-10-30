@@ -490,6 +490,10 @@ int main(int argc, char **argv)
     settle(ui);
     save("09-install-usb-folders");
     step(ui, PC5_KEY_OPTIONS, 1);
+    until(ui, "install-where");
+    settle(ui);
+    save("09a-install-where");
+    step(ui, PC5_KEY_ACCEPT, 1);           /* the console */
     until(ui, "queue");
     settle(ui);
     save("09b-install-queue");

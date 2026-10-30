@@ -113,7 +113,7 @@ Choose a game in the library and press **△**. Its menu has what you change mos
 | --- | --- |
 | Change program | The program PC5 starts for this game ("Now: …"). Choose another one if PC5 picked the wrong one. See [Choosing the right program](Installing-games#choosing-the-right-program). |
 | Steam emulator | Only for a game with Steam's library (`steam_api.dll` or `steam_api64.dll`): **Auto** (the default) or **Off**. See [Games made for Steam](#games-made-for-steam) below. |
-| Game files | Only for games PC5 installed: the game's own folder, to copy, move, rename and delete its files (on its drive, for a game that [plays from USB](Installing-games#playing-a-game-from-its-usb-drive)). See [File manager](File-manager). |
+| Game files | Only for games PC5 installed: the game's own folder, to copy, move, rename and delete its files (on its drive, for a game [installed on a USB drive](Installing-games#installing-a-game-on-a-usb-drive)). See [File manager](File-manager). |
 | Update | Only for games PC5 installed: copies a newer version from the USB drive over the game. Its saves, settings and options stay. See [Updating a game](Installing-games#updating-a-game). |
 | Uninstall | Deletes the game, keeping its saves or not, after asking. See [Uninstalling a game](Installing-games#uninstalling-a-game). |
 

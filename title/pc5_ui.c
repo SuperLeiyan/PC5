@@ -53,7 +53,7 @@ typedef enum Screen {
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
     S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE, S_FILES, S_FILES_MENU,
-    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING, S_TILE_ART, S_INSTALL_ASK, S_SETTINGS_TYPING
+    S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING, S_TILE_ART, S_INSTALL_ASK, S_SETTINGS_TYPING, S_INSTALL_WHERE
 } Screen;
 
 static const char *const screen_names[] = { "start", "covers", "library", "settings", "about", "scan", "sources",
@@ -64,7 +64,7 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
                                             "compatibility", "graphics-api", "report-check", "report-update", "files",
                                             "files-menu", "files-typing", "files-conflict", "files-delete",
-                                            "files-working", "tile-art", "install-ask", "settings-typing" };
+                                            "files-working", "tile-art", "install-ask", "settings-typing", "install-where" };
 
 /* One game of several being installed in a row. */
 typedef enum QueueState { Q_WAITING, Q_INSTALLED, Q_FAILED, Q_STOPPED, Q_SKIPPED } QueueState;
@@ -402,6 +402,15 @@ struct Pc5Ui {
      * over FTP are offered when PC5 opens (install_waiting of them), and listed with the USB
      * drives'; one installed from there is moved into the library (pc5_install_take_from). */
     char install_dir[PC5_PATH];
+    /* The USB drives' PC5/INSTALL folders (pc5_usb_install_dir), "" where there is no drive;
+     * how many drives were there when last looked (usb_seen, -1 never), and when (usb_looked). */
+    char usb_install[8][PC5_PATH];
+    int usb_seen;
+    uint64_t usb_looked;
+    /* S_INSTALL_WHERE: for the review's game (0) or the queue (1); the USB drive offered
+     * (where_usb, a USB root) and the one chosen (install_usb, "" for the console). */
+    int where_for;
+    char where_usb[PC5_PATH], install_usb[PC5_PATH];
     char pc5_folder[PC5_PATH];     /* PC5's own folder on the console's drives, "" when not found */
     int install_waiting, install_looked, install_scanned;
     /* The INSTALL folder's FTP server: why it didn't start, and the uploads already asked about. */
@@ -1598,27 +1607,34 @@ static void speed_reset(Pc5Ui *ui)
     ui->speed_phase = ui->install.phase;
 }
 
-/* 1 when the review's folder is on a USB drive, so it can be played from there. */
-static int review_on_usb(const Pc5Ui *ui)
+/* The USB drive a game could be installed on: the one it is on, or else the one with the most
+ * room, when it can be written to. 1 with its root in out, 0 for none. */
+static int usb_target(const Pc5Ui *ui, const char *source, char *out, size_t size)
 {
-    char relative[PC5_PATH];
-    /* A game in PC5's INSTALL folder is installed, never played from there. */
-    size_t n = strlen(ui->install_dir);
-    if (n && !strncmp(ui->folder.path, ui->install_dir, n) && ui->folder.path[n] == '/') return 0;
-    return ui->queue_review < 0 && !pc5_usb_relative(ui->folder.path, relative, sizeof(relative));
+    uint64_t best = 0, room;
+    out[0] = 0;
+    if (!ui->usb_roots) return 0;
+    if (source && !pc5_usb_install_root(source, out, size) && !access(out, W_OK)) return 1;
+    out[0] = 0;
+    for (int i = 0; ui->usb_roots[i]; i++)
+        if (pc5_is_dir(ui->usb_roots[i]) && !access(ui->usb_roots[i], W_OK) && !pc5_free_bytes(ui->usb_roots[i], &room) &&
+            room > best) {
+            best = room;
+            pc5_copy(out, size, ui->usb_roots[i]);
+        }
+    return out[0] != 0;
 }
 
-/* The review's game installed: copied to the console, or (in_place) played from its USB drive. */
-static void begin_install_as(Pc5Ui *ui, int in_place)
+/* The review's game installed: copied to the console, or to the USB drive chosen (install_usb). */
+static void begin_install_as(Pc5Ui *ui)
 {
     Pc5Image cover = ui->review_image;
     int status;
 
     ui->review_image = (Pc5Image){ 0 };
-    status = (in_place ? pc5_install_begin_usb : pc5_install_begin)(&ui->install, ui->root, ui->template_prefix,
-                                                                    &ui->folder, ui->exe, &cover, ui->review_tint,
-                                                                    ui->review_source);
-    if (!status) say(ui, "PC5 install id=%s from=%s usb=%d", ui->install.id, ui->folder.path, in_place);
+    status = pc5_install_begin_on_usb(&ui->install, ui->root, ui->template_prefix, &ui->folder, ui->exe, &cover,
+                                      ui->review_tint, ui->review_source, ui->install_usb);
+    if (!status) say(ui, "PC5 install id=%s from=%s to=%s", ui->install.id, ui->folder.path, ui->install_usb[0] ? ui->install_usb : "console");
     ui->installing = 1;
     if (status) {
         char title[200];
@@ -1684,6 +1700,70 @@ static void begin_update(Pc5Ui *ui)
     go(ui, S_INSTALL);
 }
 
+/* The USB drives' PC5/INSTALL folders, made on each drive plugged in that can be written to;
+ * how many drives there are. */
+static int usb_install_refresh(Pc5Ui *ui)
+{
+    int drives = 0;
+    for (int i = 0; i < 8; i++) {
+        char drop[PC5_PATH];
+        ui->usb_install[i][0] = 0;
+        if (!ui->usb_roots || pc5_usb_install_dir(i, drop, sizeof(drop))) continue;
+        const char *root = ui->usb_roots[i];
+        if (!root) break;
+        if (!pc5_is_dir(root)) continue;
+        drives++;
+        if (!pc5_is_dir(drop) && (access(root, W_OK) || pc5_mkdirs(drop))) continue;
+        pc5_copy(ui->usb_install[i], sizeof(ui->usb_install[i]), drop);
+    }
+    ui->usb_seen = drives;
+    return drives;
+}
+
+/* PC5's INSTALL folders, its own and the USB drives', into roots (NULL-ended, room for 10). */
+static int install_folders(const Pc5Ui *ui, const char **roots)
+{
+    int n = 0;
+    if (ui->install_dir[0]) roots[n++] = ui->install_dir;
+    for (int i = 0; i < 8; i++)
+        if (ui->usb_install[i][0]) roots[n++] = ui->usb_install[i];
+    roots[n] = NULL;
+    return n;
+}
+
+/* The games waiting in the INSTALL folders. */
+static int install_waiting_count(const Pc5Ui *ui)
+{
+    const char *only[10];
+    if (!install_folders(ui, only)) return 0;
+    Pc5Source *found = pc5_alloc(sizeof(*found) * PC5_SOURCES);
+    int games = found ? pc5_source_scan(only, found, PC5_SOURCES) : 0;
+    pc5_free(found);
+    return games;
+}
+
+/* The review's game, once where it goes is known (install_usb): the room it needs there
+ * checked, its kept saves offered, then installed. */
+static void review_install(Pc5Ui *ui)
+{
+    uint64_t free_bytes = 0, needs = ui->install_usb[0] ? pc5_install_needs_usb(&ui->folder) : pc5_install_needs(&ui->folder);
+    if (!pc5_free_bytes(ui->root, &free_bytes) && free_bytes < needs) {
+        char need[32], have[32], body[200];
+        pc5_size_text(needs, need, sizeof(need));
+        pc5_size_text(free_bytes, have, sizeof(have));
+        snprintf(body, sizeof(body), ui->install_usb[0] ? "Its Windows needs %s and the console has %s free."
+                                                        : "The game needs %s and the console has %s free.", need, have);
+        message(ui, 0, "Not enough space", body, S_REVIEW);
+    } else if (pc5_saves_find(ui->root, ui->folder.name, ui->exe >= 0 ? ui->folder.exes[ui->exe].path : NULL,
+                              ui->use_saves, sizeof(ui->use_saves)) > 0) {
+        ui->button = 1;   /* Put them back */
+        go(ui, S_SAVES_ASK);
+    } else {
+        ui->use_saves[0] = 0;
+        begin_install_as(ui);
+    }
+}
+
 /* The queue's next game that is waiting: started, or skipped with why. */
 static void queue_next(Pc5Ui *ui)
 {
@@ -1700,8 +1780,8 @@ static void queue_next(Pc5Ui *ui)
         q->cover = (Pc5Image){ 0 };
         ui->folder = q->folder;
         ui->exe = q->exe;
-        if (pc5_install_begin(&ui->install, ui->root, ui->template_prefix, &q->folder, q->exe, &cover, q->tint,
-                              q->cover_source)) {
+        if (pc5_install_begin_on_usb(&ui->install, ui->root, ui->template_prefix, &q->folder, q->exe, &cover, q->tint,
+                                     q->cover_source, ui->install_usb)) {
             q->state = Q_FAILED;
             pc5_copy(q->error, sizeof(q->error), ui->install.error);
             say(ui, "PC5 problem install %s: %s", q->folder.name, ui->install.error);
@@ -2246,6 +2326,30 @@ static void web_apply(Pc5Ui *ui)
 
 /* Games sent over FTP or from the web page: once nothing has moved for a few seconds after an
  * upload, the INSTALL folder looked at again, and its games offered as when PC5 opens. */
+static int usb_install_refresh(Pc5Ui *ui);
+static int install_waiting_count(const Pc5Ui *ui);
+
+/* A USB drive plugged in while the library shows: its PC5/INSTALL folder made, and the games
+ * waiting there (and in PC5's own) offered, as when PC5 opens. Looked at every few seconds. */
+static void usb_plugged_check(Pc5Ui *ui)
+{
+    int drives = 0;
+    if (!ui->usb_roots || ui->now - ui->usb_looked < 3000) return;
+    ui->usb_looked = ui->now;
+    for (int i = 0; ui->usb_roots[i] && i < 8; i++) drives += pc5_is_dir(ui->usb_roots[i]);
+    if (drives == ui->usb_seen) return;
+    int more = drives > ui->usb_seen;
+    usb_install_refresh(ui);
+    if (!more) return;
+    int games = install_waiting_count(ui);
+    say(ui, "PC5 usb drive plugged in drives=%d install folder games=%d", drives, games);
+    if (games) {
+        ui->install_waiting = games;
+        ui->button = 1;   /* Install first */
+        go(ui, S_INSTALL_ASK);
+    }
+}
+
 static void uploads_check(Pc5Ui *ui)
 {
     Pc5FtpStatus ftp;
@@ -3279,15 +3383,13 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         /* The API keys, its file made for the player when there is none. */
         pc5_api_key(ui->root, PC5_STEAMGRIDDB_KEY, ui->griddb_key, sizeof(ui->griddb_key));
         /* The INSTALL folder's games, once anything cut short there is put right. */
-        if (ui->install_dir[0] && !ui->install_scanned) {
+        if (!ui->install_scanned) {
             ui->install_scanned = 1;
-            if (ui->config.opened) {
-                const char *only[] = { ui->install_dir, NULL };
-                Pc5Source *found = pc5_alloc(sizeof(*found) * PC5_SOURCES);
-                ui->install_waiting = found ? pc5_source_scan(only, found, PC5_SOURCES) : 0;
-                pc5_free(found);
-            }
-            say(ui, "PC5 install folder %s games=%d", ui->install_dir, ui->install_waiting);
+            usb_install_refresh(ui);
+            ui->usb_looked = ui->now;
+            if (ui->config.opened) ui->install_waiting = install_waiting_count(ui);
+            say(ui, "PC5 install folders %s usb_drives=%d games=%d", ui->install_dir[0] ? ui->install_dir : "-", ui->usb_seen,
+                ui->install_waiting);
         }
         /* Tiles that run from PC5's folder get this PC5's program, should it have changed
          * (an update) or moved: a tile's program and its runtime must match. */
@@ -3417,6 +3519,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_LIBRARY: {
         int before = ui->selected, count = ui->library.count;
         uploads_check(ui);
+        usb_plugged_check(ui);
         if (count) {
             if (k & PC5_KEY_LEFT && ui->selected > 0) ui->selected--;
             if (k & PC5_KEY_RIGHT && ui->selected + 1 < count) ui->selected++;
@@ -3555,9 +3658,13 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
         {
             /* The USB drives, then PC5's INSTALL folder (a source's drive is its place here). */
             int n = 0;
-            for (int i = 0; !ui->install_only && ui->usb_roots && ui->usb_roots[i] && n < 14; i++)
+            for (int i = 0; !ui->install_only && ui->usb_roots && ui->usb_roots[i] && n < 8; i++)
                 ui->scan_roots[n++] = ui->usb_roots[i];
-            if (ui->install_dir[0] && !ui->update_for) ui->scan_roots[n++] = ui->install_dir;
+            if (!ui->update_for) {
+                const char *folders[10];
+                usb_install_refresh(ui);
+                for (int i = 0, count = install_folders(ui, folders); i < count && n < 15; i++) ui->scan_roots[n++] = folders[i];
+            }
             ui->scan_roots[n] = NULL;
             ui->source_count = pc5_source_scan(ui->scan_roots, ui->sources, PC5_SOURCES);
         }
@@ -3589,8 +3696,15 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             ui->ticked[ui->menu] = !ui->ticked[ui->menu];
             ui->dirty = 1;
         } else if ((k & PC5_KEY_OPTIONS) && ticked_count(ui)) {
-            if (!queue_begin(ui)) go(ui, S_QUEUE_READ);
-            else message(ui, 0, "Out of memory", "PC5 couldn't make room to read the folders.", S_SOURCES);
+            if (usb_target(ui, NULL, ui->where_usb, sizeof(ui->where_usb))) {
+                ui->where_for = 1;
+                ui->button = 0;   /* the console first */
+                go(ui, S_INSTALL_WHERE);
+            } else {
+                ui->install_usb[0] = 0;
+                if (!queue_begin(ui)) go(ui, S_QUEUE_READ);
+                else message(ui, 0, "Out of memory", "PC5 couldn't make room to read the folders.", S_SOURCES);
+            }
         } else if ((k & accept) && ui->source_count) {
             go(ui, S_READING);
         }
@@ -3686,47 +3800,41 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             go(ui, S_PROGRAMS);
         } else if (ui->queue_review >= 0 && (k & (back | accept))) {
             queue_review_close(ui);
-        } else if ((k & PC5_KEY_TRIANGLE) && review_on_usb(ui)) {
-            /* Played from its USB drive: only its Windows on the console, nothing copied. */
-            uint64_t free_bytes = 0;
-            if (ui->folder.problem[0]) {
-                message(ui, 0, "This folder can't be installed", ui->folder.problem, S_REVIEW);
-            } else if (!pc5_free_bytes(ui->root, &free_bytes) && free_bytes < pc5_install_needs_usb(&ui->folder)) {
-                char need[32], have[32], body[200];
-                pc5_size_text(pc5_install_needs_usb(&ui->folder), need, sizeof(need));
-                pc5_size_text(free_bytes, have, sizeof(have));
-                snprintf(body, sizeof(body), "Its Windows needs %s and the console has %s free.", need, have);
-                message(ui, 0, "Not enough space", body, S_REVIEW);
-            } else {
-                ui->use_saves[0] = 0;
-                begin_install_as(ui, 1);
-            }
         } else if (k & back) {
             ui->menu = 0;
             for (int i = 0; i < ui->source_count; i++)
                 if (!strcmp(ui->sources[i].path, ui->folder.path)) ui->menu = i;
             go(ui, S_SOURCES);
         } else if (k & accept) {
-            uint64_t free_bytes = 0;
             if (ui->folder.problem[0]) {
                 message(ui, 0, "This folder can't be installed", ui->folder.problem, S_REVIEW);
-            } else if (!pc5_free_bytes(ui->root, &free_bytes) && free_bytes < pc5_install_needs(&ui->folder)) {
-                char need[32], have[32], body[200];
-                pc5_size_text(pc5_install_needs(&ui->folder), need, sizeof(need));
-                pc5_size_text(free_bytes, have, sizeof(have));
-                snprintf(body, sizeof(body), "The game needs %s and the console has %s free.", need, have);
-                message(ui, 0, "Not enough space", body, S_REVIEW);
-            } else if (pc5_saves_find(ui->root, ui->folder.name, ui->exe >= 0 ? ui->folder.exes[ui->exe].path : NULL,
-                                      ui->use_saves, sizeof(ui->use_saves)) > 0) {
-                ui->button = 1;   /* Put them back */
-                go(ui, S_SAVES_ASK);
+            } else if (usb_target(ui, ui->folder.path, ui->where_usb, sizeof(ui->where_usb))) {
+                /* A USB drive is plugged in: the console or that drive. */
+                ui->where_for = 0;
+                ui->button = 0;   /* the console first */
+                go(ui, S_INSTALL_WHERE);
             } else {
-                ui->use_saves[0] = 0;
-                begin_install_as(ui, 0);
+                ui->install_usb[0] = 0;
+                review_install(ui);
             }
         }
         break;
     }
+    case S_INSTALL_WHERE:
+        if (k & (PC5_KEY_LEFT | PC5_KEY_RIGHT)) { ui->button = !ui->button; ui->dirty = 1; }
+        if (k & back) {
+            go(ui, ui->where_for ? S_SOURCES : S_REVIEW);
+        } else if ((k & accept) && ui->now - ui->entered > 300) {
+            pc5_copy(ui->install_usb, sizeof(ui->install_usb), ui->button ? ui->where_usb : "");
+            say(ui, "PC5 install where=%s", ui->install_usb[0] ? ui->install_usb : "console");
+            if (ui->where_for) {
+                if (!queue_begin(ui)) go(ui, S_QUEUE_READ);
+                else message(ui, 0, "Out of memory", "PC5 couldn't make room to read the folders.", S_SOURCES);
+            } else {
+                review_install(ui);
+            }
+        }
+        break;
     case S_SAVES_ASK:
         if (k & (PC5_KEY_LEFT | PC5_KEY_RIGHT)) { ui->button = !ui->button; ui->dirty = 1; }
         if (k & back) {
@@ -3734,7 +3842,7 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             go(ui, S_REVIEW);
         } else if ((k & accept) && ui->now - ui->entered > 300) {
             if (!ui->button) ui->use_saves[0] = 0;   /* Start fresh: they stay kept */
-            begin_install_as(ui, 0);
+            begin_install_as(ui);
         }
         break;
     case S_GAME_UPDATE_ASK:
@@ -5265,7 +5373,11 @@ static void source_row(Pc5Ui *ui, Pc5Canvas *c, int i, float x, float y, float w
     char line[64];
     (void)chosen;
     tick_box(c, x, y + 20, ui->ticked[i]);
-    if (ui->scan_roots[ui->sources[i].drive] == ui->install_dir) snprintf(line, sizeof(line), "INSTALL folder");
+    const char *from = ui->scan_roots[ui->sources[i].drive];
+    char drive_root[PC5_PATH];
+    if (from == ui->install_dir) snprintf(line, sizeof(line), "INSTALL folder");
+    else if (strstr(from, "/" PC5_USB_HOME "/" PC5_INSTALL_FOLDER) && !pc5_usb_install_root(from, drive_root, sizeof(drive_root)))
+        snprintf(line, sizeof(line), "INSTALL folder, %.20s", strrchr(drive_root, '/') + 1);
     else snprintf(line, sizeof(line), "USB drive %d", ui->sources[i].drive + 1);
     pc5_text(c, &ui->fonts, PC5_FACE_LABEL, (int)x + 52, (int)y + 44, C_TEXT, ui->sources[i].name, (int)w - 272, 0);
     pc5_text(c, &ui->fonts, PC5_FACE_SMALL, (int)(x + w), (int)y + 44, C_DIM, line, 0, 2);
@@ -5399,19 +5511,45 @@ static void review_screen(Pc5Ui *ui, Pc5Canvas *c)
         ny += 90;
     }
     pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, (int)tx, (int)ny, (int)tw, 4, 40, C_DIM,
-                  review_on_usb(ui)
-                      ? "Install copies the game to the console. Play from USB copies nothing: the game plays from "
-                        "the drive, which stays plugged in. Whether a game runs is only known by trying it."
-                      : "The game is copied to the console once and checked against the USB drive. Whether a game "
-                        "runs is only known by trying it.", 0);
+                  "The game is copied once and checked, to the console or, with a USB drive plugged in, to its PC5 "
+                  "folder. Whether a game runs is only known by trying it.", 0);
     Hint list[5];
     int n = 0;
     list[n++] = (Hint){ accept_glyph(ui), ui->queue_review >= 0 ? "Done" : "Install" };
-    if (review_on_usb(ui)) list[n++] = (Hint){ G_TRIANGLE, "Play from USB" };
     if (choices > 1) list[n++] = (Hint){ G_L1R1, "Other covers" };
     if (ui->folder.exe_count > 1) list[n++] = (Hint){ G_SQUARE, "Change program" };
     if (ui->queue_review < 0) list[n++] = (Hint){ back_glyph(ui), "Back" };
     hints(ui, c, (int)tx, (int)(y + h - 48), list, n);
+}
+
+static void sources_screen(Pc5Ui *ui, Pc5Canvas *c)
+{
+    if (ui->update_for) {
+        int index = pc5_library_find(&ui->library, ui->launch_id);
+        char title[PC5_NAME + 32];
+        Hint list[] = { { accept_glyph(ui), "Choose" }, { G_TRIANGLE, "Look again" }, { back_glyph(ui), "Back" } };
+        snprintf(title, sizeof(title), "Update %s from USB", index >= 0 ? ui->library.games[index].title : "the game");
+        list_panel(ui, c, title, ui->source_count, source_row, "No game folders found",
+                   "Put the newer copy's folder (the one with the game's .exe in it) at the top of a USB drive formatted "
+                   "as exFAT, plug the drive into the PS5, then look again.",
+                   list, 3, 96);
+        return;
+    }
+    int ticked = ticked_count(ui);
+    char install[40];
+    snprintf(install, sizeof(install), "Install ticked (%d)", ticked);
+    Hint list[5];
+    int n = 0;
+    if (ticked) list[n++] = (Hint){ G_OPTIONS, install };
+    list[n++] = (Hint){ accept_glyph(ui), "Install one" };
+    list[n++] = (Hint){ G_SQUARE, "Tick" };
+    list[n++] = (Hint){ G_TRIANGLE, "Look again" };
+    list[n++] = (Hint){ back_glyph(ui), "Back" };
+    list_panel(ui, c, ui->install_only ? "Install games from the INSTALL folder" : "Install games from USB",
+               ui->source_count, source_row, "No game folders found",
+               "Put each game's folder (the one with its .exe in it) at the top of a USB drive formatted as exFAT, "
+               "plug the drive into the PS5, then look again.",
+               list, n, 96);
 }
 
 static void install_screen(Pc5Ui *ui, Pc5Canvas *c)
@@ -6063,35 +6201,7 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_ABOUT: about_screen(ui, c); break;
     case S_COMPATIBILITY: compatibility_screen(ui, c); break;
     case S_SCAN: busy_dialog(ui, c, "Looking at the USB drives", NULL, 0); break;
-    case S_SOURCES: {
-        if (ui->update_for) {
-            int index = pc5_library_find(&ui->library, ui->launch_id);
-            char title[PC5_NAME + 32];
-            Hint list[] = { { accept_glyph(ui), "Choose" }, { G_TRIANGLE, "Look again" }, { back_glyph(ui), "Back" } };
-            snprintf(title, sizeof(title), "Update %s from USB", index >= 0 ? ui->library.games[index].title : "the game");
-            list_panel(ui, c, title, ui->source_count, source_row, "No game folders found",
-                       "Put the newer copy's folder (the one with the game's .exe in it) at the top of a USB drive formatted "
-                       "as exFAT, plug the drive into the PS5, then look again.",
-                       list, 3, 96);
-            break;
-        }
-        int ticked = ticked_count(ui);
-        char install[40];
-        snprintf(install, sizeof(install), "Install ticked (%d)", ticked);
-        Hint list[5];
-        int n = 0;
-        if (ticked) list[n++] = (Hint){ G_OPTIONS, install };
-        list[n++] = (Hint){ accept_glyph(ui), "Install one" };
-        list[n++] = (Hint){ G_SQUARE, "Tick" };
-        list[n++] = (Hint){ G_TRIANGLE, "Look again" };
-        list[n++] = (Hint){ back_glyph(ui), "Back" };
-        list_panel(ui, c, ui->install_only ? "Install games from the INSTALL folder" : "Install games from USB",
-                   ui->source_count, source_row, "No game folders found",
-                   "Put each game's folder (the one with its .exe in it) at the top of a USB drive formatted as exFAT, "
-                   "plug the drive into the PS5, then look again.",
-                   list, n, 96);
-        break;
-    }
+    case S_SOURCES: sources_screen(ui, c); break;
     case S_READING:
         snprintf(line, sizeof(line), "Reading %s", ui->sources[ui->menu].name);
         busy_dialog(ui, c, line, "Counting its files and finding its program", 0);
@@ -6106,6 +6216,23 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
                  "the game's, the others stay. Its saves, settings and options stay too.", ui->folder.name, size);
         confirm_dialog(ui, c, title, body, "Cancel", "Update", 0,
                        index >= 0 && ui->covers[index].state ? &ui->covers[index].picture : NULL);
+        break;
+    }
+    case S_INSTALL_WHERE: {
+        char title[300], body[600], console_free[32] = "?", usb_free[32] = "?";
+        uint64_t room = 0;
+        const char *drive = strrchr(ui->where_usb, '/');
+        if (!pc5_free_bytes(ui->root, &room)) pc5_size_text(room, console_free, sizeof(console_free));
+        if (!pc5_free_bytes(ui->where_usb, &room)) pc5_size_text(room, usb_free, sizeof(usb_free));
+        if (ui->where_for) snprintf(title, sizeof(title), "Where should the %d games go?", ticked_count(ui));
+        else snprintf(title, sizeof(title), "Where should %s go?", ui->folder.name);
+        snprintf(body, sizeof(body),
+                 "The console has %s free. The USB drive (%.40s) has %s free: a game there plays from its PC5 folder, so "
+                 "keep the drive plugged into a fast port. Its saves stay on the console either way.",
+                 console_free, drive ? drive + 1 : ui->where_usb, usb_free);
+        if (ui->where_for) sources_screen(ui, c);
+        else review_screen(ui, c);
+        confirm_dialog(ui, c, title, body, "Console", "USB drive", 0, NULL);
         break;
     }
     case S_SAVES_ASK: {
@@ -6204,9 +6331,10 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     case S_INSTALL_ASK: {
         char body[PC5_PATH + 300];
         snprintf(body, sizeof(body),
-                 "%d game%s waiting in %.200s. Install %s now? A game installed from there is moved into PC5's "
-                 "library, out of the INSTALL folder.", ui->install_waiting, ui->install_waiting == 1 ? " is" : "s are",
-                 ui->install_dir, ui->install_waiting == 1 ? "it" : "them");
+                 "%d game%s waiting in PC5's INSTALL folder%s. Install %s now? A game installed from there is moved "
+                 "into PC5's library, out of the INSTALL folder.", ui->install_waiting,
+                 ui->install_waiting == 1 ? " is" : "s are", ui->usb_seen ? "s (its own, and PC5/INSTALL on the USB drive)" : "",
+                 ui->install_waiting == 1 ? "it" : "them");
         confirm_dialog(ui, c, "Games in PC5's INSTALL folder", body, "Later", "Install", 0, NULL);
         break;
     }

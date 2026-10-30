@@ -1035,6 +1035,17 @@ int pc5_tree_delete_begin(Pc5Remove *remove, const char *path)
     return 0;
 }
 
+int pc5_tree_delete_add(Pc5Remove *remove, const char *path)
+{
+    if (!remove->stack || remove->top >= REMOVE_STACK || !pc5_exists(path)) return remove->stack ? 0 : -1;
+    /* under what is being deleted now: deleted after it */
+    memmove(remove->stack + 1, remove->stack, sizeof(*remove->stack) * (size_t)remove->top);
+    pc5_copy(remove->stack[0], PC5_PATH, path);
+    remove->top++;
+    remove->done = 0;
+    return 0;
+}
+
 int pc5_remove_step(Pc5Remove *remove, int budget_ms)
 {
     uint64_t until = pc5_now_ms() + (uint64_t)(budget_ms > 0 ? budget_ms : 1);
@@ -1132,6 +1143,25 @@ static void drop_update(const char *root, const char *prefix)
         rename(from, to);
 }
 
+/* A game installed on a USB drive (PC5/<name> there): its folder set aside on its drive as
+ * PC5/.removing-<name>, its path in out (deleted after the game's Windows, or at the next
+ * start). out "" when it has none, or the drive isn't plugged in. */
+static void usb_set_aside(const char *root, const char *prefix, char *out, size_t size)
+{
+    Pc5Info info;
+    char usb_dir[PC5_PATH], dir[PC5_PATH], base[PC5_PATH], leaf[PC5_PATH];
+
+    out[0] = 0;
+    if (pc5_info_read(root, prefix, &info) || strncmp(info.usb, PC5_USB_HOME "/", sizeof(PC5_USB_HOME)) ||
+        pc5_usb_game_dir(&info, usb_dir, sizeof(usb_dir)))
+        return;
+    const char *name = strrchr(usb_dir, '/');
+    pc5_copy(dir, sizeof(dir), usb_dir);
+    dir[name - usb_dir] = 0;
+    snprintf(base, sizeof(base), ".removing-%.200s", name + 1);
+    if (free_name(dir, base, leaf, sizeof(leaf)) || pc5_join(out, size, dir, leaf) || rename(usb_dir, out)) out[0] = 0;
+}
+
 int pc5_remove_begin(Pc5Remove *remove, const char *root, const Pc5Game *game, const Pc5Library *library)
 {
     char from[PC5_PATH], to[PC5_PATH], profile[PC5_PATH];
@@ -1143,6 +1173,10 @@ int pc5_remove_begin(Pc5Remove *remove, const char *root, const Pc5Game *game, c
         shared |= &library->games[i] != game && library->games[i].prefix[0] && !strcmp(library->games[i].prefix, game->prefix);
     /* The folder first, out of the way: from here on the game is gone, and a
      * cut-short delete is finished at the next start. */
+    /* A game installed on a USB drive (PC5/<name> there): that folder too, set aside on its
+     * drive and deleted after the game's Windows. Not when the drive isn't plugged in. */
+    char usb_aside[PC5_PATH] = "";
+    if (game->prefix[0] && strcmp(game->prefix, "default") && !shared) usb_set_aside(root, game->prefix, usb_aside, sizeof(usb_aside));
     if (game->prefix[0] && strcmp(game->prefix, "default") && !shared) {
         drop_update(root, game->prefix);
         if (pc5_format(from, sizeof(from), "%s/prefixes/%s", root, game->prefix)) goto too_long;
@@ -1168,7 +1202,11 @@ int pc5_remove_begin(Pc5Remove *remove, const char *root, const Pc5Game *game, c
     }
     index_update(root, game->file, 0);
     delete_logs(root, game->id);
-    if (to[0]) return pc5_tree_delete_begin(remove, to);
+    if (to[0] || usb_aside[0]) {
+        if (pc5_tree_delete_begin(remove, to[0] ? to : usb_aside)) return -1;
+        if (to[0] && usb_aside[0]) pc5_tree_delete_add(remove, usb_aside);
+        return 0;
+    }
     remove->done = 1;
     return 0;
 too_long:
@@ -1475,6 +1513,8 @@ int pc5_remove_keep_saves(Pc5Remove *remove, const char *root, const Pc5Game *ga
         snprintf(remove->error, sizeof(remove->error), "PC5 is still keeping this game's saves from before: start PC5 again.");
         return -1;
     }
+    char usb_aside[PC5_PATH];
+    usb_set_aside(root, game->prefix, usb_aside, sizeof(usb_aside));
     drop_update(root, game->prefix);
     if (rename(from, keeping)) {
         snprintf(remove->error, sizeof(remove->error), "PC5 can't move the game's folder: %s.", strerror(errno));
@@ -1484,7 +1524,11 @@ int pc5_remove_keep_saves(Pc5Remove *remove, const char *root, const Pc5Game *ga
     if (keep_finish(root, game->prefix, game->file, removing, sizeof(removing), remove->error, sizeof(remove->error)))
         return -1;
     remove->failed = 0;
-    if (removing[0]) return pc5_tree_delete_begin(remove, removing);
+    if (removing[0] || usb_aside[0]) {
+        if (pc5_tree_delete_begin(remove, removing[0] ? removing : usb_aside)) return -1;
+        if (removing[0] && usb_aside[0]) pc5_tree_delete_add(remove, usb_aside);
+        return 0;
+    }
     remove->done = 1;
     return 0;
 }
@@ -1715,6 +1759,44 @@ static char take_dir[PC5_PATH];
 
 /* An install's note that it moved a game from the INSTALL folder: where from, and its folder. */
 #define TAKEN_FILE "pc5-taken.txt"
+/* An install's note that it puts the game on a USB drive: its folder there, where from, and 1
+ * when moved there (from the drive's PC5/INSTALL folder), 0 when copied. */
+#define USB_FILE "pc5-usb.txt"
+
+/* An install to a USB drive cut short (staging's USB_FILE): a moved game goes back to its
+ * INSTALL folder, a part-made copy is set aside as PC5/.removing-<name> (pc5_recover_step
+ * deletes it). */
+static void unplace_usb(const char *staging)
+{
+    char marker[PC5_PATH], aside[PC5_PATH], base[PC5_PATH], dir[PC5_PATH], leafname[PC5_PATH];
+    Pc5Buf text = { 0 };
+    char *dest, *source, *moved, *end;
+
+    if (pc5_format(marker, sizeof(marker), "%s/" USB_FILE, staging) || pc5_read_file(marker, &text, 8192) ||
+        pc5_buf_terminate(&text)) {
+        pc5_buf_free(&text);
+        return;
+    }
+    dest = (char *)text.data;
+    source = strchr(dest, '\n');
+    if (source) *source++ = 0;
+    moved = source ? strchr(source, '\n') : NULL;
+    if (moved) *moved++ = 0;
+    if (moved && (end = strchr(moved, '\n'))) *end = 0;
+    if (dest[0] == '/' && pc5_exists(dest)) {
+        if (moved && moved[0] == '1' && source[0] == '/' && !pc5_exists(source) && !rename(dest, source)) {
+            /* back in its INSTALL folder */
+        } else {
+            const char *leaf = strrchr(dest, '/');
+            pc5_copy(dir, sizeof(dir), dest);
+            dir[leaf - dest] = 0;
+            snprintf(base, sizeof(base), ".removing-%.200s", leaf + 1);
+            if (!free_name(dir, base, leafname, sizeof(leafname)) && !pc5_join(aside, sizeof(aside), dir, leafname))
+                (void)rename(dest, aside);
+        }
+    }
+    pc5_buf_free(&text);
+}
 
 /* An install's folder (staging) that moved a game from the INSTALL folder (its TAKEN_FILE): the
  * game moved back. 1 when the folder can be deleted now; 0 when it was kept aside, renamed in
@@ -1783,6 +1865,9 @@ int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms)
                 break;
             }
         }
+        /* An install to a USB drive cut short: the game back in its INSTALL folder, or the
+         * part-made copy there set aside to delete. */
+        if (leftover[0] && !strncmp(strrchr(leftover, '/') + 1, ".installing-", 12)) unplace_usb(leftover);
         /* An install from the INSTALL folder cut short: the game goes back there first, or, when
          * it can't, the install is kept aside (.taken-<id>), never deleted with the game in it. */
         if (leftover[0] && !untake(leftover, path)) leftover[0] = 0;
@@ -1813,6 +1898,27 @@ int pc5_recover_step(const char *root, Pc5Remove *remove, int budget_ms)
                 break;
             }
         closedir(dir);
+    }
+    /* On each USB drive: a game uninstalled or an install cut short (PC5/.removing-*), and a
+     * game installed from its PC5/INSTALL folder whose copy there wasn't deleted yet. */
+    for (int i = 0; !leftover[0] && usb_roots[i]; i++) {
+        char home[PC5_PATH], drop[PC5_PATH];
+        if (!pc5_format(home, sizeof(home), "%s/" PC5_USB_HOME, usb_roots[i]) && (dir = opendir(home))) {
+            while ((entry = readdir(dir)))
+                if (!strncmp(entry->d_name, ".removing-", 10) && entry->d_name[10]) {
+                    pc5_join(leftover, sizeof(leftover), home, entry->d_name);
+                    break;
+                }
+            closedir(dir);
+        }
+        if (!leftover[0] && !pc5_usb_install_dir(i, drop, sizeof(drop)) && (dir = opendir(drop))) {
+            while ((entry = readdir(dir)))
+                if (!strncmp(entry->d_name, ".installed-", 11) && entry->d_name[11]) {
+                    pc5_join(leftover, sizeof(leftover), drop, entry->d_name);
+                    break;
+                }
+            closedir(dir);
+        }
     }
     if (!leftover[0]) return 0;
     remove->failed = 0;
@@ -1962,7 +2068,28 @@ void pc5_install_take_from(const char *dir)
 static int in_take_dir(const char *path)
 {
     size_t n = strlen(take_dir);
-    return n && !strncmp(path, take_dir, n) && path[n] == '/' && path[n + 1] && !strstr(path + n, "/..");
+    if (n && !strncmp(path, take_dir, n) && path[n] == '/' && path[n + 1] && !strstr(path + n, "/..")) return 1;
+    /* a USB drive's PC5/INSTALL folder (pc5_usb_install_dir) */
+    char relative[PC5_PATH];
+    return !pc5_usb_relative(path, relative, sizeof(relative)) &&
+           !strncmp(relative, PC5_USB_HOME "/" PC5_INSTALL_FOLDER "/", sizeof(PC5_USB_HOME "/" PC5_INSTALL_FOLDER "/") - 1) &&
+           relative[sizeof(PC5_USB_HOME "/" PC5_INSTALL_FOLDER "/") - 1];
+}
+
+int pc5_usb_install_dir(int index, char *out, size_t size)
+{
+    for (int i = 0; usb_roots[i]; i++)
+        if (i == index) return pc5_format(out, size, "%s/" PC5_USB_HOME "/" PC5_INSTALL_FOLDER, usb_roots[i]);
+    return -1;
+}
+
+int pc5_usb_install_root(const char *path, char *out, size_t size)
+{
+    for (int i = 0; usb_roots[i]; i++) {
+        size_t n = strlen(usb_roots[i]);
+        if (!strncmp(path, usb_roots[i], n) && (path[n] == '/' || !path[n])) return pc5_format(out, size, "%s", usb_roots[i]);
+    }
+    return -1;
 }
 
 static int takes(const char *path, const char *root)
@@ -1973,8 +2100,16 @@ static int takes(const char *path, const char *root)
            from.st_dev == to.st_dev;
 }
 
+/* 1 when a and b are on the same drive. */
+static int same_drive(const char *a, const char *b)
+{
+    struct stat sa, sb;
+    return !stat(a, &sa) && !stat(b, &sb) && sa.st_dev == sb.st_dev;
+}
+
 static int install_begin(Pc5Install *install, const char *root, const char *template_prefix, const Pc5Folder *folder,
-                         int exe, Pc5Image *cover, uint32_t tint, const char *cover_source, int in_place)
+                         int exe, Pc5Image *cover, uint32_t tint, const char *cover_source, int in_place,
+                         const char *usb_root)
 {
     char path[PC5_PATH], exe_path[PC5_PATH + 32];
     uint64_t free_bytes = 0, needs;
@@ -2002,9 +2137,36 @@ static int install_begin(Pc5Install *install, const char *root, const char *temp
     install->in_place = in_place;
     if (pc5_format(path, sizeof(path), "%s/prefixes", root) || pc5_mkdirs(path))
         return fail(install, "PC5 can't make its folders in %s: %s.", root, strerror(errno));
-    install->take = !in_place && takes(folder->path, root);
-    /* Its Windows only, for a game played from its drive or moved from the INSTALL folder. */
-    needs = in_place || install->take ? pc5_install_needs_usb(folder) : pc5_install_needs(folder);
+    install->take = !in_place && !usb_root && takes(folder->path, root);
+    /* Its Windows only, for a game played from its drive, put on a USB drive, or moved from the
+     * INSTALL folder. */
+    needs = in_place || usb_root || install->take ? pc5_install_needs_usb(folder) : pc5_install_needs(folder);
+    if (usb_root) {
+        /* On a USB drive: its folder in the drive's PC5 folder (PC5/<name>), its Windows on the
+         * console; moved there at once from the drive's own PC5/INSTALL folder. */
+        char home[PC5_PATH], leaf[PC5_PATH];
+        uint64_t usb_free = 0;
+        if (pc5_format(home, sizeof(home), "%s/" PC5_USB_HOME, usb_root) || pc5_mkdirs(home))
+            return fail(install, "PC5 can't make its folder on the USB drive: %s.", strerror(errno));
+        if (free_name(home, folder->name, leaf, sizeof(leaf)) || pc5_join(install->usb_dest, sizeof(install->usb_dest), home, leaf) ||
+            pc5_format(info->usb, sizeof(info->usb), PC5_USB_HOME "/%s", leaf))
+            return fail(install, "PC5 can't name the game's folder on the USB drive.");
+        install->usb_move = in_take_dir(folder->path) && same_drive(folder->path, home);
+        if (same_drive(folder->path, home)) {
+            /* A slow port (USB 2.0) can't keep a game fed: refused, with where to plug in instead. */
+            double speed = pc5_usb_read_speed(folder->path);
+            if (speed > 0 && speed < pc5_play_min_speed)
+                return fail(install, "The drive reads at %.0f MB/s here, too slow to play from (%.0f needed). Plug it "
+                            "into a port on the back or the front USB-C port. Installing to the console still works.",
+                            speed, pc5_play_min_speed);
+        }
+        if (!install->usb_move && !pc5_free_bytes(home, &usb_free) && usb_free < folder->bytes + SPARE_ROOM / 4) {
+            char need[32], have[32];
+            pc5_size_text(folder->bytes + SPARE_ROOM / 4, need, sizeof(need));
+            pc5_size_text(usb_free, have, sizeof(have));
+            return fail(install, "Not enough space on the USB drive: the game needs %s and it has %s free.", need, have);
+        }
+    }
     if (in_place && pc5_usb_relative(folder->path, info->usb, sizeof(info->usb)))
         return fail(install, "Only a game on a USB drive can play from it: this folder isn't on one.");
     if (in_place && take_dir[0] && !strncmp(folder->path, take_dir, strlen(take_dir)))
@@ -2050,13 +2212,14 @@ static int install_begin(Pc5Install *install, const char *root, const char *temp
 int pc5_install_begin(Pc5Install *install, const char *root, const char *template_prefix, const Pc5Folder *folder,
                       int exe, Pc5Image *cover, uint32_t tint, const char *cover_source)
 {
-    return install_begin(install, root, template_prefix, folder, exe, cover, tint, cover_source, 0);
+    return install_begin(install, root, template_prefix, folder, exe, cover, tint, cover_source, 0, NULL);
 }
 
-int pc5_install_begin_usb(Pc5Install *install, const char *root, const char *template_prefix, const Pc5Folder *folder,
-                          int exe, Pc5Image *cover, uint32_t tint, const char *cover_source)
+int pc5_install_begin_on_usb(Pc5Install *install, const char *root, const char *template_prefix, const Pc5Folder *folder,
+                             int exe, Pc5Image *cover, uint32_t tint, const char *cover_source, const char *usb_root)
 {
-    return install_begin(install, root, template_prefix, folder, exe, cover, tint, cover_source, 1);
+    if (!usb_root || !usb_root[0]) return pc5_install_begin(install, root, template_prefix, folder, exe, cover, tint, cover_source);
+    return install_begin(install, root, template_prefix, folder, exe, cover, tint, cover_source, 0, usb_root);
 }
 
 /* One template entry: a folder made or a file copied whole. */
@@ -2155,6 +2318,7 @@ static int game_paths(Pc5Install *install)
 static int game_target(Pc5Install *install, const char *relative, char *out, size_t size)
 {
     if (install->update) return pc5_format(out, size, "%s/files%s%s", install->staging, relative[0] ? "/" : "", relative);
+    if (install->usb_dest[0]) return pc5_format(out, size, "%s%s%s", install->usb_dest, relative[0] ? "/" : "", relative);
     return pc5_format(out, size, "%s/drive_c/Games/%s%s%s", install->staging, install->info.folder,
                       relative[0] ? "/" : "", relative);
 }
@@ -2200,12 +2364,26 @@ static void start_cleanup(Pc5Install *install, int cancelled)
             return;
         }
     }
+    if (install->usb_moved) {
+        if (!rename(install->usb_dest, install->source)) {
+            install->usb_moved = 0;
+            install->usb_dest[0] = 0;
+        } else {
+            snprintf(install->error, sizeof(install->error),
+                     "The game couldn't be put back in the INSTALL folder: it is in %.180s.", install->usb_dest);
+            install->cancelled = 0;
+            install->phase = PC5_INSTALL_FAILED;
+            return;
+        }
+    }
     if (cancelled) install->error[0] = 0;
     install->cancelled = cancelled;
     if (!install->cleanup) install->cleanup = pc5_alloc(sizeof(Pc5Remove));
     if (install->cleanup) {
         memset(install->cleanup, 0, sizeof(*install->cleanup));
         pc5_tree_delete_begin(install->cleanup, install->staging);
+        /* and what was copied to the USB drive */
+        if (install->usb_dest[0]) pc5_tree_delete_add(install->cleanup, install->usb_dest);
     }
     install->phase = PC5_INSTALL_CLEANUP;
 }
@@ -2221,7 +2399,7 @@ static int finish(Pc5Install *install)
         return fail(install, "PC5 can't write its notes: %s.", strerror(errno));
     /* The game's files as copied: what else is in its folder later, the game made (kept saves).
      * None for a game played from its USB drive: its folder isn't the console's. */
-    if (!install->in_place) {
+    if (!install->in_place && !install->usb_dest[0]) {
         Pc5Buf files = { 0 };
         int failed = manifest_add_list(&files, &install->list) ||
                      pc5_format(path, sizeof(path), "%s/pc5/files.txt", install->staging) ||
@@ -2241,7 +2419,9 @@ static int finish(Pc5Install *install)
         return fail(install, "PC5 can't put the game in place: %s.", strerror(errno));
     pc5_copy(install->staging, sizeof(install->staging), target);
     install->taken = 0;   /* the game is the library's now */
+    install->usb_moved = 0;
     if (!pc5_format(path, sizeof(path), "%s/" TAKEN_FILE, target)) unlink(path);
+    if (!pc5_format(path, sizeof(path), "%s/" USB_FILE, target)) unlink(path);
     if (pc5_profile_refresh(install->root, install->id, error, sizeof(error))) {
         /* The folder is in place: the next start writes the profile again. */
         return fail(install, "%s", error);
@@ -2264,9 +2444,11 @@ static int finish(Pc5Install *install)
      * (.installed-<name>, which nothing lists) and deleted, now or when PC5 next opens. */
     if (!install->in_place && in_take_dir(install->source) && pc5_exists(install->source)) {
         const char *leaf = strrchr(install->source, '/');
-        char base[PC5_PATH], aside[PC5_PATH];
+        char base[PC5_PATH], aside[PC5_PATH], from_dir[PC5_PATH];
+        pc5_copy(from_dir, sizeof(from_dir), install->source);
+        from_dir[leaf - install->source] = 0;   /* its INSTALL folder, the console's or a USB drive's */
         snprintf(base, sizeof(base), ".installed-%.200s", leaf + 1);
-        if (!free_name(take_dir, base, aside, sizeof(aside)) && !pc5_join(path, sizeof(path), take_dir, aside) &&
+        if (!free_name(from_dir, base, aside, sizeof(aside)) && !pc5_join(path, sizeof(path), from_dir, aside) &&
             !rename(install->source, path) && !install->tidying) {
             if (!install->cleanup) install->cleanup = pc5_alloc(sizeof(Pc5Remove));
             if (install->cleanup) {
@@ -2480,6 +2662,33 @@ Pc5InstallPhase pc5_install_step(Pc5Install *install, int budget_ms)
             }
             install->at = 0;
             install->file_index = 0;
+            if (install->usb_dest[0]) {
+                /* On a USB drive: noted first (pc5_recover_step), so a cut-short install puts a
+                 * moved game back in its INSTALL folder, or deletes a part-made copy. */
+                char marker[PC5_PATH], note[PC5_PATH * 2 + 8];
+                if (pc5_format(marker, sizeof(marker), "%s/" USB_FILE, install->staging) ||
+                    pc5_format(note, sizeof(note), "%s\n%s\n%d\n", install->usb_dest, install->source, install->usb_move) ||
+                    pc5_write_file(marker, note, strlen(note))) {
+                    fail(install, "PC5 can't write its notes: %s.", strerror(errno));
+                    start_cleanup(install, 0);
+                    break;
+                }
+                if (install->usb_move && !rmdir(games) && !rename(install->source, games)) {
+                    install->usb_moved = 1;
+                    install->bytes_done = install->bytes_total;
+                    install->files_done = install->files_total;
+                    install->phase = PC5_INSTALL_FINISH;
+                    return install->phase;
+                }
+                if (install->usb_move && pc5_mkdirs(games)) {
+                    fail(install, "PC5 can't make the game's folder on the USB drive: %s.", strerror(errno));
+                    start_cleanup(install, 0);
+                    break;
+                }
+                install->usb_move = 0;   /* not moved: copied */
+                install->phase = PC5_INSTALL_COPY;
+                return install->phase;
+            }
             /* From the INSTALL folder on the same drive: the folder moved in its place, at once,
              * noted first, so a cut-short install puts it back (pc5_recover_step). */
             char marker[PC5_PATH], note[PC5_PATH * 2 + 4];

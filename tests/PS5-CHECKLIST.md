@@ -504,3 +504,11 @@ controller's speaker.
 | 267 | Start any game | it starts as before | `PW_WINE64 open_files limit=… was=… most=…` (limit as high as most) |
 | 268 | A game that said "Too many open files" (Postal 2's New game, Pinball FX) | it gets further | no `Too many open files` |
 | 269 | A native game with a .NET DLL beside its program (Gears of War E-Day's SpeechSynthWrapper.dll), on a console where no .NET game has started yet | "Copying the .NET runtime" before it starts; no `Wine Mono is not installed` | `PC5 dotnet runtime copy …` |
+| 270 | Plug in a USB drive and open PC5 | the drive gets `PC5/INSTALL` | `PC5 install folders … usb_drives=1` |
+| 271 | Put a game in the drive's `PC5/INSTALL`, open PC5 (and again: plug the drive in with the library showing) | PC5 asks to install it | `PC5 usb drive plugged in … games=1` |
+| 272 | Install it, choose **USB drive** | moved at once into `PC5/<game>` on the drive; it starts and plays | `PC5 install where=/mnt/usb…` |
+| 273 | Install a game from elsewhere on the drive, choose **USB drive** | copied and checked into `PC5/<game>`; the folder it came from stays | |
+| 274 | Install a game from the drive's `PC5/INSTALL`, choose **Console** | copied to the console, then gone from `PC5/INSTALL` | |
+| 275 | Uninstall a game installed on the drive | its `PC5/<game>` folder deleted from the drive | |
+| 276 | A game set to Play from USB with 2.0.2 | still starts from its drive | |
+| 277 | Review screen | no △ Play from USB | |

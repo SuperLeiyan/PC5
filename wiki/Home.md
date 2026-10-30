@@ -22,7 +22,7 @@ PC5 contains no games and downloads none. You install the games you own.
 | Page | What it covers |
 | --- | --- |
 | [Installing and updating PC5](Installing-and-updating) | Putting PC5 on the console, updating it, finding its version |
-| [Installing games](Installing-games) | Preparing the USB drive, installing one or several games, playing from USB, the INSTALL folder, uninstalling |
+| [Installing games](Installing-games) | Preparing the USB drive, installing one or several games, on the console or a USB drive, the INSTALL folders, uninstalling |
 | [Playing games](Playing-games) | The library, starting and leaving a game, the game menu, frame generation |
 | [Controllers](Controllers) | The three controller modes, button mapping, a game's Windows pop-ups |
 | [Settings](Settings) | Every row of PC5's Settings and what it does |

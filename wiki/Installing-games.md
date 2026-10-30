@@ -1,4 +1,4 @@
-PC5 installs games from a USB drive. You put each game's installed folder on the drive, choose it in PC5, and PC5 copies it to the console once, checks the copy against the drive and adds the game to your library. You can install one game at a time or several in a row, [play a game from its USB drive](#playing-a-game-from-its-usb-drive) without copying it, or [put a game in PC5's INSTALL folder](#the-install-folder) over FTP or from the [web page](Web-page). This page also covers choosing the right program for a game, updating a game and uninstalling games.
+PC5 installs games from a USB drive. You put each game's installed folder on the drive, choose it in PC5, and PC5 copies it to the console once, checks the copy against the drive and adds the game to your library. You can install one game at a time or several in a row, [install a game on a USB drive](#installing-a-game-on-a-usb-drive) to play it from there, or [put a game in PC5's INSTALL folder](#the-install-folder) over FTP or from the [web page](Web-page). This page also covers choosing the right program for a game, updating a game and uninstalling games.
 
 ## Preparing the USB drive
 
@@ -30,14 +30,14 @@ Good to know:
 - A `steam_appid.txt` at the top of the folder (many Steam games have one) helps PC5 find the right cover.
 - You can put a `cover.jpg`, `cover.jpeg` or `cover.png` at the top of the folder to use your own cover. See [Covers](Covers).
 - You can put a `launch.txt` beside the game's `.exe` to give it launch options. It is copied with the game. See [Launch options](Launch-options).
-- PC5 never writes to the USB drive (a game that [plays from it](#playing-a-game-from-its-usb-drive) may write its own files there).
+- PC5 writes to a USB drive only in its `PC5` folder: the games you [install on the drive](#installing-a-game-on-a-usb-drive), and its `PC5/INSTALL` folder.
 
 ## Installing one game
 
 1. In the library, press **Options** to open Settings, and choose **Game maintenance › Install games from USB**.
 2. PC5 lists the game folders it found on every USB drive plugged in. Choose one and press **✕**.
 3. PC5 reads the folder, finds its program and looks for its cover. The review screen opens.
-4. Check the review screen, then press **✕** to install.
+4. Check the review screen, then press **✕** to install. With a USB drive plugged in, PC5 asks where the game goes: **Console** (chosen first) or **USB drive**. See [Installing a game on a USB drive](#installing-a-game-on-a-usb-drive).
 
 ![The list of game folders on the USB drive](images/install-usb-folders.png)
 *Install games from USB: the game folders PC5 found. Two are ticked for installing in a row.*
@@ -65,7 +65,6 @@ The review screen shows what PC5 is about to do:
 | Button | On the review screen |
 | --- | --- |
 | ✕ | Install (in a list of several games: Done) |
-| △ | Play from USB: see [Playing a game from its USB drive](#playing-a-game-from-its-usb-drive) |
 | L1 / R1 | Show the other covers PC5 found. See [Covers](Covers). |
 | □ | Choose another program, when the folder has more than one |
 | ○ | Back to the folder list |
@@ -108,29 +107,31 @@ If you uninstalled the game before and kept its saves, PC5 asks whether to put t
 
 PC5 needs the game's size plus about 1.5 GB of free space before it starts copying.
 
-## Playing a game from its USB drive
+## Installing a game on a USB drive
 
-A game can also play straight from its USB drive, without being copied to the console. This suits big games, or trying a game before you install it.
+With a USB drive plugged in, PC5 asks where each game goes when you install it (one game, or the ticked ones together):
 
-1. In **Install games from USB**, choose the game and press **✕** (one game, not ticked ones). Its review screen opens.
-2. Press **△ Play from USB** instead of **✕ Install**.
-3. PC5 sets up only the game's Windows on the console (its saves, settings and shader cache) and copies none of its files. The game appears in the library like any other.
+- **Console**: copied to the console, as always. The drive isn't needed to play.
+- **USB drive**: copied into the drive's `PC5` folder (`PC5/<game>`), checked, and played from there. Only the game's Windows (its saves, settings and shader cache) is on the console.
+
+![Where the game goes: the console or the USB drive](images/install-where.png)
 
 Good to know:
 
-- It is for USB drives (exFAT), not a drive the PS5 formatted as extended storage.
-- It needs a fast USB port. PC5 times a short read first: a drive in a USB 2.0 port (the front USB-A port on the original PS5) is too slow to play from, and PC5 says so. Plug it into a port on the back, or the front USB-C port. Installing from a slow port still works.
-- Games in PC5's INSTALL folder are always installed: Play from USB isn't offered for them.
+- PC5 offers the drive the game is on, or else the one with the most free space. It is for USB drives (exFAT), not a drive the PS5 formatted as extended storage.
+- It needs a fast USB port. When the game is on that drive already, PC5 times a short read first: a drive in a USB 2.0 port (the front USB-A port on the original PS5) is too slow to play from, and PC5 says so. Plug it into a port on the back, or the front USB-C port. Installing to the console still works from any port.
 - Keep the drive plugged in to play. It can be in any USB port. With it unplugged, PC5 asks you to plug it in instead of starting the game.
 - Loading is as fast as the drive is: a USB hard drive is slower than the console.
-- The game can write to its own folder on the drive (some keep their saves or settings there).
 - **△ › Manage › Game files** opens the game's folder on the drive.
-- To update the game, copy the newer version over its folder on the drive: **Manage › Update** isn't for these games.
-- Uninstalling deletes only what is on the console. The game's folder on the drive stays as it is.
+- To update the game, copy the newer version over its folder on the drive (`PC5/<game>`): **Manage › Update** isn't for these games.
+- Uninstalling deletes the game's folder on the drive too, and its Windows on the console (unless you keep its saves).
+- Games set to play from a USB drive with an earlier PC5 keep working as they were.
 
 ## The INSTALL folder
 
 PC5's own folder has a folder called **INSTALL** (for example `/data/homebrew/PPSA11018/INSTALL`). PC5 makes it the first time it opens. It is for sending games to the console without a USB drive, over FTP, from PC5's [web page](Web-page) or with the [file manager](File-manager).
+
+Each USB drive has one too: **`PC5/INSTALL`** on the drive. PC5 makes it when the drive is plugged in. A game you put there is offered in the same way, when PC5 opens or when you plug the drive in while the library shows. Installing it on that same drive **moves** it into `PC5/<game>` at once; installing it to the console copies it, then deletes it from `PC5/INSTALL`.
 
 1. Copy a game's installed folder into `INSTALL`, as you would onto a USB drive: one folder per game, the folder named like the game.
 2. Open PC5. It finds the game and asks: "1 game is waiting in …/INSTALL. Install it now?"

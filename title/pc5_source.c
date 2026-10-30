@@ -70,6 +70,9 @@ static void scan_folder(const char *path, int drive, Pc5Source *out, int max, in
         if (system_folder(entry->d_name) || pc5_join(inner, sizeof(inner), path, entry->d_name) || !pc5_is_dir(inner))
             continue;
         if (!pc5_casecmp(entry->d_name, "Games")) continue;   /* gone into below */
+        /* A USB drive's PC5 folder: the games PC5 installed there, and its INSTALL folder,
+         * which is looked in on its own (pc5_usb_install_dir). */
+        if (!pc5_casecmp(entry->d_name, "PC5")) continue;
         if (strlen(entry->d_name) >= PC5_NAME || ps5_app(inner) || !holds_program(inner, PC5_DEPTH)) continue;
         Pc5Source *source = &out[(*count)++];
         pc5_copy(source->name, sizeof(source->name), entry->d_name);

@@ -32,7 +32,7 @@ It is PC5's title ID: the name of the app's folder and of the release's zip file
 From USB drives formatted as exFAT, and from PC5's INSTALL folder, which you can fill over FTP, from the [web page](Web-page) or with the file manager. See [The INSTALL folder](Installing-games#the-install-folder).
 
 **Do I need to keep the USB drive plugged in to play?**
-Not for an installed game: PC5 copies each game to the console, and the USB drive is only read while installing. A game you chose to [play from USB](Installing-games#playing-a-game-from-its-usb-drive) needs its drive plugged in.
+Not for a game installed on the console: PC5 copies it there, and the USB drive is only read while installing. A game you [installed on a USB drive](Installing-games#installing-a-game-on-a-usb-drive) plays from the drive, so keep that one plugged in.
 
 **Can I install a game's installer (setup.exe)?**
 No. Install the game on a PC first, then copy the installed folder to the USB drive.

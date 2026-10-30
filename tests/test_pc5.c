@@ -1888,7 +1888,7 @@ static void test_game_update(void)
  * isn't timed. A game in PC5's INSTALL folder is never played from there. */
 static void test_play_speed(void)
 {
-    char drive[PC5_PATH], dir[PC5_PATH], file[PC5_PATH], take[PC5_PATH], kept_root[PC5_PATH];
+    char drive[PC5_PATH], dir[PC5_PATH], file[PC5_PATH], kept_root[PC5_PATH];
     Pc5Folder folder;
     Pc5Install install;
     Pc5Image cover = { 0 };
@@ -1907,49 +1907,52 @@ static void test_play_speed(void)
     const char *roots[] = { drive, NULL };
     pc5_usb_roots(roots);
     CHECK(!pc5_folder_inspect(dir, "Big", &folder), "read");
+    /* Installed on the drive it is on, in a slow port: refused, saying why and where instead. */
     double kept = pc5_play_min_speed;
     pc5_play_min_speed = 1e9;
-    CHECK(pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon") &&
+    CHECK(pc5_install_begin_on_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon", drive) &&
               strstr(install.error, "too slow to play from") && strstr(install.error, "on the back") &&
-              strstr(install.error, "Install still works"),
+              strstr(install.error, "Installing to the console still works"),
           "too slow: refused, saying why: %s", install.error);
     pc5_install_end(&install);
     pc5_play_min_speed = kept;
-    CHECK(!pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon"), "fast enough: %s",
+    CHECK(!pc5_install_begin_on_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon", drive), "fast enough: %s",
           install.error);
+    pc5_install_cancel(&install);
+    while (pc5_install_step(&install, 5) < PC5_INSTALL_DONE) {}
     pc5_install_end(&install);
-
-    /* The INSTALL folder on a drive: its games are installed, never played from there (and so
-     * never deleted as an install from it would). */
-    path(take, sizeof(take), "%s/INSTALL", drive);
-    path(file, sizeof(file), "mkdir -p '%s' && cp -r '%s/NeonDrift' '%s/'", take, usb, take);
-    run(file);
-    pc5_install_take_from(take);
-    path(dir, sizeof(dir), "%s/NeonDrift", take);
-    CHECK(!pc5_folder_inspect(dir, "NeonDrift", &folder), "read in INSTALL");
-    CHECK(pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon") &&
-              strstr(install.error, "INSTALL"), "not played from INSTALL: %s", install.error);
-    pc5_install_end(&install);
-    path(file, sizeof(file), "%s/NeonDrift.exe", dir);
-    CHECK(pc5_exists(file), "and still there");
-    pc5_install_take_from(NULL);
     pc5_usb_roots(NULL);
     pc5_copy(root, sizeof(root), kept_root);
 }
 
-/* A game played from its USB drive: only its Windows on the console, its folder a link to the
- * drive's, found on whichever drive it is in; the drive never written to by PC5. */
+/* Runs an install to its end: its last phase, and whether anything was copied. */
+static Pc5InstallPhase install_run(Pc5Install *install, int *copied)
+{
+    Pc5InstallPhase phase;
+    int steps = 0;
+    *copied = 0;
+    do {
+        phase = pc5_install_step(install, 1);
+        *copied |= phase == PC5_INSTALL_COPY || phase == PC5_INSTALL_VERIFY;
+    } while (phase < PC5_INSTALL_DONE && ++steps < 200000);
+    return phase;
+}
+
+/* A game installed on a USB drive: its folder in the drive's PC5 folder, only its Windows on the
+ * console, its folder there a link to the drive's, found on whichever drive it is in; moved
+ * there from the drive's PC5/INSTALL folder; deleted from there when uninstalled. */
 static void test_usb_play(void)
 {
     char kept_root[PC5_PATH], prefixes[PC5_PATH], file[PC5_PATH], dir[PC5_PATH], other[PC5_PATH], error[PC5_ERROR];
-    char game_usb[PC5_PATH], second[PC5_PATH];
+    char game_usb[PC5_PATH], second[PC5_PATH], drop[PC5_PATH], id[PC5_ID];
     Pc5Folder folder;
     Pc5Install install;
     Pc5Image cover = { 0 };
     Pc5Info info;
     Pc5Library library;
     Pc5Remove remove;
-    int steps = 0;
+    Pc5InstallPhase phase;
+    int copied, i;
 
     pc5_copy(kept_root, sizeof(kept_root), root);
     path(root, sizeof(root), "%s/data-usb/prospero-win", work);
@@ -1963,27 +1966,26 @@ static void test_usb_play(void)
     CHECK(!pc5_folder_inspect(dir, "NeonDrift", &folder), "the game's folder on the drive");
     CHECK(!pc5_usb_relative(dir, file, sizeof(file)) && !strcmp(file, "NeonDrift"), "its place on the drive: %s", file);
     CHECK(pc5_usb_relative(work, file, sizeof(file)), "a folder elsewhere isn't on a drive");
+    CHECK(!pc5_usb_install_root(dir, file, sizeof(file)) && !strcmp(file, usb), "the drive it is on: %s", file);
+    CHECK(!pc5_usb_install_dir(1, file, sizeof(file)) && !strcmp(strrchr(file, '/') - 3, "PC5/INSTALL"),
+          "a drive's INSTALL folder: %s", file);
     CHECK(pc5_install_needs_usb(&folder) < pc5_install_needs(&folder) - folder.bytes + 1, "it needs room for its Windows only");
-    CHECK(!pc5_install_begin_usb(&install, root, template_prefix, &folder, 0, &cover, 0xff336699u, "icon"),
-          "playing from the drive begins: %s", install.error);
-    CHECK(pc5_install_use_saves(&install, dir) && strstr(install.error, "USB"), "no kept saves for it: %s", install.error);
-    install.error[0] = 0;
-    Pc5InstallPhase phase;
-    int copied = 0;
-    do {
-        phase = pc5_install_step(&install, 1);
-        copied |= phase == PC5_INSTALL_COPY || phase == PC5_INSTALL_VERIFY;
-    } while (phase < PC5_INSTALL_DONE && ++steps < 100000);
-    CHECK(phase == PC5_INSTALL_DONE && !copied, "done, nothing copied: %d %s", (int)phase, install.error);
-    char id[PC5_ID];
+    CHECK(!pc5_install_begin_on_usb(&install, root, template_prefix, &folder, 0, &cover, 0xff336699u, "icon", usb),
+          "installing it on the drive begins: %s", install.error);
+    phase = install_run(&install, &copied);
+    CHECK(phase == PC5_INSTALL_DONE && copied, "done, copied to the drive: %d %s", (int)phase, install.error);
     pc5_copy(id, sizeof(id), install.id);
     pc5_install_end(&install);
 
-    CHECK(!pc5_info_read(root, id, &info) && !strcmp(info.usb, "NeonDrift"), "its notes say where: %s", info.usb);
+    CHECK(!pc5_info_read(root, id, &info) && !strcmp(info.usb, "PC5/NeonDrift"), "its notes say where: %s", info.usb);
+    path(game_usb, sizeof(game_usb), "%s/PC5/NeonDrift", usb);
+    path(file, sizeof(file), "%s/data/level1.pak", game_usb);
+    CHECK(file_is(file, "level one data\n"), "the game in the drive's PC5 folder");
+    path(file, sizeof(file), "%s/NeonDrift/NeonDrift.exe", usb);
+    CHECK(pc5_is_file(file), "and the folder it came from as it was");
     path(file, sizeof(file), "%s/%s/drive_c/Games/NeonDrift", prefixes, id);
     CHECK(!pc5_exists(file), "no copy of the game on the console");
     path(file, sizeof(file), "%s/%s/drive_c/Games/.pw-symlinks", prefixes, id);
-    path(game_usb, sizeof(game_usb), "%s/NeonDrift", usb);
     {
         char line[PC5_PATH + 32];
         snprintf(line, sizeof(line), "NeonDrift\t%s\n", game_usb);
@@ -1993,7 +1995,7 @@ static void test_usb_play(void)
     path(file, sizeof(file), "%s/profiles/%s.profile", root, id);
     CHECK(file_holds_text(file, "executable = C:\\Games\\NeonDrift\\"), "its profile starts it in C:\\Games");
     pc5_library_load(root, &library);
-    int i = pc5_library_find(&library, id);
+    i = pc5_library_find(&library, id);
     CHECK(i >= 0 && library.games[i].usb && !strncmp(library.games[i].detail, "USB \xc2\xb7 ", 5),
           "the library says USB: %s", i >= 0 ? library.games[i].detail : "-");
 
@@ -2006,7 +2008,9 @@ static void test_usb_play(void)
         pc5_write_file(file, old.data, old.len);
         pc5_buf_free(&old);
     }
-    path(other, sizeof(other), "%s/NeonDrift", second);
+    path(other, sizeof(other), "%s/PC5", second);
+    pc5_mkdirs(other);
+    path(other, sizeof(other), "%s/PC5/NeonDrift", second);
     CHECK(!rename(game_usb, other), "the drive moved");
     CHECK(!pc5_profile_refresh(root, id, error, sizeof(error)), "starts from the other port: %s", error);
     {
@@ -2025,11 +2029,11 @@ static void test_usb_play(void)
     /* Updating it is copying over its folder on the drive. */
     path(dir, sizeof(dir), "%s/NeonDrift", usb);
     pc5_folder_inspect(dir, "NeonDrift", &folder);
-    CHECK(pc5_update_begin(&install, root, id, &folder) && strstr(install.error, "plays from its USB drive"),
+    CHECK(pc5_update_begin(&install, root, id, &folder) && strstr(install.error, "USB drive"),
           "no update from PC5: %s", install.error);
     pc5_install_end(&install);
 
-    /* Uninstalled with its saves kept, then for good: the drive's folder as it was. */
+    /* Uninstalled with its saves kept: the saves on the console, its folder on the drive deleted. */
     path(file, sizeof(file), "%s/%s/drive_c/users/prospero/Saved Games/NeonDrift/slot1.sav", prefixes, id);
     write_text(file, "my save");
     pc5_library_load(root, &library);
@@ -2039,10 +2043,67 @@ static void test_usb_play(void)
     pc5_remove_end(&remove);
     path(file, sizeof(file), "%s/saves/%s/drive_c/users/prospero/Saved Games/NeonDrift/slot1.sav", root, id);
     CHECK(file_is(file, "my save"), "its save kept");
-    path(file, sizeof(file), "%s/NeonDrift/NeonDrift.exe", usb);
-    CHECK(pc5_is_file(file), "its program still on the drive");
+    CHECK(!pc5_exists(game_usb), "its folder on the drive deleted");
     path(file, sizeof(file), "%s/NeonDrift/data/level1.pak", usb);
-    CHECK(file_is(file, "level one data\n"), "its data still on the drive, unchanged");
+    CHECK(file_is(file, "level one data\n"), "the folder it came from untouched");
+
+    /* From the drive's PC5/INSTALL folder to the same drive: moved, at once, and out of INSTALL. */
+    pc5_usb_install_dir(0, drop, sizeof(drop));
+    path(file, sizeof(file), "mkdir -p '%s' && cp -r '%s/NeonDrift' '%s/'", drop, usb, drop);
+    run(file);
+    path(dir, sizeof(dir), "%s/NeonDrift", drop);
+    CHECK(!pc5_folder_inspect(dir, "NeonDrift", &folder), "read in the drive's INSTALL folder");
+    CHECK(!pc5_install_begin_on_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon", usb), "begins: %s",
+          install.error);
+    phase = install_run(&install, &copied);
+    CHECK(phase == PC5_INSTALL_DONE && !copied, "moved, not copied: %d %s", (int)phase, install.error);
+    pc5_copy(id, sizeof(id), install.id);
+    pc5_install_end(&install);
+    CHECK(!pc5_exists(dir), "out of the INSTALL folder");
+    path(file, sizeof(file), "%s/data/level1.pak", game_usb);
+    CHECK(file_is(file, "level one data\n"), "in the drive's PC5 folder");
+    /* Uninstalled for good: its folder on the drive goes with it. */
+    pc5_library_load(root, &library);
+    i = pc5_library_find(&library, id);
+    CHECK(i >= 0 && !pc5_remove_begin(&remove, root, &library.games[i], &library), "uninstalled: %s", remove.error);
+    while (pc5_remove_step(&remove, 1)) {}
+    pc5_remove_end(&remove);
+    CHECK(!pc5_exists(game_usb), "its folder on the drive deleted");
+
+    /* From the drive's INSTALL folder to the console: copied, then out of INSTALL. */
+    path(file, sizeof(file), "cp -r '%s/NeonDrift' '%s/'", usb, drop);
+    run(file);
+    CHECK(!pc5_folder_inspect(dir, "NeonDrift", &folder), "read again");
+    CHECK(!pc5_install_begin_on_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon", NULL), "to the console: %s",
+          install.error);
+    phase = install_run(&install, &copied);
+    CHECK(phase == PC5_INSTALL_DONE, "on the console (moved here, on one drive): %d %s", (int)phase, install.error);
+    pc5_copy(id, sizeof(id), install.id);
+    pc5_install_end(&install);
+    CHECK(!pc5_exists(dir), "and out of the drive's INSTALL folder");
+    path(file, sizeof(file), "%s/%s/drive_c/Games/NeonDrift/data/level1.pak", prefixes, id);
+    CHECK(file_is(file, "level one data\n"), "on the console");
+
+    /* Cancelled while it copies to the drive: nothing left there. */
+    path(dir, sizeof(dir), "%s/NeonDrift", usb);
+    pc5_folder_inspect(dir, "NeonDrift", &folder);
+    CHECK(!pc5_install_begin_on_usb(&install, root, template_prefix, &folder, 0, &cover, 0, "icon", usb), "begins: %s",
+          install.error);
+    while ((phase = pc5_install_step(&install, 1)) < PC5_INSTALL_COPY) {}
+    pc5_install_cancel(&install);
+    while ((phase = pc5_install_step(&install, 5)) < PC5_INSTALL_DONE) {}
+    CHECK(phase == PC5_INSTALL_CANCELLED, "cancelled: %d", (int)phase);
+    pc5_install_end(&install);
+    CHECK(!pc5_exists(game_usb), "no part-made copy on the drive");
+
+    /* Left over on a drive (unplugged mid-delete): deleted when PC5 next opens. */
+    path(file, sizeof(file), "%s/PC5/.removing-Old/data/a.pak", usb);
+    write_text(file, "x");
+    memset(&remove, 0, sizeof(remove));
+    for (int k = 0; k < 1000 && pc5_recover_step(root, &remove, 5); k++) {}
+    pc5_remove_end(&remove);
+    path(file, sizeof(file), "%s/PC5/.removing-Old", usb);
+    CHECK(!pc5_exists(file), "a leftover on the drive deleted");
 
     pc5_usb_roots(NULL);
     pc5_copy(root, sizeof(root), kept_root);
@@ -2295,6 +2356,15 @@ static void press(Pc5Ui *ui, uint32_t key, Pc5Canvas *canvas)
 static void until_screen(Pc5Ui *ui, const char *name, Pc5Canvas *canvas)
 {
     for (int i = 0; i < 20000 && strcmp(pc5_ui_screen(ui), name); i++) frames(ui, 0, 0, 1, canvas);
+}
+
+/* With a USB drive plugged in, an install asks where the game goes: the console, chosen first. */
+static void where_console(Pc5Ui *ui, Pc5Canvas *canvas)
+{
+    if (!strcmp(pc5_ui_screen(ui), "install-where")) {
+        frames(ui, 0, 0, 25, canvas);
+        press(ui, PC5_KEY_ACCEPT, canvas);
+    }
 }
 
 /* How many texts were cut short (with "…") pressing key (0: none) and drawing again. */
@@ -5971,12 +6041,17 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);   /* NeonDrift */
     until_screen(ui, "review", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "review"), "review: %s", pc5_ui_screen(ui));
-    CHECK(!cuts_after(ui, 0, &canvas), "review, with Play from USB: no text cut short");
+    CHECK(!cuts_after(ui, 0, &canvas), "review: no text cut short");
     press(ui, PC5_KEY_R1, &canvas);       /* another cover */
     frames(ui, 0, 0, 5, &canvas);
     press(ui, PC5_KEY_L1, &canvas);
     frames(ui, 0, 0, 5, &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "install-where"), "a USB drive plugged in: where to? %s", pc5_ui_screen(ui));
+    pc5_ui_draw(ui, &canvas);
+    save_shot(&canvas, "install-where");
+    CHECK(!cuts_after(ui, 0, &canvas), "where to: no text cut short");
+    where_console(ui, &canvas);
     until_screen(ui, "message", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "message"), "installed: %s", pc5_ui_screen(ui));
     press(ui, PC5_KEY_ACCEPT, &canvas);
@@ -6119,6 +6194,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* NeonDrift */
     until_screen(ui, "review", &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
+    where_console(ui, &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "saves-ask"), "its saves offered: %s", pc5_ui_screen(ui));
     save_shot(&canvas, "saves-ask");
     frames(ui, 0, 0, 30, &canvas);
@@ -6462,6 +6538,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_SQUARE, &canvas);      /* Starfall */
     press(ui, PC5_KEY_OPTIONS, &canvas);
+    where_console(ui, &canvas);
     until_screen(ui, "queue", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "queue"), "the list to install: %s", pc5_ui_screen(ui));
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* review the first, take another cover, back */
@@ -7357,6 +7434,7 @@ static void test_install_folder_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Starfall */
     until_screen(ui, "review", &canvas);
     press(ui, PC5_KEY_ACCEPT, &canvas);
+    where_console(ui, &canvas);
     until_screen(ui, "message", &canvas);
     CHECK(!strcmp(pc5_ui_screen(ui), "message"), "installed: %s", pc5_ui_screen(ui));
     press(ui, PC5_KEY_ACCEPT, &canvas);

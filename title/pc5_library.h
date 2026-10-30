@@ -175,8 +175,12 @@ typedef struct Pc5Install {
     int update, moving;
     char game_dir[PC5_PATH];
     uint32_t skipped;
-    /* pc5_install_begin_usb: the game played from its USB drive, nothing copied */
+    /* a game played from its USB drive as it was (from before 2.0.3), nothing copied */
     int in_place;
+    /* pc5_install_begin_on_usb: the game's folder on a USB drive (usb_dest, <drive>/PC5/<name>),
+     * moved there from the drive's PC5/INSTALL folder (usb_move), and moved there now (usb_moved) */
+    char usb_dest[PC5_PATH];
+    int usb_move, usb_moved;
     /* A game in PC5's INSTALL folder (pc5_install_take_from) on the drive the library is on: its
      * folder moved into the game's Windows, not copied (take); and moved there now (taken), so
      * a cleanup moves it back first. */
@@ -187,10 +191,20 @@ typedef struct Pc5Install {
  * cover is taken over. */
 int pc5_install_begin(Pc5Install *install, const char *root, const char *template_prefix,
                       const Pc5Folder *folder, int exe, Pc5Image *cover, uint32_t tint, const char *cover_source);
-/* The same for a game played from its USB drive (folder on one): only its Windows is made
- * on the console, and its folder there is a link to the drive's (pc5_usb_link). */
-int pc5_install_begin_usb(Pc5Install *install, const char *root, const char *template_prefix,
-                          const Pc5Folder *folder, int exe, Pc5Image *cover, uint32_t tint, const char *cover_source);
+/* The same with the game's folder on the USB drive at usb_root (one of the USB drives'
+ * roots), in its PC5 folder (PC5_USB_HOME/<name>), and only its Windows on the console; its
+ * folder there is a link to the drive's (pc5_usb_link). A game in the drive's own PC5/INSTALL
+ * folder is moved, not copied. usb_root NULL or "": pc5_install_begin. */
+int pc5_install_begin_on_usb(Pc5Install *install, const char *root, const char *template_prefix,
+                             const Pc5Folder *folder, int exe, Pc5Image *cover, uint32_t tint, const char *cover_source,
+                             const char *usb_root);
+/* A USB drive's PC5 folder: the games installed on it, and its INSTALL folder (PC5/INSTALL),
+ * whose games are offered as those in PC5's own INSTALL folder are, and installed from there. */
+#define PC5_USB_HOME "PC5"
+/* The INSTALL folder of the USB drive at index (of pc5_usb_roots'): 0, or -1 past the last. */
+int pc5_usb_install_dir(int index, char *out, size_t size);
+/* The root of the USB drive path is on: 0, or -1 when it is on none. */
+int pc5_usb_install_root(const char *path, char *out, size_t size);
 /* How fast the drive reads the folder's biggest file (at most PC5_SPEED_READ of it, from
  * past its start, so not what reading the folder left in memory): MB a second, or 0 when it
  * has no file big enough to tell (PC5_SPEED_SMALLEST) or can't be read. */
@@ -282,6 +296,8 @@ int pc5_remove_step(Pc5Remove *remove, int budget_ms);
 void pc5_remove_end(Pc5Remove *remove);
 /* Starts deleting a folder (and everything in it, links not followed). */
 int pc5_tree_delete_begin(Pc5Remove *remove, const char *path);
+/* Another folder deleted after it (one on another drive). */
+int pc5_tree_delete_add(Pc5Remove *remove, const char *path);
 
 /* Finishes what a cut-short install or uninstall left: 1 while there is more
  * (call again), 0 when nothing is left. Also writes back the profile of a
