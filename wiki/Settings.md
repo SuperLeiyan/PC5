@@ -84,7 +84,7 @@ For sending games and managing PC5 from a PC or a phone on the same network as t
 | Row | Values | What it does |
 | --- | --- | --- |
 | FTP server | **Off**, On | Send games from a PC to PC5's INSTALL folder with an FTP app such as FileZilla. The row shows the address, for example `ftp://192.168.1.20:2125`. See [Sending games over FTP](Installing-games#sending-games-over-ftp). |
-| Web page | **Off**, On | PC5's page for a browser: send games, edit a game's launch options, download logs. The row shows the address, for example `http://192.168.1.20:8125`. See [Web page](Web-page). |
+| Web page | **Off**, On | PC5's page for a browser: send games, report a problem with a game, edit a game's launch options, download logs. The row shows the address, for example `http://192.168.1.20:8125`; **△** shows it as a QR code for your phone (from 2.0.4). See [Web page](Web-page). |
 | Username | **Any**, or one you type | The username the FTP server and the web page ask for. Press **✕** to type it with the on-screen keyboard; leave it empty for any username. |
 | Password | **None**, or one you type | The password they ask for. It is optional: with none, no password is asked for. Press **✕** to type it; leave it empty to remove it. |
 

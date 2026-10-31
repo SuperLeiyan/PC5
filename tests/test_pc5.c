@@ -6630,10 +6630,16 @@ static void test_report(const char *fonts)
         snprintf(want, sizeof(want),
                  "https://github.com/bornaradusin/PC5/issues/new?template=1-game.yml"
                  "&title=Grim%%20Dawn%%3A%%20stopped%%20with%%20an%%20error&game=Grim%%20Dawn&program=Grim%%20Dawn.exe"
-                 "&pc5=%s&firmware=12.40&saw=stopped%%20with%%20an%%20error%%0A%%60wine%%3A%%20Unhandled%%20page%%20fault"
-                 "%%20on%%20read%%20access%%20to%%200000000000000000%%20at%%20%%27address%%27%%60",
+                 "&pc5=%s&firmware=12.40&problem=Stops%%20with%%20an%%20error"
+                 "&saw=stopped%%20with%%20an%%20error%%0A%%60wine%%3A%%20Unhandled%%20page%%20fault"
+                 "%%20on%%20read%%20access%%20to%%200000000000000000%%20at%%20%%27address%%27%%60"
+                 "%%0ALog%%3A%%20issue-2026-10-25_09-19_grim-dawn.zip",
                  PC5_VERSION);
-        CHECK(!strcmp(url, want), "the game's issue form, its title, game, program, PC5, firmware and what PC5 saw filled in: %s", url);
+        CHECK(!strcmp(url, want), "the game's issue form, its title, game, program, PC5, firmware, what goes wrong and what "
+              "PC5 saw filled in: %s", url);
+        CHECK(!pc5_report_url_settings(&issue, "Grim Dawn", "Graphics API Auto; Controller Xbox", url, sizeof(url)) &&
+                  strstr(url, "%0ASettings%3A%20Graphics%20API%20Auto%3B%20Controller%20Xbox"),
+              "the game's settings with what PC5 saw: %s", url);
         CHECK(!strchr(url, ' ') && !strchr(url, '\n') && !strstr(url, "body="), "nothing unencoded, and no text of its own");
         Pc5LogIssue own = issue;
         pc5_copy(own.profile, sizeof(own.profile), "launcher");
@@ -7536,6 +7542,12 @@ static void test_install_folder_screens(const char *fonts)
         CHECK(set.web_page, "the web page kept on");
     }
     CHECK(!cuts_after(ui, 0, &canvas), "the web page's row: no text cut short");
+    /* Triangle: its address as a QR code, for a phone; any button back to the row. */
+    press(ui, PC5_KEY_TRIANGLE, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "web-qr"), "the web page's QR code: %s", pc5_ui_screen(ui));
+    save_shot(&canvas, "settings-network-web-qr");
+    press(ui, PC5_KEY_ACCEPT, &canvas);
+    CHECK(!strcmp(pc5_ui_screen(ui), "settings"), "back on Network: %s", pc5_ui_screen(ui));
     run("python3 -I -c \"import json, urllib.request\n"
         "s = json.load(urllib.request.urlopen('http://127.0.0.1:8125/api/status', timeout=10))\n"
         "assert s['install'] and s['address'] == '127.0.0.1:8125', s\n"

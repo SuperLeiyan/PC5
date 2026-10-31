@@ -130,6 +130,17 @@ def main():
         assert status == 200 and open(env).read() == "DXVK_HUD=fps\n", status
         status, body, _ = request(server.base, "api/games/%s/env" % game["id"], "PUT", b"x" * (64 * 1024 + 1))
         assert status == 413 and open(env).read() == "DXVK_HUD=fps\n", status
+        # Extra logging for a report: the game's pc5/winedebug.txt.
+        status, body, _ = request(server.base, "api/games/%s/debug" % game["id"], "PUT", b"err+all,+seh\n")
+        debug = os.path.join(root, "prefixes", game["id"], "pc5", "winedebug.txt")
+        assert status == 200 and open(debug).read() == "err+all,+seh\n", status
+        status, body, _ = request(server.base, "api/games")
+        listed = [g for g in json.loads(body) if g["id"] == game["id"]][0]
+        assert listed["debug"] == "err+all,+seh\n" and "Graphics API" in listed["settings"], listed
+        assert listed["report"] == "" or listed["report"].startswith("https://github.com/bornaradusin/PC5/issues/new?"), listed
+        status, body, _ = request(server.base, "api/games/%s/debug" % game["id"], "PUT", b"\n")
+        assert status == 200 and not os.path.exists(debug), status
+        checks += 3
         assert request(server.base, "api/games/nobody/launch", "PUT", b"-x")[0] == 404
         assert request(server.base, "api/games/..%2F..%2Fetc/launch")[0] == 404
         checks += 4

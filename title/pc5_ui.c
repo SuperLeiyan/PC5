@@ -52,7 +52,7 @@ typedef enum Screen {
     S_PROGRAMS, S_INSTALL, S_STOP, S_UNINSTALL_LIST, S_UNINSTALL_CONFIRM, S_REMOVING, S_MESSAGE, S_LAUNCH,
     S_UPDATE, S_CHECKING, S_GAME_MENU, S_GAME_READING, S_QUEUE_READ, S_QUEUE, S_BUTTONS, S_KEYS, S_REPORT,
     S_UPGRADE_ASK, S_UPGRADING, S_GAME_UPDATE_ASK, S_SAVES_ASK, S_SAVES_CONFIRM, S_PICTURE_SEARCH, S_PICTURE,
-    S_PICTURE_TYPING, S_COMPATIBILITY, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE, S_FILES, S_FILES_MENU,
+    S_PICTURE_TYPING, S_COMPATIBILITY, S_WEB_QR, S_GRAPHICS_API, S_REPORT_CHECK, S_REPORT_UPDATE, S_FILES, S_FILES_MENU,
     S_FILES_TYPING, S_FILES_CONFLICT, S_FILES_DELETE, S_FILES_WORKING, S_TILE_ART, S_INSTALL_ASK, S_SETTINGS_TYPING, S_INSTALL_WHERE
 } Screen;
 
@@ -62,7 +62,7 @@ static const char *const screen_names[] = { "start", "covers", "library", "setti
                                             "update", "checking", "game-menu", "game-reading", "queue-read", "queue",
                                             "buttons", "keys", "report", "upgrade-ask", "upgrading", "game-update-ask",
                                             "saves-ask", "saves-confirm", "picture-search", "picture", "picture-typing",
-                                            "compatibility", "graphics-api", "report-check", "report-update", "files",
+                                            "compatibility", "web-qr", "graphics-api", "report-check", "report-update", "files",
                                             "files-menu", "files-typing", "files-conflict", "files-delete",
                                             "files-working", "tile-art", "install-ask", "settings-typing", "install-where" };
 
@@ -166,7 +166,7 @@ typedef enum GameRow {
     GR_PLAY, GR_CONTROLLER, GR_BUTTONS, GR_GRAPHICS, GR_APPEARANCE, GR_MANAGE,
     GR_GRAPHICS_API, GR_FRAMEGEN, GR_RESOLUTION, GR_ASPECT, GR_MEMORY, GR_VIDEO_MEMORY, GR_CPU_SHARING,
     GR_COVER, GR_BACKGROUND, GR_HOME, GR_ICON,
-    GR_PROGRAM, GR_STEAM, GR_FILES, GR_UPDATE, GR_UNINSTALL
+    GR_PROGRAM, GR_STEAM, GR_FILES, GR_UPDATE, GR_REPORT, GR_UNINSTALL
 } GameRow;
 enum { GAME_ROWS = 7, GAME_PAGES = 4, GP_MAIN = 0, GP_GRAPHICS = 1, GP_APPEARANCE = 2, GP_MANAGE = 3 };
 static const char *const game_page_titles[GAME_PAGES] = { "", "Graphics", "Appearance", "Manage" };
@@ -202,6 +202,7 @@ static int game_rows(const Pc5Controls *controls, int kind, int page, GameRow ro
         if (kind & GAME_STEAM) rows[n++] = GR_STEAM;
         if (kind & GAME_PC5) rows[n++] = GR_FILES;
         if (kind & GAME_PC5) rows[n++] = GR_UPDATE;
+        rows[n++] = GR_REPORT;
         rows[n++] = GR_UNINSTALL;
         break;
     default:
@@ -376,6 +377,8 @@ struct Pc5Ui {
     Pc5Qr report_qr;
     Pc5Qr coffee_qr;                  /* About PC5: Buy Me a Coffee's page, made once */
     Pc5Qr compatibility_qr;           /* Game maintenance › Game compatibility list: the wiki's page, made once */
+    Pc5Qr web_qr;                     /* Network › Web page (Triangle): its address, made as it is shown */
+    char web_url[80];
     char launch_id[PC5_ID];
     char start[PC5_ID];               /* a home screen tile's game, until it is started */
     int removing_tiles;               /* the game being uninstalled had a tile, deleted with it */
@@ -2067,7 +2070,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_UNINSTALL:
         *label = "Uninstall game";
-        pc5_copy(about, about_size, "Deletes a game, or keeps its saves; deletes kept saves");
+        pc5_copy(about, about_size, "Deletes a game (its saves can be kept), or saves kept from before");
         break;
     case SR_COMPATIBILITY:
         *label = "Game compatibility list";
@@ -2085,7 +2088,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_OVERLAY:
         *label = "Overlay";
-        pc5_copy(about, about_size, "FPS, frame time, CPU, temperatures and memory");
+        pc5_copy(about, about_size, "FPS, frame time, CPU and GPU use, temperatures and memory");
         pc5_copy(value, value_size, "\xe2\x80\xba");
         break;
     case SR_SYSTEM:
@@ -2105,7 +2108,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
     case SR_KEEP_LOGS:
         *label = "Keep all logs";
         pc5_copy(about, about_size, set->keep_logs ? "Every session's log is kept for 7 days"
-                                                   : "Sessions that went wrong, and each game's newest, for 7 days");
+                                                   : "Problem sessions and each game's newest; turn on when testing a game");
         pc5_copy(value, value_size, set->keep_logs ? "On" : "Off");
         break;
     case SR_FTP: {
@@ -2127,7 +2130,7 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         pc5_web_status(&web);
         *label = "Web page";
         if (web.running)
-            snprintf(about, about_size, "http://%s in a browser on a phone or a PC, while PC5 is open", web.address);
+            snprintf(about, about_size, "http://%s in a browser on a phone or a PC; Triangle: a QR code for it", web.address);
         else if (set->web_page && ui->web_error[0])
             snprintf(about, about_size, "Not started: %.150s", ui->web_error);
         else
@@ -2736,11 +2739,59 @@ static void issue_message(Pc5Ui *ui)
     ui->message_report = 1;
 }
 
+/* Manage › Report a problem: the game's newest kept log, as the message after a crash offers
+ * it (Triangle: Report on GitHub), back to the game's menu. What PC5 saw is known when it is
+ * the log the library last found a problem in; otherwise only that it went wrong (issue-...)
+ * or not (log-...). */
+static void report_game_log(Pc5Ui *ui, const Pc5Game *game)
+{
+    char path[PC5_PATH], title[200], body[700];
+    Pc5LogIssue issue;
+
+    if (pc5_logs_newest(ui->root, game->id, path, sizeof(path))) {
+        snprintf(title, sizeof(title), "No log of %s yet", game->title);
+        message(ui, 0, title, "Play it once until the problem happens, then come back here: its log goes with the report.",
+                S_GAME_MENU);
+        return;
+    }
+    const char *name = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
+    if (!strcmp(ui->issue.profile, game->id) && !strcmp(ui->issue.file, path)) {
+        issue = ui->issue;
+    } else {
+        memset(&issue, 0, sizeof(issue));
+        issue.problem = !strncmp(name, "issue-", 6) ? PC5_LOG_CRASHED : PC5_LOG_FINE;
+        pc5_copy(issue.profile, sizeof(issue.profile), game->id);
+        pc5_copy(issue.file, sizeof(issue.file), path);
+        pc5_copy(issue.exe, sizeof(issue.exe), game->executable);
+    }
+    snprintf(title, sizeof(title), "Report a problem with %s", game->title);
+    snprintf(body, sizeof(body), "Its newest log, %.120s, is in %.120s/logs. Press Triangle for a QR code that opens "
+             "GitHub's form with the game, PC5 and the game's settings filled in; attach that zip there.", name, ui->root);
+    message(ui, 1, title, body, S_GAME_MENU);
+    ui->report = issue;
+    pc5_copy(ui->report_game, sizeof(ui->report_game), game->title);
+    ui->message_report = 1;
+}
+
 /* Report on GitHub for ui->report: the form's link, as a QR code. */
 static void report_open(Pc5Ui *ui)
 {
+    char settings[300] = "";
+    int index = pc5_library_find(&ui->library, ui->report.profile);
+
+    /* The game's own settings go with it, so a report says them without its log. */
+    if (index >= 0) {
+        const Pc5Game *game = &ui->library.games[index];
+        Pc5Controls k;
+        pc5_controls_load(ui->root, game->prefix, &k);
+        snprintf(settings, sizeof(settings),
+                 "%d-bit, draws with %s; Graphics API %s; Controller %s; Frame generation %s; Memory %s; CPU sharing %s%s",
+                 game->bits, pc5_api_name((Pc5Api)game->api), pc5_graphics_name(k.graphics, game->api),
+                 pc5_pad_mode_name(k.mode), k.frame_generation ? "on" : "off", k.memory_4gb ? "4 GB" : "Auto",
+                 k.cpu_sharing ? "on" : "off", k.steam_off ? "; Steam emulator off" : "");
+    }
     ui->report_qr.size = 0;
-    if (pc5_report_url(&ui->report, ui->report_game, ui->report_url, sizeof(ui->report_url)) ||
+    if (pc5_report_url_settings(&ui->report, ui->report_game, settings, ui->report_url, sizeof(ui->report_url)) ||
         pc5_qr_make(ui->report_url, &ui->report_qr))
         ui->report_url[0] = 0;
     say(ui, "PC5 report log=%s link=%zu qr=%d", pc5_report_file(&ui->report), strlen(ui->report_url), ui->report_qr.size);
@@ -3573,6 +3624,16 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             if (setting_change(ui, row, k & PC5_KEY_LEFT ? -1 : 1)) ui->dirty = 1;
         } else if (k & PC5_KEY_OPTIONS) {
             go(ui, S_LIBRARY);
+        } else if ((k & PC5_KEY_TRIANGLE) && row == SR_WEB) {
+            /* the page's address as a QR code, for a phone */
+            Pc5WebStatus web;
+            pc5_web_status(&web);
+            if (web.running) {
+                snprintf(ui->web_url, sizeof(ui->web_url), "http://%s", web.address);
+                if (pc5_qr_make(ui->web_url, &ui->web_qr)) ui->web_qr.size = 0;
+                say(ui, "PC5 web page qr=%d", ui->web_qr.size);
+                go(ui, S_WEB_QR);
+            }
         } else if (k & back) {
             if (ui->page == PAGE_MAINTENANCE) settings_open(ui, 0, ROW_MAINTENANCE);
             else if (ui->page == PAGE_NETWORK) settings_open(ui, 0, ROW_NETWORK);
@@ -3660,6 +3721,14 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
     case S_COMPATIBILITY:
         if (k & (back | accept)) settings_open(ui, PAGE_MAINTENANCE, ROW_COMPATIBILITY);
         break;
+    case S_WEB_QR: {
+        SettingRow rows[PAGE_ROWS];
+        int count = page_rows(&ui->settings, PAGE_NETWORK, 0, rows), at = 0;
+        for (int i = 0; i < count; i++)
+            if (rows[i] == SR_WEB) at = i;
+        if (k & (back | accept | PC5_KEY_TRIANGLE)) settings_open(ui, PAGE_NETWORK, at);
+        break;
+    }
     case S_SCAN:
         if (!ui->drawn) break;
         {
@@ -3984,6 +4053,8 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             } else if (row == GR_UPDATE) {
                 ui->update_for = 1;
                 go(ui, S_SCAN);
+            } else if (row == GR_REPORT) {
+                report_game_log(ui, &ui->library.games[ui->selected]);
             } else if (row == GR_UNINSTALL) {
                 ui->menu = index;
                 ui->button = 0;   /* Cancel first */
@@ -4876,7 +4947,10 @@ static void library_screen(Pc5Ui *ui, Pc5Canvas *c)
     if (!ui->library.count) {
         pc5_text(c, &ui->fonts, PC5_FACE_TITLE, 960, 470, C_TEXT, "No games yet", 0, 1);
         pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 540, C_DIM,
-                 "Press OPTIONS and choose Game maintenance \xe2\x80\xba Install games from USB.", 0, 1);
+                 "Put a game's folder in PC5/INSTALL on a USB drive, then press OPTIONS \xe2\x80\xba Game maintenance "
+                 "\xe2\x80\xba Install games from USB.", 0, 1);
+        pc5_text(c, &ui->fonts, PC5_FACE_BODY, 960, 590, C_DIM,
+                 "Or send it from a phone or PC: OPTIONS \xe2\x80\xba Network \xe2\x80\xba Web page or FTP server.", 0, 1);
         Hint list[] = { { G_OPTIONS, "Settings" } };
         hints(ui, c, MARGIN, 1012, list, 1);
         return;
@@ -4995,8 +5069,10 @@ static void settings_screen(Pc5Ui *ui, Pc5Canvas *c)
     SettingRow row = rows[ui->menu < count ? ui->menu : 0];
     int changes = row == SR_KEEP_LOGS || row == SR_FTP || row == SR_WEB || (row >= SR_FPS && row <= SR_TRIGGER_RESISTANCE) || row == SR_CHECK_ON_OPEN ||
                   row == SR_STARTUP_SOUND || row == SR_STARTUP_VOLUME || row >= SR_SOURCE;
-    Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" } };
-    hints(ui, c, (int)x + 64, 1012, list, 2);
+    Hint list[] = { { accept_glyph(ui), changes ? "Change" : "Choose" }, { back_glyph(ui), "Back" }, { G_TRIANGLE, "QR code" } };
+    Pc5WebStatus web = { 0 };
+    if (row == SR_WEB) pc5_web_status(&web);
+    hints(ui, c, (int)x + 64, 1012, list, row == SR_WEB && web.running ? 3 : 2);
 }
 
 /* A row of a game's menu: its label, what it does (text, which may be about) and its value. */
@@ -5040,12 +5116,12 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         int api = ui_game_api(ui);
         const char *about_api =
             ui->controls.graphics == PC5_GRAPHICS_AUTO
-                ? (api == PC5_API_D3D12  ? "VKD3D-Proton turns its Direct3D 12 into Vulkan"
-                   : api == PC5_API_DDRAW ? "Wine's own Direct3D draws it, with OpenGL"
-                                          : "DXVK turns its Direct3D into Vulkan")
-            : api == PC5_API_D3D12 ? "Wine's own Direct3D 12; try it if the game won't run"
-            : ui->controls.graphics == PC5_GRAPHICS_WINE_VULKAN ? "Wine's own Direct3D, drawing with Vulkan"
-                                                                 : "Wine's own Direct3D, with OpenGL; try it if the game won't run";
+                ? (api == PC5_API_D3D12  ? "Best for most games; change it only if the picture is wrong or it won't start"
+                   : api == PC5_API_DDRAW ? "Wine's own Direct3D draws it; change it only if the picture is wrong"
+                                          : "Best for most games; change it only if the picture is wrong or it won't start")
+            : api == PC5_API_D3D12 ? "Wine's own Direct3D 12; if it doesn't help, set it back to Auto"
+            : ui->controls.graphics == PC5_GRAPHICS_WINE_VULKAN ? "Wine's own Direct3D on Vulkan; if it doesn't help, set it back to Auto"
+                                                                 : "Wine's own Direct3D on OpenGL; if it doesn't help, set it back to Auto";
         *label = "Graphics API";
         *text = about_api;
         *value = pc5_graphics_name(ui->controls.graphics, api);
@@ -5053,7 +5129,7 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
     }
     case GR_FRAMEGEN:
         *label = "Frame generation";
-        *text = ui->controls.frame_generation ? "Held at 30 fps and shown at 60" : "The game's frames as it makes them";
+        *text = ui->controls.frame_generation ? "Held at 30 fps and shown at 60: smoother where it runs below 60" : "Off. On holds the game at 30 fps and shows 60";
         *value = ui->controls.frame_generation ? "30 \xe2\x86\x92 60 fps" : "Off";
         break;
     case GR_RESOLUTION:
@@ -5080,7 +5156,7 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
         break;
     case GR_CPU_SHARING:
         *label = "CPU sharing";
-        *text = ui->controls.cpu_sharing ? "Its threads take turns on the CPUs, as on a PC" : "Each thread keeps its CPU; On if the game stalls";
+        *text = ui->controls.cpu_sharing ? "Its threads take turns, as on a PC: steadier for some games" : "Fastest for most games; turn on if it freezes or stutters";
         *value = ui->controls.cpu_sharing ? "On" : "Off";
         break;
     case GR_COVER:
@@ -5126,6 +5202,11 @@ static void game_row_text(Pc5Ui *ui, const Pc5Game *game, int kind, GameRow row,
     case GR_UPDATE:
         *label = "Update";
         *text = "A newer copy from USB; its saves and settings stay";
+        *value = more;
+        break;
+    case GR_REPORT:
+        *label = "Report a problem";
+        *text = "A QR code for GitHub's form, filled in from the game's newest log";
         *value = more;
         break;
     case GR_UNINSTALL:
@@ -5796,6 +5877,26 @@ static void report_screen(Pc5Ui *ui, Pc5Canvas *c)
 }
 
 /* Game maintenance › Game compatibility list: the wiki's list as a QR code, and what it holds. */
+/* Network › Web page, Triangle: the page's address as a QR code for a phone. */
+static void web_qr_screen(Pc5Ui *ui, Pc5Canvas *c)
+{
+    float w = 1500, h = 700, x = (W - w) / 2, y = (H - h) / 2;
+    char line[200];
+    dim(c, 170);
+    panel(c, x, y, w, h);
+    pc5_text(c, &ui->fonts, PC5_FACE_HEAD, (int)x + 80, (int)y + 100, C_TEXT, "PC5's web page", 0, 0);
+    int box = 560, qx = (int)(x + w) - box - 70, qy = (int)y + 70;
+    qr_draw(c, &ui->web_qr, qx, qy, box);
+    int tx = (int)x + 80, tw = qx - tx - 60, at = (int)y + 190;
+    snprintf(line, sizeof(line), "Scan the code with your phone, or open %s in a browser on a PC on the same network.", ui->web_url);
+    at += 42 * pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, tx, at, tw, 4, 42, C_DIM, line, 0) + 24;
+    pc5_text_wrap(c, &ui->fonts, PC5_FACE_BODY, tx, at, tw, 6, 42, C_DIM,
+                  "From there: send a game's folder to install, report a problem with a game (its log and settings go "
+                  "with it), edit launch options and download logs. It works while PC5 is open.", 0);
+    Hint list[] = { { accept_glyph(ui), "Done" } };
+    hints(ui, c, (int)x + 80, (int)(y + h - 60), list, 1);
+}
+
 static void compatibility_screen(Pc5Ui *ui, Pc5Canvas *c)
 {
     float w = 1500, h = 700, x = (W - w) / 2, y = (H - h) / 2;
@@ -6226,6 +6327,7 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
     }
     case S_ABOUT: about_screen(ui, c); break;
     case S_COMPATIBILITY: compatibility_screen(ui, c); break;
+    case S_WEB_QR: web_qr_screen(ui, c); break;
     case S_SCAN: busy_dialog(ui, c, "Looking at the USB drives", NULL, 0); break;
     case S_SOURCES: sources_screen(ui, c); break;
     case S_READING:
@@ -6374,8 +6476,8 @@ void pc5_ui_draw(Pc5Ui *ui, Pc5Canvas *c)
         snprintf(title, sizeof(title), "Update to PC5 %s first?", ui->update.last.version);
         if (offer_update(ui)) update_how(ui, how, sizeof(how));
         else snprintf(how, sizeof(how), "You have %s", PC5_VERSION);
-        snprintf(body, sizeof(body), "This problem may already be fixed in it. Update with Update now (PC5's own updater) "
-                 "or from ProsperoStore, try the game again, and report it if it still happens. %s.", how);
+        snprintf(body, sizeof(body), "This may already be fixed in it. Update, try the game again, and report it if it "
+                 "still happens. %s.", how);
         message_dialog(ui, c);
         confirm_dialog(ui, c, title, body, "Update now", "Report anyway", 0, NULL);
         break;

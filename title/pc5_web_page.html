@@ -28,6 +28,11 @@ textarea { width: 100%; min-height: 70px; font: 13px/1.4 ui-monospace, Consolas,
 .game { border-top: 1px solid var(--line); padding: 10px 0; }
 .game:first-of-type { border-top: 0; }
 .game h3 { margin: 0; font-size: 16px; }
+.grow { flex: 1; }
+.links { gap: 14px; margin-top: 6px; }
+.tag { font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; margin-left: 6px; color: var(--dim); }
+.tag.bad { color: var(--bad); border-color: var(--bad); }
+#filter { margin: 4px 0 8px; width: 100%; }
 details { margin-top: 6px; }
 summary { cursor: pointer; color: var(--accent); }
 progress { width: 100%; height: 10px; }
@@ -38,7 +43,10 @@ li { margin: 3px 0; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
-<header><h1>PC5</h1><p id="status">Asking the console…</p></header>
+<header><h1>PC5</h1><p id="status">Asking the console…</p>
+<p class="row links"><a href="https://github.com/bornaradusin/PC5/wiki/Game-compatibility" target="_blank" rel="noopener">Game compatibility list</a>
+<a href="https://github.com/bornaradusin/PC5/wiki" target="_blank" rel="noopener">Help (wiki)</a>
+<a href="https://github.com/bornaradusin/PC5/issues/new?template=2-pc5.yml" target="_blank" rel="noopener">Report a problem with PC5</a></p></header>
 <main>
 <section>
   <h2>Send a game</h2>
@@ -55,12 +63,14 @@ li { margin: 3px 0; overflow-wrap: anywhere; }
   <progress id="progress" value="0" max="1" hidden></progress>
 </section>
 <section>
-  <h2>Games</h2>
+  <div class="row"><h2 class="grow">Games</h2><button id="refresh">Refresh</button></div>
+  <input id="filter" type="text" placeholder="Find a game" hidden>
   <div id="games" class="dim">Loading…</div>
 </section>
 <section>
   <h2>Logs</h2>
-  <p class="dim">Attach one to an issue on GitHub when a game has a problem.</p>
+  <p class="dim">Attach one to an issue on GitHub when a game has a problem: a game's <b>Report a problem</b> above
+  downloads its newest log and opens GitHub's form with the game, PC5 and its settings filled in.</p>
   <ul id="logs"><li class="dim">Loading…</li></ul>
 </section>
 </main>
@@ -124,20 +134,41 @@ async function games() {
     box.className = "";
     if (!list.length) box.append(el("p", { class: "dim", text: "No games yet." }));
     for (const g of list) {
-      const item = el("div", { class: "game" }, el("h3", { text: g.title }),
+      const title = el("h3", { text: g.title });
+      if (g.usb) title.append(el("span", { class: "tag", text: "USB drive" }));
+      if (!g.playable) title.append(el("span", { class: "tag bad", text: "can't start" }));
+      const item = el("div", { class: "game" }, title,
                       el("div", { class: "dim", text: g.detail + (g.folder ? " · " + g.folder : "") }));
+      item.dataset.name = (g.title + " " + g.folder).toLowerCase();
       if (!g.playable && g.problem) item.append(el("div", { class: "bad", text: g.problem }));
+      if (g.settings) item.append(el("div", { class: "dim", text: "Settings: " + g.settings }));
       const row = el("div", { class: "row" });
-      if (g.log) row.append(el("a", { class: "button", href: "api/games/" + encodeURIComponent(g.id) + "/log", text: "Newest log" }));
+      const logUrl = "api/games/" + encodeURIComponent(g.id) + "/log";
+      if (g.log) row.append(el("a", { class: "button", href: logUrl, text: "Newest log" }));
+      if (g.report) {
+        const report = el("a", { class: "button main", href: g.report, target: "_blank", rel: "noopener", text: "Report a problem" });
+        report.title = "Downloads the newest log and opens GitHub's form, filled in: attach the log there.";
+        report.onclick = () => { const a = el("a", { href: logUrl, download: "" }); document.body.append(a); a.click(); a.remove(); };
+        row.append(report);
+      }
       if (row.childNodes.length) item.append(row);
       if (g.editable) {
         item.append(editor(g, "launch", "Launch options (launch.txt)",
                            "The first line that isn't empty or a comment (# or ;) is added to the program's command line."));
       }
       item.append(editor(g, "env", "Environment variables (env.txt)", "One NAME=value a line, set before the game starts."));
+      item.append(editor(g, "debug", "Extra logging (winedebug.txt)",
+                         "Only when an issue asks for it, for example err+all,+seh. Empty it afterwards: it slows the game down."));
       box.append(item);
     }
+    $("filter").hidden = list.length < 6;
+    filter();
   } catch (e) { box.textContent = "The games didn't load: " + e.message; box.className = "bad"; }
+}
+
+function filter() {
+  const words = $("filter").value.trim().toLowerCase();
+  for (const item of document.querySelectorAll(".game")) item.hidden = !!words && !item.dataset.name.includes(words);
 }
 
 async function logs() {
@@ -146,9 +177,12 @@ async function logs() {
     const list = await json("api/logs");
     box.textContent = "";
     if (!list.length) box.append(el("li", { class: "dim", text: "No logs kept." }));
-    for (const l of list)
-      box.append(el("li", {}, el("a", { href: "logs/" + encodeURIComponent(l.name), text: l.name }),
-                    " ", el("span", { class: "dim", text: size(l.size) })));
+    for (const l of list) {
+      const item = el("li", {}, el("a", { href: "logs/" + encodeURIComponent(l.name), text: l.name }),
+                      " ", el("span", { class: "dim", text: size(l.size) + (l.time ? " · " + new Date(l.time * 1000).toLocaleString() : "") }));
+      if (l.name.startsWith("issue-")) item.append(el("span", { class: "tag bad", text: "had a problem" }));
+      box.append(item);
+    }
   } catch (e) { box.textContent = "The logs didn't load: " + e.message; }
 }
 
@@ -200,6 +234,8 @@ $("files").onchange = e => {
   } else send(e.target.files, named);
   e.target.value = "";
 };
+$("filter").oninput = filter;
+$("refresh").onclick = () => { status(); games(); logs(); };
 status();
 games();
 logs();

@@ -1,0 +1,519 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 14:00:00 +0000
+Subject: [PATCH 77/77] PC5: the shader compiler's listing in Microsoft's syntax,
+ room after a large heap block, and parked files reopened under another number
+ (Wine patches 0990, 0991, 0994)
+
+0990: the listing fxc.exe's in-process stand-in (0988) writes is in
+Microsoft's assembly syntax, so a game that assembles it again with
+D3DXAssembleShader gets its shaders instead of an error for each.
+
+0991: a large heap block gets a page of room before its 64 KiB rounding,
+so a game that writes one element past the end of one doesn't fault.
+
+0994: a parked folder or read-only file opened again by name is taken
+when its file system numbers it anew, and a failure to open one again is
+logged instead of failing without a word.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   3 +
+ docs/WINE_PS5_BUILD.md                        |   3 +
+ ...iler-s-listing-in-microsoft-s-syntax.patch | 315 ++++++++++++++++++
+ ...-leave-room-after-a-large-heap-block.patch |  41 +++
+ ...-again-under-another-number-is-taken.patch |  84 +++++
+ 5 files changed, 446 insertions(+)
+ create mode 100644 wine/patches/0990-kernelbase-ps5-the-shader-compiler-s-listing-in-microsoft-s-syntax.patch
+ create mode 100644 wine/patches/0991-ntdll-leave-room-after-a-large-heap-block.patch
+ create mode 100644 wine/patches/0994-server-ps5-a-parked-file-or-folder-opened-again-under-another-number-is-taken.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 464baca..08165a4 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -612,7 +612,10 @@ wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patc
+ wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
+ wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch
+ wine/patches/0989-ntdll-ps5-keep-the-process-memory-counts-for-a-second.patch
++wine/patches/0990-kernelbase-ps5-the-shader-compiler-s-listing-in-microsoft-s-syntax.patch
++wine/patches/0991-ntdll-leave-room-after-a-large-heap-block.patch
+ wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
++wine/patches/0994-server-ps5-a-parked-file-or-folder-opened-again-under-another-number-is-taken.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index bc5bafb..2d429ea 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -165,7 +165,10 @@ before evaluating a candidate built from that cache.
+ | 0987 | `nsi`: on PS5, the NDIS tables 0934 answers also list a wired adapter with its cable out ("Ethernet", index 2, address 02-50-43-35-00-01, down, no IP address), so `GetAdaptersInfo`, which leaves the loopback out, lists an adapter instead of failing with `ERROR_NO_DATA`, which games that don't check went on from and crashed |
+ | 0988 | `kernelbase`: on PS5, a start of `fxc.exe` (the shader compiler Far Cry runs about a hundred times at start) that fails with `STATUS_NOT_SUPPORTED` is done in the calling process with `d3dcompiler_47`: its options, the listing (`/Fc`, with the constant table's parameters and registers as fxc writes them) and the code (`/Fo`); the caller gets an ended process (signalled events) whose exit code `GetExitCodeProcess` returns |
+ | 0989 | `ntdll`: on PS5, the process memory counts of 0898 (a walk of every view's pages with `virtual_mutex` held) are kept for a second, so a game that asks many times a second (Unreal Engine 5's memory stats) no longer holds the mutex all the time and runs on one core |
++| 0990 | `kernelbase`: on PS5, the listing 0988 writes for `fxc.exe` (`/Fc`) is in Microsoft's assembly syntax, not vkd3d-shader's: `vs_2_x`/`ps_2_x`, `dcl_blendweight`, `dcl_blendindices`, `dcl_colorN`, `def c0, …`, `a0.x`, unmasked `oFog`/`oPts`, `rN_abs`, no stray predicated `nop`, and pixel shaders before `ps_2_x` without swizzles that only differ in unread components, so a game that assembles it again with `D3DXAssembleShader` gets its shaders |
++| 0991 | `ntdll`: a large heap block gets a page more than it needs before its 64 KiB rounding, so a game that writes just past the end of one (one element more than it allocated) writes into its own memory instead of faulting when the block ended exactly at its memory's end |
+ | 0993 | `server` (Leo Lobato's prospero-win): on PS5, read-only regular files past a budget of 48 cached and about 48 live descriptors are parked (closed, the least recently used first) and opened again by name when needed, with their position, as 0871 does for directories: a title can open only about 250 files however high `RLIMIT_NOFILE` is, and games that keep hundreds of archives open failed with "Too many open files". `WINE_PS5_PARK_FILES`, `WINE_PS5_CACHED_FILES` |
++| 0994 | `server`: on PS5, a parked folder (0871) or read-only file (0993) opened again by its name whose device or inode number changed (a file system that numbers files anew at each open) is taken instead of failing with `STATUS_FILE_DELETED`; that and every failure to open one again is logged (`wine-ps5: parked …`, eight times at most each) |
+ 
+ ## Allocator
+ 
+diff --git a/wine/patches/0990-kernelbase-ps5-the-shader-compiler-s-listing-in-microsoft-s-syntax.patch b/wine/patches/0990-kernelbase-ps5-the-shader-compiler-s-listing-in-microsoft-s-syntax.patch
+new file mode 100644
+index 0000000..1b5bd7e
+--- /dev/null
++++ b/wine/patches/0990-kernelbase-ps5-the-shader-compiler-s-listing-in-microsoft-s-syntax.patch
+@@ -0,0 +1,315 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sat, 31 Oct 2026 14:00:00 +0000
++Subject: [PATCH] kernelbase: PS5: the shader compiler's listing in Microsoft's syntax.
++
++Patch 0988 does fxc.exe's work in the calling process and writes its
++listing (/Fc) with d3dcompiler's disassembler, vkd3d-shader, whose
++syntax is its own. A game that assembles the listing again with d3dx9's
++D3DXAssembleShader (Far Cry does, with every shader it builds) got
++errors for all but the simplest ones, and drew without them: "unexpected
++token '='" (def c0 = ...), "dcl_weight", "dcl_specular0", "invalid
++register 'a'", "only a0.x is allowed as a relative address register",
++"instruction predication is not supported" (vs_1_x's relative address
++reads back as a predicated nop), "scalar registers cannot be masked"
++(oFog.x) and "shader version expected" (vs_2_1 for vs_2_a).
++
++Each line of the listing is now written in Microsoft's syntax: vs_2_x and
++ps_2_x, dcl_blendweight, dcl_blendindices and dcl_colorN, def c0, a, b,
++c, d, a0.x, oFog and oPts unmasked, r0_abs, the stray nop left out, and
++in a pixel shader before ps_2_x a swizzle that only differs from none in
++components the instruction doesn't read left out.
++---
++diff --git a/dlls/kernelbase/tool.c b/dlls/kernelbase/tool.c
++index d86711f..bda49b2 100644
++--- a/dlls/kernelbase/tool.c
+++++ b/dlls/kernelbase/tool.c
++@@ -29,6 +29,7 @@
++ 
++ #include <stdarg.h>
++ #include <stdio.h>
+++#include <stdlib.h>
++ #include <string.h>
++ 
++ #define COBJMACROS
++@@ -299,6 +300,249 @@ static void list_constants( struct text *text, const BYTE *ctab, DWORD size )
++     text_add( text, "//\n" );
++ }
++ 
+++/* The listing in Microsoft's assembly syntax: a game may assemble it again with d3dx9's
+++ * D3DXAssembleShader (Far Cry does, with every shader it builds), which takes nothing else, and
+++ * Wine's disassembler (vkd3d-shader) writes a syntax of its own. Line by line:
+++ *   vs_2_1, ps_2_1 (what vs_2_a, ps_2_a and ps_2_b compile to)  -> vs_2_x, ps_2_x
+++ *   dcl_weight, dcl_blend, dcl_specularN                        -> dcl_blendweight,
+++ *                                                                  dcl_blendindices, dcl_colorN+1
+++ *   def c0 = 1, 2, 3, 4 (defi, defb too)                       -> def c0, 1, 2, 3, 4
+++ *   a.x, c[a.xyzw + 3] (the address register)                  -> a0.x, c[a0.x + 3]
+++ *   oFog.x, oPts.x (scalar registers, never masked)            -> oFog, oPts
+++ *   |r0.x|, -|r0.x|                                            -> r0_abs.x, -r0_abs.x
+++ *   (r5.x) nop                                                  -> left out
+++ * The last is no instruction: vkd3d writes vs_1_x's relative addressing with the address token
+++ * of vs_2_0 and later, which reads back as a predicated nop; the instruction before it has its
+++ * address already. And a pixel shader before ps_2_x takes no swizzle but a replicate one
+++ * (.x, .y, .z, .w): one that only differs from none in components the instruction doesn't read
+++ * (r0.xyzx for dp3 or a write to .xyz, t0.xyxx for a 2D texld) is left out. */
+++struct asm_state
+++{
+++    char type;            /* 'v' or 'p' once the version is read */
+++    int major, minor;
+++    char samplers[16];    /* a texld's components: '2' (2D), '3' (cube or volume) */
+++};
+++
+++static BOOL asm_name_char( char c )
+++{
+++    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+++}
+++
+++/* The components (bit 0 x .. bit 3 w) a writemask names; all four without one. */
+++static unsigned int asm_mask( const char *operand, size_t length )
+++{
+++    const char *dot = NULL;
+++    unsigned int mask = 0;
+++    size_t i;
+++
+++    for (i = 0; i < length; i++) if (operand[i] == '.') dot = operand + i;
+++    if (!dot) return 0xf;
+++    for (dot++; dot < operand + length; dot++)
+++    {
+++        if (*dot == 'x') mask |= 1;
+++        else if (*dot == 'y') mask |= 2;
+++        else if (*dot == 'z') mask |= 4;
+++        else if (*dot == 'w') mask |= 8;
+++        else return 0xf;
+++    }
+++    return mask ? mask : 0xf;
+++}
+++
+++/* A pixel shader's source swizzle that only differs from none outside used: its length, the
+++ * swizzle (".xyzx") left out; else the operand's own length. */
+++static size_t asm_plain_swizzle( const char *operand, size_t length, unsigned int used )
+++{
+++    static const char components[] = "xyzw";
+++    unsigned int i;
+++
+++    if (length < 5 || operand[length - 5] != '.') return length;
+++    for (i = 0; i < 4; i++)
+++    {
+++        const char *at = strchr( components, operand[length - 4 + i] );
+++
+++        if (!at || !*at) return length;
+++        if ((used & (1u << i)) && at - components != i) return length;
+++    }
+++    return length - 5;
+++}
+++
+++/* The components each source of a pixel shader's instruction reads, by its opcode, its
+++ * writemask and (a texld) its sampler. */
+++static unsigned int asm_used( const struct asm_state *state, const char *opcode, size_t opcode_length,
+++                              unsigned int index, unsigned int writemask, const char *sampler )
+++{
+++    char name[16];
+++
+++    if (opcode_length >= sizeof(name)) return 0xf;
+++    memcpy( name, opcode, opcode_length );
+++    name[opcode_length] = 0;
+++    if (!strcmp( name, "dp3" ) || !strcmp( name, "nrm" ) || !strcmp( name, "crs" )) return 7;
+++    if (!strcmp( name, "dp4" )) return 0xf;
+++    if (!strcmp( name, "dp2add" )) return index < 2 ? 3 : 0xf;
+++    if (!strncmp( name, "texld", 5 ))
+++    {
+++        unsigned int unit = sampler && sampler[0] == 's' ? atoi( sampler + 1 ) : 16;
+++        unsigned int used = unit < 16 && state->samplers[unit] == '2' ? 3 : 7;
+++
+++        if (index) return 0xf;
+++        return name[5] ? used | 8 : used;   /* texldp, texldb read w */
+++    }
+++    return writemask;
+++}
+++
+++/* Rewrites a line of vkd3d's listing in Microsoft's syntax into out: its length, or -1 when the
+++ * line is left out. */
+++static int asm_line( struct asm_state *state, const char *in, size_t length, char *out, size_t size )
+++{
+++    char line[512], abs_line[512], *at;
+++    const char *rest;
+++    size_t i, n;
+++    int major, minor;
+++
+++    if (length >= sizeof(line) || size < sizeof(line)) return -2;
+++    memcpy( line, in, length );
+++    line[length] = 0;
+++
+++    /* the version */
+++    if ((line[0] == 'v' || line[0] == 'p') && line[1] == 's' && line[2] == '_' &&
+++        sscanf( line + 3, "%d_%d", &major, &minor ) == 2)
+++    {
+++        state->type = line[0];
+++        state->major = major;
+++        state->minor = minor;
+++        if (major == 2 && minor == 1) return _snprintf( out, size, "%cs_2_x", line[0] );
+++        return _snprintf( out, size, "%s", line );
+++    }
+++    /* vkd3d's reading of vs_1_x's relative address token */
+++    if (line[0] == '(' && (at = strstr( line, ") " )) && !strcmp( at + 2, "nop" )) return -1;
+++
+++    /* declarations */
+++    if (!strncmp( line, "dcl_", 4 ))
+++    {
+++        size_t name = strcspn( line, " " );
+++        unsigned int index;
+++
+++        if (state->type == 'p' && line[name] == ' ' && line[name + 1] == 's')
+++        {
+++            unsigned int unit = atoi( line + name + 2 );
+++            if (unit < 16) state->samplers[unit] = !strncmp( line, "dcl_2d", name ) ? '2' : '3';
+++        }
+++        if (name == 10 && !strncmp( line, "dcl_weight", 10 ))
+++            return _snprintf( out, size, "dcl_blendweight%s", line + name );
+++        if (name == 9 && !strncmp( line, "dcl_blend", 9 ))
+++            return _snprintf( out, size, "dcl_blendindices%s", line + name );
+++        if (!strncmp( line, "dcl_specular", 12 ) && sscanf( line + 12, "%u", &index ) == 1)
+++            return _snprintf( out, size, "dcl_color%u%s", index + 1, line + name );
+++        return _snprintf( out, size, "%s", line );
+++    }
+++    if (!strncmp( line, "def", 3 ) && (line[3] == ' ' || ((line[3] == 'i' || line[3] == 'b') && line[4] == ' ')))
+++    {
+++        if ((at = strstr( line, " = " )))
+++        {
+++            *at = 0;
+++            return _snprintf( out, size, "%s, %s", line, at + 3 );
+++        }
+++        return _snprintf( out, size, "%s", line );
+++    }
+++
+++    /* |operand| -> operand_abs */
+++    for (i = 0, n = 0; line[i] && n + 8 < sizeof(abs_line); i++)
+++    {
+++        char *close, *dot, *bracket;
+++
+++        if (line[i] != '|' || !(close = strchr( line + i + 1, '|' )))
+++        {
+++            abs_line[n++] = line[i];
+++            continue;
+++        }
+++        *close = 0;
+++        bracket = strrchr( line + i + 1, ']' );
+++        dot = strrchr( bracket ? bracket : line + i + 1, '.' );
+++        if (dot) *dot = 0;
+++        n += _snprintf( abs_line + n, sizeof(abs_line) - n, "%s_abs", line + i + 1 );
+++        if (dot)
+++        {
+++            *dot = '.';
+++            n += _snprintf( abs_line + n, sizeof(abs_line) - n, "%s", dot );
+++        }
+++        i = close - line;
+++    }
+++    abs_line[n] = 0;
+++
+++    /* the address register, and the scalar registers' masks */
+++    for (i = 0, n = 0; abs_line[i] && n + 8 < size; i++)
+++    {
+++        BOOL start = !i || !(asm_name_char( abs_line[i - 1] ) || abs_line[i - 1] == '.');
+++
+++        if (start && abs_line[i] == 'a' && !asm_name_char( abs_line[i + 1] ))
+++        {
+++            out[n++] = 'a';
+++            out[n++] = '0';
+++            if (i && abs_line[i - 1] == '[' && !strncmp( abs_line + i + 1, ".xyzw", 5 ))
+++            {
+++                memcpy( out + n, ".x", 2 );
+++                n += 2;
+++                i += 5;
+++            }
+++            continue;
+++        }
+++        if (start && (!strncmp( abs_line + i, "oFog.", 5 ) || !strncmp( abs_line + i, "oPts.", 5 )))
+++        {
+++            memcpy( out + n, abs_line + i, 4 );
+++            n += 4;
+++            for (i += 5; abs_line[i] >= 'w' && abs_line[i] <= 'z'; i++);
+++            i--;
+++            continue;
+++        }
+++        out[n++] = abs_line[i];
+++    }
+++    out[n] = 0;
+++
+++    /* a pixel shader before ps_2_x: the swizzles it can't take */
+++    if (state->type == 'p' && (state->major < 2 || (state->major == 2 && !state->minor)))
+++    {
+++        const char *opcode = out, *operands = strchr( out, ' ' ), *sampler = NULL;
+++        size_t opcode_length;
+++        unsigned int writemask = 0xf, index = 0;
+++        char *copy;
+++
+++        if (!operands || out[0] == '(') return n;
+++        opcode_length = strcspn( opcode, " _" );
+++        if (!(copy = HeapAlloc( GetProcessHeap(), 0, n + 1 ))) return n;
+++        memcpy( copy, out, n + 1 );
+++        if (!strncmp( copy, "texld", 5 ) && (sampler = strrchr( copy, ',' ))) sampler += strspn( sampler, ", " );
+++        rest = copy + (operands - out) + 1;
+++        n = operands - out + 1;
+++        for (i = 0; *rest; i++)
+++        {
+++            size_t operand = strcspn( rest, "," ), keep = operand;
+++
+++            if (!i)
+++                writemask = asm_mask( rest, operand );
+++            else
+++            {
+++                keep = asm_plain_swizzle( rest, operand,
+++                                          asm_used( state, opcode, opcode_length, index, writemask, sampler ) );
+++                index++;
+++            }
+++            if (n + keep + 3 >= size) break;
+++            memcpy( out + n, rest, keep );
+++            n += keep;
+++            rest += operand;
+++            if (*rest == ',')
+++            {
+++                rest++;
+++                rest += strspn( rest, " " );
+++                memcpy( out + n, ", ", 2 );
+++                n += 2;
+++            }
+++        }
+++        out[n] = 0;
+++        HeapFree( GetProcessHeap(), 0, copy );
+++    }
+++    return n;
+++}
+++
++ typedef HRESULT (WINAPI *compile_func)( const void *data, SIZE_T size, const char *filename,
++                                         const D3D_SHADER_MACRO *defines, ID3DInclude *include,
++                                         const char *entrypoint, const char *target, UINT flags,
++@@ -418,7 +662,9 @@ static DWORD run_fxc( const WCHAR *cmd_line, const WCHAR *cur_dir )
++         DWORD code_size = ID3D10Blob_GetBufferSize( code ), ctab_size = 0, slots = 0;
++         const BYTE *ctab = find_ctab( bytecode, code_size, &ctab_size );
++         struct text text = { 0 };
+++        struct asm_state state = { 0 };
++         const char *line, *end;
+++        char converted[512];
++         BOOL ok;
++ 
++         if (FAILED(hr = disassemble( bytecode, code_size, 0, NULL, &assembly )))
++@@ -442,9 +688,14 @@ static DWORD run_fxc( const WCHAR *cmd_line, const WCHAR *cur_dir )
++             while (length && (start[length - 1] == '\r' || start[length - 1] == ' ')) length--;
++             if (length)
++             {
++-                text_add( &text, "    %.*s\n", length, start );
++-                if (strncmp( start, "dcl", 3 ) && strncmp( start, "def", 3 ) && !strchr( "vp", start[0] ) &&
++-                    strncmp( start, "//", 2 ))
+++                int done = asm_line( &state, start, length, converted, sizeof(converted) );
+++
+++                if (done == -2)
+++                    text_add( &text, "    %.*s\n", length, start );
+++                else if (done >= 0)
+++                    text_add( &text, "    %s\n", converted );
+++                if (done != -1 && strncmp( start, "dcl", 3 ) && strncmp( start, "def", 3 ) &&
+++                    !strchr( "vp", start[0] ) && strncmp( start, "//", 2 ))
++                     slots++;
++             }
++             line = next + 1;
++-- 
++2.43.0
++
+diff --git a/wine/patches/0991-ntdll-leave-room-after-a-large-heap-block.patch b/wine/patches/0991-ntdll-leave-room-after-a-large-heap-block.patch
+new file mode 100644
+index 0000000..db5ebc5
+--- /dev/null
++++ b/wine/patches/0991-ntdll-leave-room-after-a-large-heap-block.patch
+@@ -0,0 +1,41 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sat, 31 Oct 2026 14:00:00 +0000
++Subject: [PATCH] ntdll: Leave room after a large heap block.
++
++A large block (from about 508 KiB on 32-bit) gets memory of its own,
++rounded to 64 KiB. A block of a multiple of 64 KiB less the arena's
++header ends exactly at the end of that memory, so a game that writes
++one element past the end of what it allocated faults there (Yu-Gi-Oh!
++Forbidden Memories Recompiled filling an array one struct too far, on a
++704 KiB block), where it runs on Windows. Each large block now gets a
++page more than it needs before the rounding, so such a write lands in
++memory of its own; the memory a block takes grows only when it is that
++close to a multiple of 64 KiB.
++---
++diff --git a/dlls/ntdll/heap.c b/dlls/ntdll/heap.c
++index feee54e..8e58518 100644
++--- a/dlls/ntdll/heap.c
+++++ b/dlls/ntdll/heap.c
++@@ -1001,11 +1001,17 @@ static void *allocate_region( struct heap *heap, ULONG flags, SIZE_T *region_siz
++ }
++ 
++ 
+++#define LARGE_BLOCK_SLACK 4096
+++
++ static NTSTATUS heap_allocate_large( struct heap *heap, ULONG flags, SIZE_T block_size,
++                                      SIZE_T size, void **ret )
++ {
++     ARENA_LARGE *arena;
++-    SIZE_T total_size = ROUND_SIZE( sizeof(*arena) + size, REGION_ALIGN - 1 );
+++    /* A page more than the block needs, committed: a game that writes a little past the end of
+++     * a large block (one element more than it allocated) faults when the block ends exactly at
+++     * the end of its memory, as a block of a multiple of 64 KiB less the arena's header does;
+++     * the same game runs on Windows. */
+++    SIZE_T total_size = ROUND_SIZE( sizeof(*arena) + size + LARGE_BLOCK_SLACK, REGION_ALIGN - 1 );
++     struct block *block;
++ 
++     if (total_size < size) return STATUS_NO_MEMORY;  /* overflow */
++-- 
++2.43.0
++
+diff --git a/wine/patches/0994-server-ps5-a-parked-file-or-folder-opened-again-under-another-number-is-taken.patch b/wine/patches/0994-server-ps5-a-parked-file-or-folder-opened-again-under-another-number-is-taken.patch
+new file mode 100644
+index 0000000..a3198ef
+--- /dev/null
++++ b/wine/patches/0994-server-ps5-a-parked-file-or-folder-opened-again-under-another-number-is-taken.patch
+@@ -0,0 +1,84 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sat, 31 Oct 2026 14:00:00 +0000
++Subject: [PATCH] server: PS5: a parked file or folder opened again under
++ another number is taken, and a failure is logged.
++
++Patches 0871 and 0993 close a folder's or a read-only file's descriptor
++when too many are open (parked) and open it again by its name when it is
++needed, checking that it is the same file by its device and inode. A
++file system that numbers a file anew each time it is opened answers with
++other numbers for the same file, and every use of a parked one then
++failed (STATUS_FILE_DELETED) without a word. A regular file (a folder)
++by the same name is now taken, as nothing replaces a file a game only
++reads under it; that, and an open or a check that fails, is logged
++("wine-ps5: parked ...", eight times at most each).
++---
++diff --git a/server/fd.c b/server/fd.c
++index 450b6b9..9ee6965 100644
++--- a/server/fd.c
+++++ b/server/fd.c
++@@ -2204,17 +2204,29 @@ static int ps5_reopen_file( struct fd *fd )
++         unix_fd = open( fd->unix_name, fd->ps5_park_flags );
++     if (unix_fd == -1)
++     {
+++        static int told;
+++        if (told++ < 8) fprintf( stderr, "wine-ps5: parked %s can't be opened again: %s\n", fd->unix_name, strerror( errno ) );
++         file_set_error();
++         return -1;
++     }
++-    if (fstat( unix_fd, &st ) == -1 || !S_ISREG( st.st_mode ) ||
++-        st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino ||
++-        lseek( unix_fd, fd->ps5_offset, SEEK_SET ) == -1)
+++    if (fstat( unix_fd, &st ) == -1 || !S_ISREG( st.st_mode ) || lseek( unix_fd, fd->ps5_offset, SEEK_SET ) == -1)
++     {
+++        static int told;
+++        if (told++ < 8) fprintf( stderr, "wine-ps5: parked %s is no longer that file\n", fd->unix_name );
++         close( unix_fd );
++         set_error( STATUS_FILE_DELETED );
++         return -1;
++     }
+++    /* A file system that numbers a file anew each time it is opened (a USB drive's) answers
+++     * with another device or inode for the same file: a regular file by the same name is
+++     * taken, as a file the game only reads is not replaced under it. */
+++    if (st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino)
+++    {
+++        static int told;
+++        if (told++ < 8) fprintf( stderr, "wine-ps5: parked %s opened again with another number (dev %llx ino %llx, was %llx %llx)\n",
+++                                 fd->unix_name, (unsigned long long)st.st_dev, (unsigned long long)st.st_ino,
+++                                 (unsigned long long)fd->inode->device->dev, (unsigned long long)fd->inode->ino );
+++    }
++     fd->unix_fd = fd->closed->unix_fd = unix_fd;
++     fd->ps5_parked = 0;
++     if (!fd->ps5_pinned) ps5_add_live_file( fd );
++@@ -2233,16 +2245,25 @@ static int ps5_reopen_directory( struct fd *fd )
++ #endif
++     if ((unix_fd = open( fd->unix_name, fd->ps5_park_flags )) == -1)
++     {
+++        static int told;
+++        if (told++ < 8) fprintf( stderr, "wine-ps5: parked folder %s can't be opened again: %s\n", fd->unix_name, strerror( errno ) );
++         file_set_error();
++         return -1;
++     }
++-    if (fstat( unix_fd, &st ) == -1 || !S_ISDIR( st.st_mode ) ||
++-        st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino)
+++    if (fstat( unix_fd, &st ) == -1 || !S_ISDIR( st.st_mode ))
++     {
+++        static int told;
+++        if (told++ < 8) fprintf( stderr, "wine-ps5: parked folder %s is no longer a folder\n", fd->unix_name );
++         close( unix_fd );
++         set_error( STATUS_FILE_DELETED );
++         return -1;
++     }
+++    /* renumbered by its file system, as a parked file can be (ps5_reopen_file) */
+++    if (st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino)
+++    {
+++        static int told;
+++        if (told++ < 8) fprintf( stderr, "wine-ps5: parked folder %s opened again with another number\n", fd->unix_name );
+++    }
++     fd->unix_fd = fd->closed->unix_fd = unix_fd;
++     fd->ps5_parked = 0;
++     return 0;
++-- 
++2.43.0
++
+-- 
+2.43.0
+

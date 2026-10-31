@@ -475,6 +475,8 @@ int pc5_game_set_program(const char *root, const char *id, const Pc5Folder *fold
 
 /* What Wine starts for a PC5 game: its program, or the one its batch file starts, with the
  * batch file's arguments and its working folder (a Windows path, "" for the program's own). */
+static int resolve_ci(const char *base, const char *relative, char *out, size_t size);
+
 static int start_program(const char *root, const char *id, const Pc5Info *info, Pc5Info *program, char *arguments,
                          size_t arguments_size, char *work, size_t work_size, char *error, size_t size)
 {
@@ -627,6 +629,24 @@ int pc5_profile_refresh(const char *root, const char *id, char *error, size_t si
         Pc5PeInfo pe;
         if (!pc5_pe_read(path, &pe) && pc5_pe_unreal_d3d12(path, pe.imports & PC5_IMPORT_DRAWING)) {
             info.api = program.api = PC5_API_D3D12;
+            if (!pc5_info_text(&info, text, sizeof(text)) &&
+                !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/info.txt", root, id))
+                pc5_write_file(path, text, strlen(text));
+        }
+    }
+    /* A DirectDraw game that carries its own ddraw.dll drawing with Direct3D 9 (a wrapper such
+     * as Classic REbirth's or DDrawCompat's): Direct3D 9, so its Graphics API changes what
+     * draws it (DXVK, or Wine's own Direct3D 9); kept in its notes. */
+    if (info.api == PC5_API_DDRAW &&
+        !pc5_format(path, sizeof(path), "%s/prefixes/%s/drive_c/Games/%s/%s", root, id, info.folder, program.exe)) {
+        char dir[PC5_PATH], dll[PC5_PATH];
+        Pc5PeInfo pe;
+        char *slash = strrchr(path, '/');
+        pc5_copy(dir, sizeof(dir), path);
+        if (slash) dir[slash - path] = 0;
+        if (slash && !resolve_ci(dir, "ddraw.dll", dll, sizeof(dll)) && pc5_is_file(dll) && !pc5_pe_read(dll, &pe) && pe.dll &&
+            (pe.imports & PC5_IMPORT_D3D9)) {
+            info.api = program.api = PC5_API_D3D9;
             if (!pc5_info_text(&info, text, sizeof(text)) &&
                 !pc5_format(path, sizeof(path), "%s/prefixes/%s/pc5/info.txt", root, id))
                 pc5_write_file(path, text, strlen(text));

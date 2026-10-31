@@ -5,6 +5,8 @@
 
 #include "pc5_library.h"
 #include "pc5_logs.h"
+#include "pc5_controls.h"
+#include "pc5_report.h"
 #include "pc5_web_page.h"
 
 #include <dirent.h>
@@ -440,6 +442,39 @@ static int env_path(const Pc5Game *game, char *out, size_t size)
     return pc5_format(out, size, "%s/prefixes/%s/pc5/env.txt", web.root, game->prefix);
 }
 
+/* A game's winedebug.txt: what Wine logs for it (WINEDEBUG), as a report sometimes asks. */
+static int debug_path(const Pc5Game *game, char *out, size_t size)
+{
+    if (!game->prefix[0]) return -1;
+    return pc5_format(out, size, "%s/prefixes/%s/pc5/winedebug.txt", web.root, game->prefix);
+}
+
+/* A game's settings in a line, as Report a problem gives them (pc5_ui.c's report_open). */
+static void game_settings(const Pc5Game *g, char *out, size_t size)
+{
+    Pc5Controls k;
+    pc5_controls_load(web.root, g->prefix, &k);
+    snprintf(out, size, "%d-bit, draws with %s; Graphics API %s; Controller %s; Frame generation %s; Memory %s; CPU sharing %s%s",
+             g->bits, pc5_api_name((Pc5Api)g->api), pc5_graphics_name(k.graphics, g->api), pc5_pad_mode_name(k.mode),
+             k.frame_generation ? "on" : "off", k.memory_4gb ? "4 GB" : "Auto", k.cpu_sharing ? "on" : "off",
+             k.steam_off ? "; Steam emulator off" : "");
+}
+
+/* GitHub's issue form for the game, filled in from its newest kept log (as the console's
+ * Report a problem does), into out; "" when it has none. */
+static void game_report(const Pc5Game *g, const char *settings, char *out, size_t size)
+{
+    Pc5LogIssue issue;
+    out[0] = 0;
+    memset(&issue, 0, sizeof(issue));
+    if (pc5_logs_newest(web.root, g->id, issue.file, sizeof(issue.file))) return;
+    const char *name = strrchr(issue.file, '/') ? strrchr(issue.file, '/') + 1 : issue.file;
+    issue.problem = !strncmp(name, "issue-", 6) ? PC5_LOG_CRASHED : PC5_LOG_FINE;
+    pc5_copy(issue.profile, sizeof(issue.profile), g->id);
+    pc5_copy(issue.exe, sizeof(issue.exe), g->executable);
+    if (pc5_report_url_settings(&issue, g->title, settings, out, size)) out[0] = 0;
+}
+
 /* A text file's contents into buf as a JSON string ("" when there is none). */
 static void json_file(Pc5Buf *buf, const char *path, size_t max)
 {
@@ -483,6 +518,18 @@ static void api_games(Conn *c)
         json_file(&buf, launch ? path : NULL, LAUNCH_MAX);
         pc5_buf_puts(&buf, ",\"env\":");
         json_file(&buf, env_path(g, path, sizeof(path)) ? NULL : path, ENV_MAX);
+        pc5_buf_puts(&buf, ",\"debug\":");
+        json_file(&buf, debug_path(g, path, sizeof(path)) ? NULL : path, ENV_MAX);
+        {
+            char settings[300], report[PC5_REPORT_URL];
+            game_settings(g, settings, sizeof(settings));
+            game_report(g, settings, report, sizeof(report));
+            pc5_buf_puts(&buf, ",\"settings\":");
+            json_string(&buf, settings);
+            pc5_buf_puts(&buf, ",\"report\":");
+            json_string(&buf, report);
+        }
+        pc5_buf_printf(&buf, ",\"usb\":%s,\"bits\":%d", g->usb ? "true" : "false", g->bits);
         pc5_buf_puts(&buf, "}");
     }
     pc5_buf_puts(&buf, "]");
@@ -490,7 +537,7 @@ static void api_games(Conn *c)
     respond_buf(c, &buf);
 }
 
-/* /api/games/<id>/<what>: log (GET), launch or env (GET, PUT). */
+/* /api/games/<id>/<what>: log (GET), launch, env or debug (GET, PUT). */
 static void api_game(Conn *c, const char *rest)
 {
     char id[PC5_ID], path[PC5_PATH];
@@ -522,12 +569,13 @@ static void api_game(Conn *c, const char *rest)
         else send_file(c, path, strrchr(path, '/') + 1);
         return;
     }
-    int launch = !strcmp(what, "launch");
-    if (!launch && strcmp(what, "env")) {
+    int launch = !strcmp(what, "launch"), debug = !strcmp(what, "debug");
+    if (!launch && !debug && strcmp(what, "env")) {
         respond_text(c, 404, "Not here");
         return;
     }
-    if (launch ? launch_path(id, path, sizeof(path)) : env_path(&game, path, sizeof(path))) {
+    if (launch ? launch_path(id, path, sizeof(path))
+               : debug ? debug_path(&game, path, sizeof(path)) : env_path(&game, path, sizeof(path))) {
         respond_text(c, 404, "PC5 didn't install this game, so it has no such file");
         return;
     }
@@ -557,7 +605,8 @@ static void api_game(Conn *c, const char *rest)
         if (body.data[i] != ' ' && body.data[i] != '\n' && body.data[i] != '\r' && body.data[i] != '\t') empty = 0;
     if (empty) failed = unlink(path) && errno != ENOENT;
     else failed = pc5_mkdirs(dir) || pc5_write_file(path, body.data, body.len);
-    say("PC5 web %s %s for %s bytes=%zu%s", empty ? "deleted" : "wrote", launch ? "launch.txt" : "env.txt", id, body.len,
+    say("PC5 web %s %s for %s bytes=%zu%s", empty ? "deleted" : "wrote",
+        launch ? "launch.txt" : debug ? "winedebug.txt" : "env.txt", id, body.len,
         failed ? " failed" : "");
     pc5_buf_free(&body);
     respond_text(c, failed ? 500 : 200, failed ? "The console couldn't write it" : "Saved");

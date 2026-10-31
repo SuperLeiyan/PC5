@@ -520,3 +520,8 @@ controller's speaker.
 | 283 | An Unreal Engine 5 game that ran at 0-1 fps (Gears of War: E-Day) | it starts in minutes, not 25, and its shader compile moves | `alive` lines' `cpu_ms` grows by several seconds a second |
 | 284 | Settings › Overlay › GPU usage on, a Vulkan game (DXVK) | a GPU line under CPU, 0-100%, higher in busy scenes; with all seven lines the box fits | `PC5 overlay … cpu_from=console` (or `game` when the console doesn't give its counts); `pw_pc5_hud: second fps=… gpu=… cpu=… busiest_cpu=…` each second |
 | 285 | Play where the frame rate dips, overlay on | | in the dips' `pw_pc5_hud: second` lines: `gpu` near 100 means the GPU is the limit; `busiest_cpu` near 100 with `gpu` low means one of the game's threads is |
+| 286 | A game's △ › Manage › Report a problem | a message naming its newest log; △ shows a QR code; the phone opens GitHub's form with What goes wrong, the log's name and Settings filled in | `PC5 report log=… link=… qr=…` |
+| 287 | Settings › Network › Web page on, then △ | a QR code of `http://<address>:8125`; the phone opens the page | `PC5 web page qr=…` |
+| 288 | The web page: a game's Report a problem, Extra logging, Find a game | the log downloads and GitHub's form opens filled in; winedebug.txt saved and emptied | `PC5 web wrote winedebug.txt for …` |
+| 289 | An older game that runs its own shader compiler (`fxc.exe`) and assembles the listing | effects and textures as on a PC | the game's own log has no `Shader script error` |
+| 290 | A game installed on a USB drive with many files open | it loads as from the console | no `wine-ps5: parked … can't be opened again`; `… opened again with another number` lines are fine |
