@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 09:30:00 +0000
+Subject: [PATCH 75/75] PC5: a game's memory counts kept for a second, as counting
+ them held Wine's memory lock all the time for an Unreal Engine 5 game that
+ asks every few milliseconds (Wine patch 0989)
+
+Gears of War: E-Day ran on about one core at 0 to 1 frames a second: several of its threads asked for the process's memory counts about every 10 ms, and each count walked every view's pages with the lock every allocation and page fault waits for. Wine patch 0989 keeps the counts for a second.
+---
+ PUBLICATION_ALLOWLIST.txt                     |  1 +
+ docs/WINE_PS5_BUILD.md                        |  1 +
+ ...e-process-memory-counts-for-a-second.patch | 73 +++++++++++++++++++
+ 3 files changed, 75 insertions(+)
+ create mode 100644 wine/patches/0989-ntdll-ps5-keep-the-process-memory-counts-for-a-second.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 2879994..464baca 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -611,6 +611,7 @@ wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+ wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+ wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
+ wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch
++wine/patches/0989-ntdll-ps5-keep-the-process-memory-counts-for-a-second.patch
+ wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 55aab27..bc5bafb 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -164,6 +164,7 @@ before evaluating a candidate built from that cache.
+ | 0986 | `ntdll`: on PS5, a listing of a prefix's `system32` or `syswow64` also shows the files 0985 serves; an open that changes one of them (write, delete, attributes, overwrite, delete on close) copies Wine's file into the prefix first and opens the copy, so a game replaces or changes its own; `FILE_OVERWRITE` is served too; `NtDeleteFile` of one leaves Wine's file and succeeds. The first copy is logged |
+ | 0987 | `nsi`: on PS5, the NDIS tables 0934 answers also list a wired adapter with its cable out ("Ethernet", index 2, address 02-50-43-35-00-01, down, no IP address), so `GetAdaptersInfo`, which leaves the loopback out, lists an adapter instead of failing with `ERROR_NO_DATA`, which games that don't check went on from and crashed |
+ | 0988 | `kernelbase`: on PS5, a start of `fxc.exe` (the shader compiler Far Cry runs about a hundred times at start) that fails with `STATUS_NOT_SUPPORTED` is done in the calling process with `d3dcompiler_47`: its options, the listing (`/Fc`, with the constant table's parameters and registers as fxc writes them) and the code (`/Fo`); the caller gets an ended process (signalled events) whose exit code `GetExitCodeProcess` returns |
++| 0989 | `ntdll`: on PS5, the process memory counts of 0898 (a walk of every view's pages with `virtual_mutex` held) are kept for a second, so a game that asks many times a second (Unreal Engine 5's memory stats) no longer holds the mutex all the time and runs on one core |
+ | 0993 | `server` (Leo Lobato's prospero-win): on PS5, read-only regular files past a budget of 48 cached and about 48 live descriptors are parked (closed, the least recently used first) and opened again by name when needed, with their position, as 0871 does for directories: a title can open only about 250 files however high `RLIMIT_NOFILE` is, and games that keep hundreds of archives open failed with "Too many open files". `WINE_PS5_PARK_FILES`, `WINE_PS5_CACHED_FILES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0989-ntdll-ps5-keep-the-process-memory-counts-for-a-second.patch b/wine/patches/0989-ntdll-ps5-keep-the-process-memory-counts-for-a-second.patch
+new file mode 100644
+index 0000000..f980317
+--- /dev/null
++++ b/wine/patches/0989-ntdll-ps5-keep-the-process-memory-counts-for-a-second.patch
+@@ -0,0 +1,73 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sat, 31 Oct 2026 09:30:00 +0000
++Subject: [PATCH] ntdll: PS5: keep the process memory counts for a second.
++
++Patch 0898 counts a process's memory (GetProcessMemoryInfo,
++ProcessVmCounters) by walking every view's pages with virtual_mutex
++held, which every allocation, protection change and page fault waits
++for. An Unreal Engine 5 game asks for its memory stats from several
++threads, about every 10 ms each, and with tens of GiB of views a walk
++took about as long: the queries followed one another without a break,
++the mutex was always held, and the game ran on about one core at 0 to
++1 frames a second (Gears of War: E-Day took 25 minutes to its splash
++screens and never finished compiling its shaders).
++
++The counts are now kept for a second: a query within a second of the
++last walk gets that walk's counts, with the mutex held only to copy
++them. The peaks are kept as before.
++---
++diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
++index 0e5237b..c7eb2be 100644
++--- a/dlls/ntdll/unix/virtual.c
+++++ b/dlls/ntdll/unix/virtual.c
++@@ -1746,14 +1746,35 @@ static void VIRTUAL_Dump(void)
++  */
++ void virtual_fill_vm_counters( VM_COUNTERS_EX *pvmi )
++ {
+++    /* Counting walks every view's pages with virtual_mutex held, which every allocation,
+++     * protection change and page fault waits for. Unreal Engine games ask about 80 times a
+++     * second (its memory stats), and with tens of GiB of views the walk took most of that
+++     * time: the game ran on about one core at 0-1 fps. The counts are kept for a second. */
++     static SIZE_T peak_virtual, peak_working_set, peak_pagefile;
+++    static SIZE_T kept_virtual, kept_working_set, kept_pagefile;
+++    static ULONGLONG kept_at;
++     SIZE_T virtual_size = 0, working_set = 0, pagefile = 0, size, committed;
++     struct file_view *view;
+++    struct timespec now;
+++    ULONGLONG now_ms;
++     sigset_t sigset;
++     char *base;
++     BYTE vprot;
++ 
+++    clock_gettime( CLOCK_MONOTONIC, &now );
+++    now_ms = (ULONGLONG)now.tv_sec * 1000 + now.tv_nsec / 1000000;
++     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
+++    if (kept_at && now_ms - kept_at < 1000)
+++    {
+++        pvmi->VirtualSize = kept_virtual;
+++        pvmi->PeakVirtualSize = peak_virtual;
+++        pvmi->WorkingSetSize = kept_working_set;
+++        pvmi->PeakWorkingSetSize = peak_working_set;
+++        pvmi->PagefileUsage = kept_pagefile;
+++        pvmi->PeakPagefileUsage = peak_pagefile;
+++        server_leave_uninterrupted_section( &virtual_mutex, &sigset );
+++        return;
+++    }
++     WINE_RB_FOR_EACH_ENTRY( view, &views_tree, struct file_view, entry )
++     {
++         committed = 0;
++@@ -1769,6 +1790,10 @@ void virtual_fill_vm_counters( VM_COUNTERS_EX *pvmi )
++     if (virtual_size > peak_virtual) peak_virtual = virtual_size;
++     if (working_set > peak_working_set) peak_working_set = working_set;
++     if (pagefile > peak_pagefile) peak_pagefile = pagefile;
+++    kept_virtual = virtual_size;
+++    kept_working_set = working_set;
+++    kept_pagefile = pagefile;
+++    kept_at = now_ms ? now_ms : 1;
++     pvmi->VirtualSize = virtual_size;
++     pvmi->PeakVirtualSize = peak_virtual;
++     pvmi->WorkingSetSize = working_set;
++-- 
++2.43.0
++
+-- 
+2.43.0
+

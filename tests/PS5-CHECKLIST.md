@@ -517,3 +517,4 @@ controller's speaker.
 | 280 | Far Cry (starts its shader compiler, `fxc.exe`) | sharp textures, fog and lighting | `wine: L"fxc.exe" run in this process … (first: exit code 0)`; the game's `log.txt` has no `CreateProcess failed` |
 | 281 | A game with PhysX 2.8.1 copied in by hand (`Engine/v2.8.1`, `Common`) | it starts; no "Error initializing PhysX" | `PC5 physx registered … PhysX_A32_Engines 2.8.1 … engine folders in PATH` |
 | 282 | Start a Direct3D 12 game twice | | the second start's log has `PC5 vkd3d cache in=… cache=<bytes> write=…`; `none` both times means VKD3D-Proton's cache isn't kept |
+| 283 | An Unreal Engine 5 game that ran at 0-1 fps (Gears of War: E-Day) | it starts in minutes, not 25, and its shader compile moves | `alive` lines' `cpu_ms` grows by several seconds a second |
