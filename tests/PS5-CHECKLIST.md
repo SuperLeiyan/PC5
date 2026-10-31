@@ -513,3 +513,6 @@ controller's speaker.
 | 276 | A game set to Play from USB with 2.0.2 | still starts from its drive | |
 | 277 | Review screen | no △ Play from USB | |
 | 278 | Splinter Cell Conviction (a game that reads its adapter's address) | gets past the intro, no freeze after 13 seconds | `wine: no nsiproxy … the loopback and an unplugged adapter`; no `EXCEPTION_ACCESS_VIOLATION` at the intro |
+| 279 | A game that said "Too many open files" (Postal 2's New game, Pinball FX, an Unreal Engine game with many archives) | it loads on | no `Too many open files`; no `STATUS_TOO_MANY_OPENED_FILES` |
+| 280 | Far Cry (starts its shader compiler, `fxc.exe`) | sharp textures, fog and lighting | `wine: L"fxc.exe" run in this process … (first: exit code 0)`; the game's `log.txt` has no `CreateProcess failed` |
+| 281 | A game with PhysX 2.8.1 copied in by hand (`Engine/v2.8.1`, `Common`) | it starts; no "Error initializing PhysX" | `PC5 physx registered … PhysX_A32_Engines 2.8.1 … engine folders in PATH` |
