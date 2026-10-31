@@ -15,3 +15,7 @@
 100 WheelMates
 104 Heroes of Might and Magic: Olden Era
 120 Baldur's Gate II (original GOG edition)
+140 Tom Clancy's Splinter Cell: Conviction
+142 Mega Man X Regenesis
+160 Heroes of Might and Magic: Olden Era
+167 Quantum Break

@@ -49,6 +49,9 @@ When something doesn't work, PC5 usually says why in a message. This page lists 
 | The overlay is too small to read | **Settings › Overlay › Size › Large** shows the lines twice the size, two at a time; **Extra large** every line at once, twice the size. |
 | A Direct3D game crashes, shows black or draws wrongly | Try another **△ › Graphics › Graphics API**: **WineD3D** or **WineD3D on Vulkan**, or **Wine's VKD3D** for a Direct3D 12 game. See [Graphics API](Playing-games#graphics-api). |
 | The light bar or triggers don't follow PC5's settings | In **DualSense** mode, a game that sets its own light bar or trigger effects gets them instead. |
+| The game stops or can't load a level, and its log says "Too many open files" | A console program can open only about 250 files at once. From 2.0.3 PC5 closes the files a game only reads while it isn't using them and opens them again when needed: update PC5. If it still happens, [report it](Reporting-a-problem) with the log. |
+| Blurry, repeating textures, or no fog or lighting, in an older game | Some games build their shaders at start by running a shader compiler they ship (`fxc.exe`) as a second program, which the console can't start. From 2.0.3 PC5 does that compiler's work inside the game: update PC5. |
+| A game says it's offline, or can't find a network | Games run offline on the console: PC5 shows them an unplugged wired network adapter, as a PC with its cable out has. Online play isn't supported. |
 | I can't leave the game | Hold the **touchpad** and **Options** together for a full two seconds. The controller buzzes when the hold is taken. |
 
 ## Changing a game

@@ -34,7 +34,9 @@ with what that report says (its settings may help).
 The repository owner can add to an issue's row: a comment of theirs on the issue with a line
 "List notes: ..." gives its Notes, "List settings: ..." its Settings that helped, "List version:
 ..." its PC5 version (the one that fixed it, say), the newest such line winning. That works on a
-closed issue too.
+closed issue too. Without one, an issue closed as fixed or playable shows the newest PC5 published
+when it was closed. A game reported more than once has one row, its newest report's, naming the
+earlier ones.
 
 A report that a game doesn't run, made before issues were the way (the form no longer offers
 it), names its game's issue: without one it gets one comment saying so and is closed. The
@@ -143,6 +145,15 @@ def answers(body: str) -> dict:
     return {key: "" if value == "_No response_" else value for key, value in fields.items()}
 
 
+def pc5_version(text: str) -> str:
+    """A report's PC5 version, as "2.0.3": "" for one that can't be PC5's (a firmware version such
+    as 10.00 or 13.60, which the form's field sometimes gets)."""
+    found = re.match(r"\s*(?:PC5\s*)?v?(\d+)\.(\d+)(?:\.(\d+))?", text, re.I)
+    if not found or int(found.group(1)) > 2:
+        return ""
+    return ".".join(part for part in found.groups() if part is not None)
+
+
 def cell(text: str, limit: int = 120) -> str:
     """One table cell: one line, no pipes, cut at limit characters."""
     text = " ".join(text.split()).replace("|", "/")
@@ -200,7 +211,7 @@ def main() -> int:
                 continue   # posted while the game's issue was open: the issue says how it runs
             reports.append({
                 "id": discussion["id"], "told": told, "locked": discussion["locked"],
-                "game": game, "result": result, "shown": shown, "issue": issue, "pc5": fields.get("PC5 version", ""),
+                "game": game, "result": result, "shown": shown, "issue": issue, "pc5": pc5_version(fields.get("PC5 version", "")),
                 "edition": fields.get("Store and version", ""), "controller": fields.get("Controller mode", ""),
                 "settings": fields.get("Settings that helped", ""), "notes": fields.get("Notes", ""),
                 "url": discussion["url"], "number": discussion["number"],
@@ -244,6 +255,20 @@ def main() -> int:
         best = sorted(sorted(since, key=lambda r: r["date"], reverse=True), key=lambda r: SHOWN.index(r["shown"]))[0]
         best.setdefault("issues", []).append(row)
     reports = [r for r in reports if id(r) not in hidden]
+    # A game players reported more than once has one row, its newest report's, which names the
+    # earlier ones: the newest says how it runs now.
+    newest = {}
+    for r in reports:
+        if "votes" not in r:
+            continue
+        key = game_key(r["game"])
+        if key not in newest or r["created"] > newest[key]["created"]:
+            newest[key] = r
+    for r in reports:
+        if "votes" in r and newest[game_key(r["game"])] is not r:
+            newest[game_key(r["game"])].setdefault("earlier", []).append(r)
+            newest[game_key(r["game"])].setdefault("issues", []).extend(r.get("issues", []))
+    reports = [r for r in reports if "votes" not in r or newest[game_key(r["game"])] is r]
     if told_issues:
         print(f"::notice::compatibility list: told {told_issues} issue{'s' * (told_issues != 1)} what reports say")
     if turned_away:
@@ -266,6 +291,7 @@ def main() -> int:
                      f"{cell(r['controller'], 20)} | {cell(r['settings'])} | {cell(r['notes'], 200)} | "
                      f"[#{r['number']}]({r['url']}) by "
                      f"{cell(r['author'], 40)}, {r['date']}"
+                     + "".join(f"; earlier [#{e['number']}]({e['url']})" for e in sorted(r.get("earlier", []), key=lambda e: e["date"]))
                      + "".join(f"; issue [#{i['number']}]({i['url']}) {ISSUE_STATE.get(i['shown'], '')}"
                                for i in r.get("issues", [])) + " |")
     if not reports:
@@ -279,7 +305,8 @@ def main() -> int:
               "needing testing: it didn't run for them, but another copy or version of it may. Tested it? Reply on "
               "the issue, or open a new one with your log. While a game's issue is open, the issue is its row and "
               "reports of it wait; once the issue is closed, its state is the game's row until someone reports the game "
-              "again."]
+              "again. A game reported more than once has one row, its newest report's, with the earlier reports "
+              "named beside it."]
 
     page = "\n".join([
         "Which games run in PC5: the games players report running, from the [Game compatibility]"
@@ -349,9 +376,25 @@ def first_line(text: str) -> str:
     return next((line.strip(" `") for line in text.splitlines() if line.strip(" `")), "")
 
 
+def published_releases(owner: str, name: str) -> list:
+    """The published releases (not drafts or pre-releases), as (published at, version), oldest first."""
+    url = f"https://api.github.com/repos/{owner}/{name}/releases?per_page=100"
+    headers = {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"}
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as response:
+            releases = json.load(response)
+    except (urllib.error.URLError, ValueError) as error:
+        print(f"::warning::compatibility list: the releases couldn't be read ({error})")
+        return []
+    return sorted((r["published_at"], r["tag_name"].lstrip("vV")) for r in releases
+                  if not r.get("draft") and not r.get("prerelease") and r.get("published_at"))
+
+
 def issue_reports(owner: str, name: str, named: dict) -> list:
-    """The rows of the games with an issue, by its state: one a game, its newest issue's."""
+    """The rows of the games with an issue, by its state: one a game, its newest issue's (an open
+    one's while there is one). A fixed one shows the PC5 that was out when it was closed."""
     rows, after, by_number = {}, None, games_by_issue()
+    releases = published_releases(owner, name)
     while True:
         page = graphql("""query($owner: String!, $name: String!, $after: String) {
             repository(owner: $owner, name: $name) {
@@ -414,6 +457,10 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                     rows[key]["notes"] = extra["notes"]
                 if extra.get("version"):
                     rows[key]["pc5"] = extra["version"].lstrip("vV")
+                elif shown in (FIXED, "Playable with issues") and node["closedAt"]:
+                    out = [version for published, version in releases if published <= node["closedAt"]]
+                    if out:
+                        rows[key]["pc5"] = out[-1]
             if shown == NEEDS_STORE and node["state"] == "OPEN":
                 close_store_copy(node, owner, name)
         if not page["pageInfo"]["hasNextPage"]:

@@ -178,7 +178,7 @@ If PC5 picked the wrong one (for example, the game closes at once, or a settings
 
 PC5 says "*Game* starts *program* now". The change takes effect the next time you start the game.
 
-Choose the game itself rather than a launcher that starts it: Wine on the console doesn't start a second program from a launcher. Change program only works for games PC5 installed.
+Choose the game itself rather than a launcher that starts it: Wine on the console doesn't start a second program. A launcher that starts the game is handed over (PC5 starts the game in its place), and a shader compiler a game runs (`fxc.exe`) is done inside the game, but other second programs don't start. Change program only works for games PC5 installed.
 
 ### Games that start from a .bat file
 
