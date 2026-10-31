@@ -288,7 +288,7 @@ def main() -> int:
     for r in reports:
         how = label(r["shown"])
         lines.append(f"| {cell(r['game'], 60)} | {how} | {cell(r['pc5'], 12)} | {cell(r['edition'], 40)} | "
-                     f"{cell(r['controller'], 20)} | {cell(r['settings'])} | {cell(r['notes'], 200)} | "
+                     f"{cell(r['controller'], 20)} | {cell(r['settings'], 1500)} | {cell(r['notes'], 1500)} | "
                      f"[#{r['number']}]({r['url']}) by "
                      f"{cell(r['author'], 40)}, {r['date']}"
                      + "".join(f"; earlier [#{e['number']}]({e['url']})" for e in sorted(r.get("earlier", []), key=lambda e: e["date"]))
