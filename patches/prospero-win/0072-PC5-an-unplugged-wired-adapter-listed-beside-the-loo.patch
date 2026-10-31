@@ -1,0 +1,427 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 01:00:00 +0000
+Subject: [PATCH 72/72] PC5: an unplugged wired adapter listed beside the loopback
+ interface, as GetAdaptersInfo failed with no adapter and a game that didn't
+ check crashed (Wine patch 0987)
+
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...ed-wired-adapter-beside-the-loopback.patch | 380 ++++++++++++++++++
+ 3 files changed, 382 insertions(+)
+ create mode 100644 wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 1b05969..8242d82 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -609,6 +609,7 @@ wine/patches/0981-win32u-register-builtin-classes-without-waiting.patch
+ wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patch
+ wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+ wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
++wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 7854795..c7fc56e 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -162,6 +162,7 @@ before evaluating a candidate built from that cache.
+ | 0984 | `win32u`: when a controller connects or disconnects (`pw_wine_pad_changes`), the driver posts `WM_DEVICECHANGE` with `DBT_DEVNODES_CHANGED` to the top-level windows, as the plug and play service does on Windows: an Unreal Engine 4 game kept a controller that went off lost after it came back. From Playden's prospero-win |
+ | 0985 | `ntdll`: on PS5, a name opened (`FILE_OPEN`) that a prefix's `windows/system32` or `windows/syswow64` doesn't have is Wine's own file of that name (in lower case) for that architecture, from the app's `lib/wine`: PC5's prefixes hold no copy of Wine's DLLs (some 300 MB a game). A file the game makes there is found first |
+ | 0986 | `ntdll`: on PS5, a listing of a prefix's `system32` or `syswow64` also shows the files 0985 serves; an open that changes one of them (write, delete, attributes, overwrite, delete on close) copies Wine's file into the prefix first and opens the copy, so a game replaces or changes its own; `FILE_OVERWRITE` is served too; `NtDeleteFile` of one leaves Wine's file and succeeds. The first copy is logged |
++| 0987 | `nsi`: on PS5, the NDIS tables 0934 answers also list a wired adapter with its cable out ("Ethernet", index 2, address 02-50-43-35-00-01, down, no IP address), so `GetAdaptersInfo`, which leaves the loopback out, lists an adapter instead of failing with `ERROR_NO_DATA`, which games that don't check went on from and crashed |
+ 
+ ## Allocator
+ 
+diff --git a/wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch b/wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
+new file mode 100644
+index 0000000..d692167
+--- /dev/null
++++ b/wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
+@@ -0,0 +1,380 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sat, 31 Oct 2026 01:00:00 +0000
++Subject: [PATCH] nsi: PS5: list a wired adapter with its cable out beside the
++ loopback interface.
++
++Patch 0934 answers NSI requests without nsiproxy.sys with the loopback
++interface alone. GetAdaptersInfo leaves the loopback out, so it failed
++with ERROR_NO_DATA, as on a PC with no network adapter at all. Games
++that read their adapter's address from it without checking the error
++went through a list it never filled: Splinter Cell Conviction crashed
++reading IP_ADAPTER_INFO.Index through a pointer made of leftover text,
++about 13 seconds in, and stopped drawing.
++
++The NDIS tables (the interface table and the index-to-LUID map) now
++list a second interface, a wired one with its cable out, as a PC whose
++network is unplugged has: "Ethernet", index 2, a fixed locally
++administered address (02-50-43-35-00-01), down and disconnected. It has
++no IPv4 or IPv6 interface or address, so GetAdaptersInfo lists it with
++0.0.0.0 and GetAdaptersAddresses shows it down: a game sees itself
++offline, as it is. The tables now list as many rows as they keep, and a
++listing with room for fewer fails as nsiproxy.sys's does.
++---
++diff --git a/dlls/nsi/nsi.c b/dlls/nsi/nsi.c
++index 865ca78..4a87d08 100644
++--- a/dlls/nsi/nsi.c
+++++ b/dlls/nsi/nsi.c
++@@ -75,7 +75,13 @@ static inline HANDLE get_nsi_device( BOOL async )
++  * as Windows names it.  The tables it has no row in (routes, neighbours,
++  * TCP and UDP endpoints...) list none; a get of another key fails as
++  * nsiproxy.sys's does, and of a table not kept here with ERROR_NOT_FOUND.
++- * Change notifications still fail.  With the device nothing changes. */
+++ * Change notifications still fail.  With the device nothing changes.
+++ * The NDIS tables also list a wired adapter with its cable out, as a PC
+++ * whose network is unplugged has: GetAdaptersInfo, which leaves the
+++ * loopback out, failed with ERROR_NO_DATA with no other adapter, and games
+++ * that read their adapter's address from it without checking went through
+++ * a list it never filled and crashed.  It has a fixed address and none of
+++ * IPv4 or IPv6, so a game sees itself offline, as it is. */
++ 
++ #define NSI_FALLBACK_MS_MODULEID(n) { sizeof(NPI_MODULEID), MIT_GUID, { { 0xeb004a00 + (n), 0x9b1a, 0x11d4, \
++                                       { 0x91, 0x23, 0x00, 0x50, 0x04, 0x77, 0x59, 0xbc } } } }
++@@ -86,22 +92,32 @@ static const NPI_MODULEID nsi_fallback_ipv6_moduleid = NSI_FALLBACK_MS_MODULEID(
++ static const NPI_MODULEID nsi_fallback_ndis_moduleid = NSI_FALLBACK_MS_MODULEID( 0x11 );
++ 
++ #define LOOPBACK_IF_INDEX       1
+++#define ETHERNET_IF_INDEX       2
+++#define NDIS_ROWS               2  /* the loopback's, then the wired adapter's */
++ #define LOOPBACK_MTU            1500  /* nsiproxy.sys has the Unix MTU, 65536 for Linux's lo */
++ #define LOOPBACK_REACHABLE_TIME 30000 /* ms: Linux's default base_reachable_time_ms, which nsiproxy.sys reads */
++ 
++ static const IN_ADDR loopback_ipv4_addr = { { { 127, 0, 0, 1 } } };
++ static const IN6_ADDR loopback_ipv6_addr = { { IN6ADDR_LOOPBACK_INIT } };
++ 
++-static NET_LUID loopback_luid( void )
+++/* locally administered, so it is no maker's: 02-50-43-35-00-01 ("PC5") */
+++static const BYTE ethernet_address[6] = { 0x02, 'P', 'C', '5', 0x00, 0x01 };
+++
+++static NET_LUID ndis_luid( UINT row )
++ {
++     NET_LUID luid;
++ 
++     luid.Value = 0;
++-    luid.Info.NetLuidIndex = LOOPBACK_IF_INDEX;
++-    luid.Info.IfType = MIB_IF_TYPE_LOOPBACK;
+++    luid.Info.NetLuidIndex = row ? ETHERNET_IF_INDEX : LOOPBACK_IF_INDEX;
+++    luid.Info.IfType = row ? MIB_IF_TYPE_ETHERNET : MIB_IF_TYPE_LOOPBACK;
++     return luid;
++ }
++ 
+++static NET_LUID loopback_luid( void )
+++{
+++    return ndis_luid( 0 );
+++}
+++
++ static void loopback_string( IF_COUNTED_STRING *str, const WCHAR *value )
++ {
++     memset( str, 0, sizeof(*str) );
++@@ -109,45 +125,63 @@ static void loopback_string( IF_COUNTED_STRING *str, const WCHAR *value )
++     memcpy( str->String, value, str->Length );
++ }
++ 
++-/* ndis.c's ifinfo_fill_entry() for lo, with Windows's alias and description */
++-static void ifinfo_fill( void *key, void *rw_data, void *dynamic_data, void *static_data )
+++/* ndis.c's ifinfo_fill_entry() for lo and for a wired adapter whose cable is
+++ * out, with Windows's aliases and descriptions */
+++static void ifinfo_fill( UINT row, void *key, void *rw_data, void *dynamic_data, void *static_data )
++ {
++-    static const GUID guid = { LOOPBACK_IF_INDEX, 0, 0, { 0, 0, 'N', 'e', 't', 'D', 'e', 'v' } };
++     struct nsi_ndis_ifinfo_rw *rw = rw_data;
++     struct nsi_ndis_ifinfo_dynamic *dyn = dynamic_data;
++     struct nsi_ndis_ifinfo_static *stat = static_data;
++-    NET_LUID luid = loopback_luid();
+++    NET_LUID luid = ndis_luid( row );
+++    UINT index = luid.Info.NetLuidIndex;
+++    GUID guid = { index, 0, 0, { 0, 0, 'N', 'e', 't', 'D', 'e', 'v' } };
++ 
++     if (key) memcpy( key, &luid, sizeof(luid) );
++     if (rw)
++     {
++-        memset( rw, 0, sizeof(*rw) ); /* no network guid, physical address or second name */
+++        memset( rw, 0, sizeof(*rw) ); /* no network guid or second name */
++         rw->admin_status = MIB_IF_ADMIN_STATUS_UP;
++-        loopback_string( &rw->alias, L"Loopback Pseudo-Interface 1" );
+++        loopback_string( &rw->alias, row ? L"Ethernet" : L"Loopback Pseudo-Interface 1" );
+++        if (row)
+++        {
+++            rw->phys_addr.Length = sizeof(ethernet_address);
+++            memcpy( rw->phys_addr.Address, ethernet_address, sizeof(ethernet_address) );
+++        }
++     }
++     if (dyn)
++     {
++         memset( dyn, 0, sizeof(*dyn) ); /* no flags and no traffic */
++-        dyn->oper_status = IfOperStatusUp;
++-        dyn->media_conn_state = MediaConnectStateConnected;
+++        dyn->oper_status = row ? IfOperStatusDown : IfOperStatusUp;
+++        dyn->media_conn_state = row ? MediaConnectStateDisconnected : MediaConnectStateConnected;
++         dyn->mtu = LOOPBACK_MTU;
++         dyn->xmit_speed = dyn->rcv_speed = 1000000; /* as on Linux: some programs want at least that */
++     }
++     if (stat)
++     {
++-        memset( stat, 0, sizeof(*stat) ); /* no connector, physical address, flags or media type */
++-        stat->if_index = LOOPBACK_IF_INDEX;
++-        loopback_string( &stat->descr, L"Software Loopback Interface 1" );
++-        stat->type = MIB_IF_TYPE_LOOPBACK;
++-        stat->access_type = NET_IF_ACCESS_LOOPBACK;
+++        memset( stat, 0, sizeof(*stat) ); /* no flags but hw, and no media type */
+++        stat->if_index = index;
+++        loopback_string( &stat->descr, row ? L"Ethernet Adapter" : L"Software Loopback Interface 1" );
+++        stat->type = luid.Info.IfType;
+++        stat->access_type = row ? NET_IF_ACCESS_BROADCAST : NET_IF_ACCESS_LOOPBACK;
++         stat->conn_type = NET_IF_CONNECTION_DEDICATED;
++         stat->if_guid = guid;
+++        if (row)
+++        {
+++            stat->conn_present = 1;
+++            stat->perm_phys_addr.Length = sizeof(ethernet_address);
+++            memcpy( stat->perm_phys_addr.Address, ethernet_address, sizeof(ethernet_address) );
+++            stat->flags.hw = 1;
+++        }
++     }
++ }
++ 
++-static BOOL ifinfo_is_loopback( const void *key )
+++static int ifinfo_row( const void *key )
++ {
++-    return ((const NET_LUID *)key)->Value == loopback_luid().Value;
+++    UINT row;
+++
+++    for (row = 0; row < NDIS_ROWS; row++)
+++        if (((const NET_LUID *)key)->Value == ndis_luid( row ).Value) return row;
+++    return -1;
++ }
++ 
++ static DWORD ifinfo_get_parameter( const void *key, UINT type, void *data, UINT data_size, UINT data_offset )
++@@ -157,22 +191,25 @@ static DWORD ifinfo_get_parameter( const void *key, UINT type, void *data, UINT
++         struct nsi_ndis_ifinfo_rw rw;
++         struct nsi_ndis_ifinfo_dynamic dyn;
++         struct nsi_ndis_ifinfo_static stat;
++-    } row;
+++    } entry;
+++    int row = ifinfo_row( key );
++ 
++-    if (!ifinfo_is_loopback( key )) return ERROR_FILE_NOT_FOUND;
++-    ifinfo_fill( NULL, type == NSI_PARAM_TYPE_RW ? &row.rw : NULL, type == NSI_PARAM_TYPE_DYNAMIC ? &row.dyn : NULL,
++-                 type == NSI_PARAM_TYPE_STATIC ? &row.stat : NULL );
++-    memcpy( data, (BYTE *)&row + data_offset, data_size );
+++    if (row < 0) return ERROR_FILE_NOT_FOUND;
+++    ifinfo_fill( row, NULL, type == NSI_PARAM_TYPE_RW ? &entry.rw : NULL,
+++                 type == NSI_PARAM_TYPE_DYNAMIC ? &entry.dyn : NULL, type == NSI_PARAM_TYPE_STATIC ? &entry.stat : NULL );
+++    memcpy( data, (BYTE *)&entry + data_offset, data_size );
++     return ERROR_SUCCESS;
++ }
++ 
++ /* ndis.c's index_luid_get_parameter() */
++ static DWORD index_luid_get_parameter( const void *key, UINT type, void *data, UINT data_size, UINT data_offset )
++ {
++-    NET_LUID luid = loopback_luid();
+++    UINT index = *(const UINT *)key;
+++    NET_LUID luid;
++ 
++     if (type != NSI_PARAM_TYPE_STATIC || data_size != sizeof(luid) || data_offset) return ERROR_INVALID_PARAMETER;
++-    if (*(const UINT *)key != LOOPBACK_IF_INDEX) return ERROR_FILE_NOT_FOUND;
+++    if (index != LOOPBACK_IF_INDEX && index != ETHERNET_IF_INDEX) return ERROR_FILE_NOT_FOUND;
+++    luid = ndis_luid( index == ETHERNET_IF_INDEX );
++     memcpy( data, &luid, sizeof(luid) );
++     return ERROR_SUCCESS;
++ }
++@@ -206,19 +243,19 @@ static void ip_interface_fill( BOOL ipv6, void *key, struct nsi_ip_interface_rw
++     if (stat) memset( stat, 0, sizeof(*stat) );
++ }
++ 
++-static void ipv4_interface_fill( void *key, void *rw, void *dyn, void *stat )
+++static void ipv4_interface_fill( UINT row, void *key, void *rw, void *dyn, void *stat )
++ {
++     ip_interface_fill( FALSE, key, rw, dyn, stat );
++ }
++ 
++-static void ipv6_interface_fill( void *key, void *rw, void *dyn, void *stat )
+++static void ipv6_interface_fill( UINT row, void *key, void *rw, void *dyn, void *stat )
++ {
++     ip_interface_fill( TRUE, key, rw, dyn, stat );
++ }
++ 
++-static BOOL ip_interface_is_loopback( const void *key )
+++static int ip_interface_row( const void *key )
++ {
++-    return ((const struct nsi_ip_interface_key *)key)->luid.Value == loopback_luid().Value;
+++    return ((const struct nsi_ip_interface_key *)key)->luid.Value == loopback_luid().Value ? 0 : -1;
++ }
++ 
++ /* ip.c's unicast_fill_entry() for lo's 127.0.0.1/8 and ::1/128 */
++@@ -248,7 +285,7 @@ static void unicast_fill( UINT prefix_len, struct nsi_ip_unicast_rw *rw, struct
++     }
++ }
++ 
++-static void ipv4_unicast_fill( void *key_data, void *rw, void *dyn, void *stat )
+++static void ipv4_unicast_fill( UINT row, void *key_data, void *rw, void *dyn, void *stat )
++ {
++     struct nsi_ipv4_unicast_key *key = key_data;
++ 
++@@ -261,14 +298,14 @@ static void ipv4_unicast_fill( void *key_data, void *rw, void *dyn, void *stat )
++     unicast_fill( 8, rw, dyn, stat );
++ }
++ 
++-static BOOL ipv4_unicast_is_loopback( const void *key_data )
+++static int ipv4_unicast_row( const void *key_data )
++ {
++     const struct nsi_ipv4_unicast_key *key = key_data;
++ 
++-    return key->luid.Value == loopback_luid().Value && key->addr.s_addr == loopback_ipv4_addr.s_addr;
+++    return key->luid.Value == loopback_luid().Value && key->addr.s_addr == loopback_ipv4_addr.s_addr ? 0 : -1;
++ }
++ 
++-static void ipv6_unicast_fill( void *key_data, void *rw, void *dyn, void *stat )
+++static void ipv6_unicast_fill( UINT row, void *key_data, void *rw, void *dyn, void *stat )
++ {
++     struct nsi_ipv6_unicast_key *key = key_data;
++ 
++@@ -280,11 +317,12 @@ static void ipv6_unicast_fill( void *key_data, void *rw, void *dyn, void *stat )
++     unicast_fill( 128, rw, dyn, stat );
++ }
++ 
++-static BOOL ipv6_unicast_is_loopback( const void *key_data )
+++static int ipv6_unicast_row( const void *key_data )
++ {
++     const struct nsi_ipv6_unicast_key *key = key_data;
++ 
++-    return key->luid.Value == loopback_luid().Value && !memcmp( &key->addr, &loopback_ipv6_addr, sizeof(key->addr) );
+++    return key->luid.Value == loopback_luid().Value && !memcmp( &key->addr, &loopback_ipv6_addr, sizeof(key->addr) )
+++           ? 0 : -1;
++ }
++ 
++ struct nsi_fallback_table
++@@ -292,10 +330,11 @@ struct nsi_fallback_table
++     const NPI_MODULEID *module;
++     UINT table;
++     UINT sizes[4]; /* of the key, rw, dynamic and static data, as nsiproxy.sys has them */
++-    void (*fill)( void *key, void *rw, void *dyn, void *stat ); /* the loopback's row; NULL: none to list */
++-    BOOL (*is_loopback)( const void *key );
+++    UINT rows;
+++    void (*fill)( UINT row, void *key, void *rw, void *dyn, void *stat ); /* NULL: no rows to list */
+++    int (*row_of)( const void *key ); /* -1: not a key of a row kept here */
++     DWORD (*get_parameter)( const void *key, UINT type, void *data, UINT data_size, UINT data_offset );
++-    DWORD not_found; /* nsiproxy.sys's error for a key that isn't the loopback's */
+++    DWORD not_found; /* nsiproxy.sys's error for a key that isn't one of those rows' */
++ };
++ 
++ static const struct nsi_fallback_table nsi_fallback_tables[] =
++@@ -306,12 +345,12 @@ static const struct nsi_fallback_table nsi_fallback_tables[] =
++             sizeof(NET_LUID), sizeof(struct nsi_ndis_ifinfo_rw),
++             sizeof(struct nsi_ndis_ifinfo_dynamic), sizeof(struct nsi_ndis_ifinfo_static)
++         },
++-        ifinfo_fill, ifinfo_is_loopback, ifinfo_get_parameter, ERROR_FILE_NOT_FOUND
+++        NDIS_ROWS, ifinfo_fill, ifinfo_row, ifinfo_get_parameter, ERROR_FILE_NOT_FOUND
++     },
++     {
++         &nsi_fallback_ndis_moduleid, NSI_NDIS_INDEX_LUID_TABLE,
++         { sizeof(UINT), 0, 0, sizeof(NET_LUID) },
++-        NULL, NULL, index_luid_get_parameter, ERROR_FILE_NOT_FOUND
+++        0, NULL, NULL, index_luid_get_parameter, ERROR_FILE_NOT_FOUND
++     },
++     {
++         &nsi_fallback_ipv4_moduleid, NSI_IP_INTERFACE_TABLE,
++@@ -319,7 +358,7 @@ static const struct nsi_fallback_table nsi_fallback_tables[] =
++             sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw),
++             sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)
++         },
++-        ipv4_interface_fill, ip_interface_is_loopback, NULL, ERROR_NOT_FOUND
+++        1, ipv4_interface_fill, ip_interface_row, NULL, ERROR_NOT_FOUND
++     },
++     {
++         &nsi_fallback_ipv4_moduleid, NSI_IP_UNICAST_TABLE,
++@@ -327,7 +366,7 @@ static const struct nsi_fallback_table nsi_fallback_tables[] =
++             sizeof(struct nsi_ipv4_unicast_key), sizeof(struct nsi_ip_unicast_rw),
++             sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)
++         },
++-        ipv4_unicast_fill, ipv4_unicast_is_loopback, NULL, ERROR_NOT_FOUND
+++        1, ipv4_unicast_fill, ipv4_unicast_row, NULL, ERROR_NOT_FOUND
++     },
++     {
++         &nsi_fallback_ipv6_moduleid, NSI_IP_INTERFACE_TABLE,
++@@ -335,7 +374,7 @@ static const struct nsi_fallback_table nsi_fallback_tables[] =
++             sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw),
++             sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)
++         },
++-        ipv6_interface_fill, ip_interface_is_loopback, NULL, ERROR_NOT_FOUND
+++        1, ipv6_interface_fill, ip_interface_row, NULL, ERROR_NOT_FOUND
++     },
++     {
++         &nsi_fallback_ipv6_moduleid, NSI_IP_UNICAST_TABLE,
++@@ -343,7 +382,7 @@ static const struct nsi_fallback_table nsi_fallback_tables[] =
++             sizeof(struct nsi_ipv6_unicast_key), sizeof(struct nsi_ip_unicast_rw),
++             sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)
++         },
++-        ipv6_unicast_fill, ipv6_unicast_is_loopback, NULL, ERROR_NOT_FOUND
+++        1, ipv6_unicast_fill, ipv6_unicast_row, NULL, ERROR_NOT_FOUND
++     },
++ };
++ 
++@@ -355,7 +394,7 @@ static const struct nsi_fallback_table *nsi_fallback_find( const NPI_MODULEID *m
++     int i;
++ 
++     if (!InterlockedExchange( &reported, 1 ))
++-        MESSAGE( "wine: no nsiproxy (\\\\.\\Nsi: error %lu), NSI answers with the loopback interface alone\n", err );
+++        MESSAGE( "wine: no nsiproxy (\\\\.\\Nsi: error %lu), NSI answers with the loopback and an unplugged adapter\n", err );
++     TRACE( "module %s, table %Iu\n", module ? debugstr_guid( &module->Guid ) : "(null)", table );
++ 
++     if (!module) return NULL;
++@@ -372,6 +411,7 @@ static DWORD nsi_fallback_enumerate_all( struct nsi_enumerate_all_ex *params )
++     UINT sizes[4] = { params->key_size, params->rw_size, params->dynamic_size, params->static_size };
++     void *data[4] = { params->key_data, params->rw_data, params->dynamic_data, params->static_data };
++     BOOL want_data = params->key_size || params->rw_size || params->dynamic_size || params->static_size;
+++    UINT row;
++     int i;
++ 
++     if (!entry || !entry->fill)
++@@ -388,10 +428,14 @@ static DWORD nsi_fallback_enumerate_all( struct nsi_enumerate_all_ex *params )
++ 
++     if (want_data)
++     {
++-        if (!params->count) return ERROR_MORE_DATA; /* STATUS_BUFFER_OVERFLOW, with no rows */
++-        entry->fill( data[0], data[1], data[2], data[3] );
+++        for (row = 0; row < entry->rows && row < params->count; row++)
+++            entry->fill( row, data[0] ? (BYTE *)data[0] + row * sizes[0] : NULL,
+++                         data[1] ? (BYTE *)data[1] + row * sizes[1] : NULL,
+++                         data[2] ? (BYTE *)data[2] + row * sizes[2] : NULL,
+++                         data[3] ? (BYTE *)data[3] + row * sizes[3] : NULL );
+++        if (params->count < entry->rows) return ERROR_MORE_DATA; /* STATUS_BUFFER_OVERFLOW, count kept */
++     }
++-    params->count = 1;
+++    params->count = entry->rows;
++     return ERROR_SUCCESS;
++ }
++ 
++@@ -401,7 +445,7 @@ static DWORD nsi_fallback_get_all_parameters( struct nsi_get_all_parameters_ex *
++     const struct nsi_fallback_table *entry = nsi_fallback_find( params->module, params->table );
++     UINT sizes[3] = { params->rw_size, params->dynamic_size, params->static_size };
++     void *data[3] = { params->rw_data, params->dynamic_data, params->static_data };
++-    int i;
+++    int i, row;
++ 
++     if (!entry || !entry->fill) return ERROR_NOT_FOUND;
++     if (params->key_size != entry->sizes[0] || !params->key) return ERROR_INVALID_PARAMETER;
++@@ -411,8 +455,8 @@ static DWORD nsi_fallback_get_all_parameters( struct nsi_get_all_parameters_ex *
++         else if (sizes[i] != entry->sizes[i + 1]) return ERROR_INVALID_PARAMETER;
++     }
++ 
++-    if (!entry->is_loopback( params->key )) return entry->not_found;
++-    entry->fill( NULL, data[0], data[1], data[2] );
+++    if ((row = entry->row_of( params->key )) < 0) return entry->not_found;
+++    entry->fill( row, NULL, data[0], data[1], data[2] );
++     return ERROR_SUCCESS;
++ }
++ 
++-- 
++2.43.0
++
+-- 
+2.43.0
+

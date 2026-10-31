@@ -137,6 +137,27 @@ else
     echo "test_wine_system: left out, no Wine source at $wine (tools/build.sh sources fetches it)"
 fi
 
+# Wine patches 0934 and 0987: NSI answers without nsiproxy.sys, with the loopback interface and
+# an unplugged wired adapter, taken from Wine's nsi.c with prospero-win's patches applied.
+if [[ -f $wine/dlls/nsi/nsi.c ]]; then
+    mkdir -p "$out/wine-nsi/dlls/nsi"
+    cp "$wine/dlls/nsi/nsi.c" "$out/wine-nsi/dlls/nsi/"
+    for patch in "$PW"/wine/patches/*.patch; do
+        grep -q '^+++ b/dlls/nsi/nsi\.c' "$patch" || continue
+        GIT_CEILING_DIRECTORIES=$out git -C "$out/wine-nsi" apply --include=dlls/nsi/nsi.c "$patch"
+    done
+    awk '/^#define NSI_FALLBACK_MS_MODULEID/{p=1} /end of the PS5 fallback/{exit} p' \
+        "$out/wine-nsi/dlls/nsi/nsi.c" > "$out/wine-nsi/nsi_fallback.c"
+    grep -q ETHERNET_IF_INDEX "$out/wine-nsi/nsi_fallback.c" ||
+        { echo "test_wine_nsi: Wine patch 0987 isn't applied" >&2; exit 1; }
+    cc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable \
+        -Wno-sign-compare -fshort-wchar -D__WINESRC__ -I"$out/wine-nsi" -I"$wine/include" \
+        tests/test_wine_nsi.c -o "$out/test_wine_nsi"
+    "$out/test_wine_nsi"
+else
+    echo "test_wine_nsi: left out, no Wine source at $wine (tools/build.sh sources fetches it)"
+fi
+
 # Clang 18, as the console build uses it, finds nothing to warn about either.
 for file in title/pc5*.c; do
     # The console's own system calls (FreeBSD headers): built by tools/build.sh only. pc5_console.c,

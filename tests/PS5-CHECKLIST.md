@@ -512,3 +512,4 @@ controller's speaker.
 | 275 | Uninstall a game installed on the drive | its `PC5/<game>` folder deleted from the drive | |
 | 276 | A game set to Play from USB with 2.0.2 | still starts from its drive | |
 | 277 | Review screen | no △ Play from USB | |
+| 278 | Splinter Cell Conviction (a game that reads its adapter's address) | gets past the intro, no freeze after 13 seconds | `wine: no nsiproxy … the loopback and an unplugged adapter`; no `EXCEPTION_ACCESS_VIOLATION` at the intro |
