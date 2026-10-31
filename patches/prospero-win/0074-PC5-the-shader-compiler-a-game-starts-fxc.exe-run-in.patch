@@ -1,0 +1,633 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 09:00:00 +0000
+Subject: [PATCH 74/74] PC5: the shader compiler a game starts (fxc.exe) run in the
+ game's own process, as a title can't start a second one (Wine patch 0988)
+
+Far Cry builds most of its shaders at start by running fxc.exe, its shader compiler, and reading the listing back. Every start failed on the console, and the game drew blurry, repeating textures. Wine patch 0988 does fxc's work in the game's process with d3dcompiler_47 when the start fails, and hands back a process that has already ended with fxc's exit code.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...ompiler-a-game-starts-in-its-process.patch | 586 ++++++++++++++++++
+ 3 files changed, 588 insertions(+)
+ create mode 100644 wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index cbe5f4e..2879994 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -610,6 +610,7 @@ wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patc
+ wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+ wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+ wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
++wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch
+ wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index 1faee29..55aab27 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -163,6 +163,7 @@ before evaluating a candidate built from that cache.
+ | 0985 | `ntdll`: on PS5, a name opened (`FILE_OPEN`) that a prefix's `windows/system32` or `windows/syswow64` doesn't have is Wine's own file of that name (in lower case) for that architecture, from the app's `lib/wine`: PC5's prefixes hold no copy of Wine's DLLs (some 300 MB a game). A file the game makes there is found first |
+ | 0986 | `ntdll`: on PS5, a listing of a prefix's `system32` or `syswow64` also shows the files 0985 serves; an open that changes one of them (write, delete, attributes, overwrite, delete on close) copies Wine's file into the prefix first and opens the copy, so a game replaces or changes its own; `FILE_OVERWRITE` is served too; `NtDeleteFile` of one leaves Wine's file and succeeds. The first copy is logged |
+ | 0987 | `nsi`: on PS5, the NDIS tables 0934 answers also list a wired adapter with its cable out ("Ethernet", index 2, address 02-50-43-35-00-01, down, no IP address), so `GetAdaptersInfo`, which leaves the loopback out, lists an adapter instead of failing with `ERROR_NO_DATA`, which games that don't check went on from and crashed |
++| 0988 | `kernelbase`: on PS5, a start of `fxc.exe` (the shader compiler Far Cry runs about a hundred times at start) that fails with `STATUS_NOT_SUPPORTED` is done in the calling process with `d3dcompiler_47`: its options, the listing (`/Fc`, with the constant table's parameters and registers as fxc writes them) and the code (`/Fo`); the caller gets an ended process (signalled events) whose exit code `GetExitCodeProcess` returns |
+ | 0993 | `server` (Leo Lobato's prospero-win): on PS5, read-only regular files past a budget of 48 cached and about 48 live descriptors are parked (closed, the least recently used first) and opened again by name when needed, with their position, as 0871 does for directories: a title can open only about 250 files however high `RLIMIT_NOFILE` is, and games that keep hundreds of archives open failed with "Too many open files". `WINE_PS5_PARK_FILES`, `WINE_PS5_CACHED_FILES` |
+ 
+ ## Allocator
+diff --git a/wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch b/wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch
+new file mode 100644
+index 0000000..a9e2348
+--- /dev/null
++++ b/wine/patches/0988-kernelbase-ps5-run-the-shader-compiler-a-game-starts-in-its-process.patch
+@@ -0,0 +1,586 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Sat, 31 Oct 2026 09:00:00 +0000
++Subject: [PATCH] kernelbase: PS5: do the work of fxc.exe, the shader
++ compiler a game starts, in its own process.
++
++A PS5 title is a single process, so CreateProcess fails there with
++STATUS_NOT_SUPPORTED. Far Cry builds most of its shaders at start by
++running the shader compiler it ships, about a hundred times:
++
++  fxc.exe /T vs_1_1 /Zpr /DCGC=0 /Fc $$out.cg $$in.cg
++
++and reads the assembly listing back. Every one of those starts failed
++("CreateProcess failed", "Couldn't create CG pixel program"), and the
++game drew without its fog, lighting, shadow and detail shaders: blurry,
++repeating textures.
++
++When the start of fxc.exe fails with STATUS_NOT_SUPPORTED, its work is
++done in the calling process instead, with Wine's d3dcompiler_47: the
++options fxc takes (/T, /E, /D, /Zpr, /Zpc, /Od, /Vd, /Gpp, /Zi), the
++file named, the listing (/Fc) and the code (/Fo), relative to the
++folder the tool would have started in. The listing is the
++disassembly, after the parameters and registers of the code's constant
++table, as fxc writes them. The caller gets a process that has already
++ended: a signalled event for the process and one for its thread, whose
++exit code (0 when it compiled, 1 otherwise) GetExitCodeProcess returns.
++The first one is reported once. Where a process can be created nothing
++changes.
++---
++diff --git a/dlls/kernelbase/Makefile.in b/dlls/kernelbase/Makefile.in
++index 2e33b6b..0156ae0 100644
++--- a/dlls/kernelbase/Makefile.in
+++++ b/dlls/kernelbase/Makefile.in
++@@ -23,6 +23,7 @@ SOURCES = \
++ 	string.c \
++ 	sync.c \
++ 	thread.c \
+++	tool.c \
++ 	version.c \
++ 	volume.c \
++ 	winerror.mc
++diff --git a/dlls/kernelbase/kernelbase.h b/dlls/kernelbase/kernelbase.h
++index 1b08f14..7956cb3 100644
++--- a/dlls/kernelbase/kernelbase.h
+++++ b/dlls/kernelbase/kernelbase.h
++@@ -57,4 +57,9 @@ static inline BOOL set_ntstatus( NTSTATUS status )
++ #define HeapReAlloc(heap, flags, ptr, size) RtlReAllocateHeap(heap, flags, ptr, size)
++ #define HeapFree(heap, flags, ptr) RtlFreeHeap(heap, flags, ptr)
++ 
+++/* a tool program done in this process where a second one can't start (tool.c) */
+++extern BOOL tool_run( const WCHAR *app_name, const WCHAR *cmd_line, const WCHAR *cur_dir,
+++                      PROCESS_INFORMATION *info );
+++extern BOOL tool_exit_code( HANDLE process, DWORD *code );
+++
++ #endif /* __WINE_KERNELBASE_H */
++diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
++index 25b3f4f..4f42d83 100644
++--- a/dlls/kernelbase/process.c
+++++ b/dlls/kernelbase/process.c
++@@ -683,6 +683,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR
++         if (!(flags & CREATE_SUSPENDED)) NtResumeThread( rtl_info.Thread, NULL );
++         TRACE( "started process pid %04lx tid %04lx\n", info->dwProcessId, info->dwThreadId );
++     }
+++    /* A title on the PS5 can't start a second process: a tool done in this process instead */
+++    else if (status == STATUS_NOT_SUPPORTED && tool_run( app_name, tidy_cmdline, cur_dir, info ))
+++        status = STATUS_SUCCESS;
++ 
++  done:
++     RtlDestroyProcessParameters( params );
++@@ -803,6 +806,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetExitCodeProcess( HANDLE process, LPDWORD exit_c
++ 
++     status = NtQueryInformationProcess( process, ProcessBasicInformation, &pbi, sizeof(pbi), NULL );
++     if (!status && exit_code) *exit_code = pbi.ExitStatus;
+++    if (status == STATUS_OBJECT_TYPE_MISMATCH && tool_exit_code( process, exit_code )) status = STATUS_SUCCESS;
++     return set_ntstatus( status );
++ }
++ 
++diff --git a/dlls/kernelbase/tool.c b/dlls/kernelbase/tool.c
++new file mode 100644
++index 0000000..d86711f
++--- /dev/null
+++++ b/dlls/kernelbase/tool.c
++@@ -0,0 +1,500 @@
+++/*
+++ * A tool program run in this process where no second process can be started
+++ *
+++ * Copyright 2026 bornaradusin
+++ *
+++ * This library is free software; you can redistribute it and/or
+++ * modify it under the terms of the GNU Lesser General Public
+++ * License as published by the Free Software Foundation; either
+++ * version 2.1 of the License, or (at your option) any later version.
+++ *
+++ * This library is distributed in the hope that it will be useful,
+++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+++ * Lesser General Public License for more details.
+++ *
+++ * You should have received a copy of the GNU Lesser General Public
+++ * License along with this library; if not, write to the Free Software
+++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+++ */
+++
+++/* A PS5 title is a single process, so CreateProcess fails there with STATUS_NOT_SUPPORTED.
+++ * Some games start a tool and wait for the file it writes: Far Cry builds its shaders at start
+++ * by running the shader compiler it ships (fxc.exe /T vs_1_1 /Zpr /DCGC=0 /Fc $$out.cg $$in.cg)
+++ * and reads the assembly listing back, a hundred times; without it those shaders are missing
+++ * and the game draws blurry, repeating textures. When such a start fails, the tool's work is
+++ * done here instead, with Wine's d3dcompiler, and the caller gets a process that has already
+++ * ended with the tool's exit code: an event, signalled, which GetExitCodeProcess knows. Only
+++ * a start that failed is replaced, so where processes can be created nothing changes. */
+++
+++#include <stdarg.h>
+++#include <stdio.h>
+++#include <string.h>
+++
+++#define COBJMACROS
+++#include "ntstatus.h"
+++#define WIN32_NO_STATUS
+++#include "windef.h"
+++#include "winbase.h"
+++#include "winternl.h"
+++#include "d3dcommon.h"
+++#include "d3dcompiler.h"
+++
+++#include "kernelbase.h"
+++#include "wine/debug.h"
+++
+++WINE_DEFAULT_DEBUG_CHANNEL(process);
+++
+++#define TOOL_EXITS 32
+++
+++static struct { HANDLE process; DWORD code; } tool_exits[TOOL_EXITS];
+++static LONG tool_exit_next;
+++
+++static void tool_exit_add( HANDLE process, DWORD code )
+++{
+++    LONG i = (InterlockedIncrement( &tool_exit_next ) - 1) % TOOL_EXITS;
+++
+++    tool_exits[i].code = code;
+++    InterlockedExchangePointer( &tool_exits[i].process, process );
+++}
+++
+++/* the exit code of a tool run here, for GetExitCodeProcess on its handle */
+++BOOL tool_exit_code( HANDLE process, DWORD *code )
+++{
+++    int i;
+++
+++    if (!process) return FALSE;
+++    for (i = 0; i < TOOL_EXITS; i++)
+++    {
+++        if (tool_exits[i].process != process) continue;
+++        if (code) *code = tool_exits[i].code;
+++        return TRUE;
+++    }
+++    return FALSE;
+++}
+++
+++/* the command line's arguments, split as the C runtime splits them (quotes, no escapes) */
+++static int split_args( const WCHAR *cmd_line, WCHAR *buffer, WCHAR **args, int max )
+++{
+++    int count = 0;
+++
+++    while (*cmd_line && count < max)
+++    {
+++        BOOL quoted = FALSE;
+++
+++        while (*cmd_line == ' ' || *cmd_line == '\t') cmd_line++;
+++        if (!*cmd_line) break;
+++        args[count++] = buffer;
+++        while (*cmd_line && (quoted || (*cmd_line != ' ' && *cmd_line != '\t')))
+++        {
+++            if (*cmd_line == '"') quoted = !quoted;
+++            else *buffer++ = *cmd_line;
+++            cmd_line++;
+++        }
+++        *buffer++ = 0;
+++    }
+++    return count;
+++}
+++
+++static char *to_ansi( const WCHAR *text )
+++{
+++    int size = WideCharToMultiByte( CP_ACP, 0, text, -1, NULL, 0, NULL, NULL );
+++    char *out = size > 0 ? HeapAlloc( GetProcessHeap(), 0, size ) : NULL;
+++
+++    if (out) WideCharToMultiByte( CP_ACP, 0, text, -1, out, size, NULL, NULL );
+++    return out;
+++}
+++
+++/* a file named on the command line, in the folder the tool would have started in */
+++static WCHAR *tool_path( const WCHAR *name, const WCHAR *cur_dir )
+++{
+++    size_t dir = cur_dir ? wcslen( cur_dir ) : 0, len = wcslen( name );
+++    WCHAR *out;
+++
+++    if (!cur_dir || name[0] == '\\' || name[0] == '/' || (name[0] && name[1] == ':')) dir = 0;
+++    if (!(out = HeapAlloc( GetProcessHeap(), 0, (dir + len + 2) * sizeof(WCHAR) ))) return NULL;
+++    if (dir)
+++    {
+++        memcpy( out, cur_dir, dir * sizeof(WCHAR) );
+++        if (out[dir - 1] != '\\' && out[dir - 1] != '/') out[dir++] = '\\';
+++    }
+++    memcpy( out + dir, name, (len + 1) * sizeof(WCHAR) );
+++    return out;
+++}
+++
+++static void *read_whole( const WCHAR *path, DWORD *size )
+++{
+++    HANDLE file = CreateFileW( path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+++                               OPEN_EXISTING, 0, NULL );
+++    LARGE_INTEGER length;
+++    DWORD got = 0;
+++    char *data = NULL;
+++
+++    if (file == INVALID_HANDLE_VALUE) return NULL;
+++    if (GetFileSizeEx( file, &length ) && length.QuadPart < (64 << 20) &&
+++        (data = HeapAlloc( GetProcessHeap(), 0, length.QuadPart + 1 )) &&
+++        ReadFile( file, data, length.QuadPart, &got, NULL ) && got == length.QuadPart)
+++    {
+++        data[got] = 0;
+++        *size = got;
+++    }
+++    else
+++    {
+++        HeapFree( GetProcessHeap(), 0, data );
+++        data = NULL;
+++    }
+++    CloseHandle( file );
+++    return data;
+++}
+++
+++static BOOL write_whole( const WCHAR *path, const void *data, DWORD size )
+++{
+++    HANDLE file = CreateFileW( path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
+++    DWORD done = 0;
+++    BOOL ok;
+++
+++    if (file == INVALID_HANDLE_VALUE) return FALSE;
+++    ok = WriteFile( file, data, size, &done, NULL ) && done == size;
+++    CloseHandle( file );
+++    return ok;
+++}
+++
+++struct text
+++{
+++    char *data;
+++    size_t size, used;
+++};
+++
+++static void text_add( struct text *text, const char *format, ... )
+++{
+++    va_list args;
+++    int len;
+++
+++    if (!text->data && !(text->data = HeapAlloc( GetProcessHeap(), 0, (text->size = 4096) ))) return;
+++    for (;;)
+++    {
+++        va_start( args, format );
+++        len = _vsnprintf( text->data + text->used, text->size - text->used, format, args );
+++        va_end( args );
+++        if (len >= 0 && (size_t)len < text->size - text->used) break;
+++        if (text->size > (16 << 20)) return;
+++        text->data = HeapReAlloc( GetProcessHeap(), 0, text->data, text->size *= 2 );
+++        if (!text->data) return;
+++    }
+++    text->used += len;
+++}
+++
+++/* The constant table compiled code carries (a CTAB comment, D3DXSHADER_CONSTANTTABLE), as fxc
+++ * lists it before the code: each constant's type, then its register and size. */
+++static const BYTE *find_ctab( const DWORD *code, DWORD size, DWORD *ctab_size )
+++{
+++    const DWORD *end = code + size / sizeof(DWORD);
+++
+++    for (code++; code < end; code++)
+++    {
+++        DWORD length;
+++
+++        if (*code == 0x0000ffff) break;  /* the end token */
+++        if ((*code & 0xffff) != 0xfffe) continue;
+++        length = (*code >> 16) & 0x7fff;
+++        if (code + 1 + length > end) break;
+++        if (length >= 2 && code[1] == 0x42415443 /* CTAB */)
+++        {
+++            *ctab_size = (length - 1) * sizeof(DWORD);
+++            return (const BYTE *)(code + 2);
+++        }
+++        code += length;
+++    }
+++    return NULL;
+++}
+++
+++static DWORD u32_at( const BYTE *data, DWORD size, DWORD offset )
+++{
+++    DWORD value = 0;
+++
+++    if (offset <= size && size - offset >= sizeof(value)) memcpy( &value, data + offset, sizeof(value) );
+++    return value;
+++}
+++
+++static WORD u16_at( const BYTE *data, DWORD size, DWORD offset )
+++{
+++    WORD value = 0;
+++
+++    if (offset <= size && size - offset >= sizeof(value)) memcpy( &value, data + offset, sizeof(value) );
+++    return value;
+++}
+++
+++static const char *string_at( const BYTE *data, DWORD size, DWORD offset )
+++{
+++    if (offset >= size || !memchr( data + offset, 0, size - offset )) return "";
+++    return (const char *)data + offset;
+++}
+++
+++static void type_name( const BYTE *ctab, DWORD size, DWORD type_offset, char *out, size_t out_size )
+++{
+++    static const char * const objects[] =
+++    {
+++        "void", "bool", "int", "float", "string", "texture", "texture1D", "texture2D", "texture3D", "textureCUBE",
+++        "sampler", "sampler1D", "sampler2D", "sampler3D", "samplerCUBE",
+++    };
+++    WORD class = u16_at( ctab, size, type_offset ), type = u16_at( ctab, size, type_offset + 2 );
+++    WORD rows = u16_at( ctab, size, type_offset + 4 ), columns = u16_at( ctab, size, type_offset + 6 );
+++    const char *base = type < ARRAY_SIZE(objects) ? objects[type] : "float";
+++
+++    switch (class)
+++    {
+++    case 1:  /* vector */
+++        _snprintf( out, out_size, "%s%u", base, columns );
+++        break;
+++    case 2:  /* matrix, rows */
+++        _snprintf( out, out_size, "row_major %s%ux%u", base, rows, columns );
+++        break;
+++    case 3:  /* matrix, columns */
+++        _snprintf( out, out_size, "%s%ux%u", base, rows, columns );
+++        break;
+++    case 5:  /* struct */
+++        _snprintf( out, out_size, "struct" );
+++        break;
+++    default:  /* scalar or object */
+++        _snprintf( out, out_size, "%s", base );
+++        break;
+++    }
+++}
+++
+++static void list_constants( struct text *text, const BYTE *ctab, DWORD size )
+++{
+++    static const char sets[] = "bics";
+++    DWORD count = u32_at( ctab, size, 12 ), info = u32_at( ctab, size, 16 ), i;
+++    size_t width = 4;
+++    char type[64];
+++
+++    if (count > 4096) count = 0;
+++    text_add( text, "//\n// Parameters:\n//\n" );
+++    for (i = 0; i < count; i++)
+++    {
+++        DWORD entry = info + i * 20;
+++        const char *name = string_at( ctab, size, u32_at( ctab, size, entry ) );
+++        DWORD type_offset = u32_at( ctab, size, entry + 12 );
+++        WORD elements = u16_at( ctab, size, type_offset + 8 );
+++
+++        type_name( ctab, size, type_offset, type, sizeof(type) );
+++        if (elements > 1) text_add( text, "//   %s %s[%u];\n", type, name, elements );
+++        else text_add( text, "//   %s %s;\n", type, name );
+++        if (strlen( name ) > width) width = strlen( name );
+++    }
+++    text_add( text, "//\n//\n// Registers:\n//\n//   %-*s Reg   Size\n//   ", (int)width, "Name" );
+++    for (i = 0; i < width; i++) text_add( text, "-" );
+++    text_add( text, " ----- ----\n" );
+++    for (i = 0; i < count; i++)
+++    {
+++        DWORD entry = info + i * 20;
+++        const char *name = string_at( ctab, size, u32_at( ctab, size, entry ) );
+++        WORD set = u16_at( ctab, size, entry + 4 ), index = u16_at( ctab, size, entry + 6 );
+++        WORD registers = u16_at( ctab, size, entry + 8 );
+++        char reg[16];
+++
+++        _snprintf( reg, sizeof(reg), "%c%u", set < 4 ? sets[set] : 'c', index );
+++        text_add( text, "//   %-*s %-5s %4u\n", (int)width, name, reg, registers );
+++    }
+++    text_add( text, "//\n" );
+++}
+++
+++typedef HRESULT (WINAPI *compile_func)( const void *data, SIZE_T size, const char *filename,
+++                                        const D3D_SHADER_MACRO *defines, ID3DInclude *include,
+++                                        const char *entrypoint, const char *target, UINT flags,
+++                                        UINT effect_flags, ID3DBlob **shader, ID3DBlob **errors );
+++typedef HRESULT (WINAPI *disassemble_func)( const void *data, SIZE_T size, UINT flags, const char *comments,
+++                                            ID3DBlob **disassembly );
+++
+++#define FXC_ARGS    64
+++#define FXC_DEFINES 32
+++
+++/* fxc.exe's work: the options a game gives it, the file it compiles, the listing (/Fc) and the
+++ * code (/Fo) it writes. Returns its exit code: 0 when it compiled, 1 otherwise. */
+++static DWORD run_fxc( const WCHAR *cmd_line, const WCHAR *cur_dir )
+++{
+++    static compile_func compile;
+++    static disassemble_func disassemble;
+++    D3D_SHADER_MACRO defines[FXC_DEFINES + 1] = {{ 0 }};
+++    WCHAR *buffer, *args[FXC_ARGS], *input = NULL, *listing = NULL, *object = NULL;
+++    char *profile = NULL, *entry = NULL, *source = NULL, *source_name = NULL, *macros[FXC_DEFINES] = { 0 };
+++    ID3DBlob *code = NULL, *errors = NULL, *assembly = NULL;
+++    UINT flags = D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY;
+++    int count, i, defined = 0;
+++    DWORD source_size = 0, result = 1;
+++    WCHAR *path;
+++    HRESULT hr;
+++
+++    if (!compile)
+++    {
+++        HMODULE module = LoadLibraryW( L"d3dcompiler_47.dll" );
+++
+++        if (!module || !(disassemble = (disassemble_func)GetProcAddress( module, "D3DDisassemble" )) ||
+++            !(compile = (compile_func)GetProcAddress( module, "D3DCompile" )))
+++        {
+++            ERR( "fxc: no d3dcompiler_47\n" );
+++            return 1;
+++        }
+++    }
+++
+++    if (!(buffer = HeapAlloc( GetProcessHeap(), 0, (wcslen( cmd_line ) + 1) * sizeof(WCHAR) ))) return 1;
+++    count = split_args( cmd_line, buffer, args, FXC_ARGS );
+++    for (i = 1; i < count; i++)
+++    {
+++        WCHAR *arg = args[i], *value = NULL;
+++
+++        if (arg[0] != '/' && arg[0] != '-')
+++        {
+++            input = arg;
+++            continue;
+++        }
+++        arg++;
+++#define OPTION(name) (!wcsnicmp( arg, name, wcslen( name ) ) && \
+++                      (value = arg[wcslen( name )] ? arg + wcslen( name ) : (i + 1 < count ? args[++i] : NULL)))
+++        if (!wcsicmp( arg, L"Zpr" )) flags |= D3DCOMPILE_PACK_MATRIX_ROW_MAJOR;
+++        else if (!wcsicmp( arg, L"Zpc" )) flags |= D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR;
+++        else if (!wcsicmp( arg, L"Od" )) flags |= D3DCOMPILE_SKIP_OPTIMIZATION;
+++        else if (!wcsicmp( arg, L"Vd" )) flags |= D3DCOMPILE_SKIP_VALIDATION;
+++        else if (!wcsicmp( arg, L"Gpp" )) flags |= D3DCOMPILE_PARTIAL_PRECISION;
+++        else if (!wcsicmp( arg, L"Zi" )) flags |= D3DCOMPILE_DEBUG;
+++        else if (!wcsicmp( arg, L"nologo" ) || !wcsnicmp( arg, L"O", 1 ) || !wcsnicmp( arg, L"G", 1 )) continue;
+++        else if (OPTION( L"Fc" )) listing = value;
+++        else if (OPTION( L"Fo" )) object = value;
+++        else if (OPTION( L"T" )) profile = to_ansi( value );
+++        else if (OPTION( L"E" )) entry = to_ansi( value );
+++        else if (OPTION( L"D" ))
+++        {
+++            char *macro, *equals;
+++
+++            if (defined == FXC_DEFINES || !(macro = to_ansi( value ))) continue;
+++            macros[defined] = macro;
+++            defines[defined].Name = macro;
+++            defines[defined].Definition = "1";
+++            if ((equals = strchr( macro, '=' )))
+++            {
+++                *equals = 0;
+++                defines[defined].Definition = equals + 1;
+++            }
+++            defined++;
+++        }
+++        else if (OPTION( L"Fh" ) || OPTION( L"Fe" ) || OPTION( L"Vn" ) || OPTION( L"I" )) continue;
+++        else FIXME( "fxc: option %s left out\n", debugstr_w(args[i]) );
+++#undef OPTION
+++    }
+++
+++    if (!profile || !input || (!listing && !object))
+++    {
+++        ERR( "fxc: %s: no profile, file or output\n", debugstr_w(cmd_line) );
+++        goto done;
+++    }
+++    if (!(path = tool_path( input, cur_dir ))) goto done;
+++    source = read_whole( path, &source_size );
+++    source_name = to_ansi( path );
+++    HeapFree( GetProcessHeap(), 0, path );
+++    if (!source)
+++    {
+++        ERR( "fxc: %s can't be read\n", debugstr_w(input) );
+++        goto done;
+++    }
+++
+++    hr = compile( source, source_size, source_name, defines, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+++                  entry ? entry : "main", profile, flags, 0, &code, &errors );
+++    if (FAILED(hr))
+++    {
+++        ERR( "fxc: %s for %s failed, %#lx: %s\n", debugstr_w(input), profile, hr,
+++             errors ? debugstr_a( ID3D10Blob_GetBufferPointer( errors ) ) : "" );
+++        goto done;
+++    }
+++    if (object && !((path = tool_path( object, cur_dir )) &&
+++                    write_whole( path, ID3D10Blob_GetBufferPointer( code ), ID3D10Blob_GetBufferSize( code ) )))
+++    {
+++        HeapFree( GetProcessHeap(), 0, path );
+++        goto done;
+++    }
+++    if (object) HeapFree( GetProcessHeap(), 0, path );
+++    if (listing)
+++    {
+++        const DWORD *bytecode = ID3D10Blob_GetBufferPointer( code );
+++        DWORD code_size = ID3D10Blob_GetBufferSize( code ), ctab_size = 0, slots = 0;
+++        const BYTE *ctab = find_ctab( bytecode, code_size, &ctab_size );
+++        struct text text = { 0 };
+++        const char *line, *end;
+++        BOOL ok;
+++
+++        if (FAILED(hr = disassemble( bytecode, code_size, 0, NULL, &assembly )))
+++        {
+++            ERR( "fxc: %s can't be listed, %#lx\n", debugstr_w(input), hr );
+++            goto done;
+++        }
+++        text_add( &text, "//\n// Generated by Microsoft (R) D3DX9 Shader Compiler\n" );
+++        if (ctab) list_constants( &text, ctab, ctab_size );
+++        text_add( &text, "\n" );
+++        line = ID3D10Blob_GetBufferPointer( assembly );
+++        end = line + ID3D10Blob_GetBufferSize( assembly );
+++        while (line < end && *line)
+++        {
+++            const char *next = memchr( line, '\n', end - line ), *start = line;
+++            int length;
+++
+++            if (!next) next = end;
+++            while (start < next && (*start == ' ' || *start == '\t')) start++;
+++            length = next - start;
+++            while (length && (start[length - 1] == '\r' || start[length - 1] == ' ')) length--;
+++            if (length)
+++            {
+++                text_add( &text, "    %.*s\n", length, start );
+++                if (strncmp( start, "dcl", 3 ) && strncmp( start, "def", 3 ) && !strchr( "vp", start[0] ) &&
+++                    strncmp( start, "//", 2 ))
+++                    slots++;
+++            }
+++            line = next + 1;
+++        }
+++        text_add( &text, "\n// approximately %lu instruction slot%s used\n", slots, slots == 1 ? "" : "s" );
+++        ok = text.data && (path = tool_path( listing, cur_dir )) && write_whole( path, text.data, text.used );
+++        if (text.data && path) HeapFree( GetProcessHeap(), 0, path );
+++        HeapFree( GetProcessHeap(), 0, text.data );
+++        if (!ok) goto done;
+++    }
+++    result = 0;
+++
+++done:
+++    if (code) ID3D10Blob_Release( code );
+++    if (errors) ID3D10Blob_Release( errors );
+++    if (assembly) ID3D10Blob_Release( assembly );
+++    for (i = 0; i < defined; i++) HeapFree( GetProcessHeap(), 0, macros[i] );
+++    HeapFree( GetProcessHeap(), 0, profile );
+++    HeapFree( GetProcessHeap(), 0, entry );
+++    HeapFree( GetProcessHeap(), 0, source );
+++    HeapFree( GetProcessHeap(), 0, source_name );
+++    HeapFree( GetProcessHeap(), 0, buffer );
+++    return result;
+++}
+++
+++/* Run in this process the tool a failed CreateProcess named, when it is one done here:
+++ * fills info with a process that has already ended, and returns TRUE. */
+++BOOL tool_run( const WCHAR *app_name, const WCHAR *cmd_line, const WCHAR *cur_dir, PROCESS_INFORMATION *info )
+++{
+++    static LONG reported;
+++    const WCHAR *name = app_name, *p;
+++    DWORD code;
+++
+++    if (!app_name || !cmd_line) return FALSE;
+++    for (p = app_name; *p; p++) if (*p == '\\' || *p == '/') name = p + 1;
+++    if (wcsicmp( name, L"fxc.exe" ) && wcsicmp( name, L"fxc" )) return FALSE;
+++
+++    code = run_fxc( cmd_line, cur_dir );
+++    if (!InterlockedExchange( &reported, 1 ))
+++        MESSAGE( "wine: %s run in this process, as no second process can start (first: exit code %lu)\n",
+++                 debugstr_w(name), code );
+++    TRACE( "%s: exit code %lu\n", debugstr_w(cmd_line), code );
+++    if (!(info->hProcess = CreateEventW( NULL, TRUE, TRUE, NULL ))) return FALSE;
+++    if (!(info->hThread = CreateEventW( NULL, TRUE, TRUE, NULL )))
+++    {
+++        CloseHandle( info->hProcess );
+++        info->hProcess = 0;
+++        return FALSE;
+++    }
+++    tool_exit_add( info->hProcess, code );
+++    info->dwProcessId = info->dwThreadId = 0;
+++    return TRUE;
+++}
++-- 
++2.43.0
++
+-- 
+2.43.0
+

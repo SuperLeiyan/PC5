@@ -1,0 +1,537 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 08:30:00 +0000
+Subject: [PATCH 73/73] PC5: read-only files past a budget parked and opened again
+ when needed, as a title opens only about 250 files however high its limit
+ (Leo Lobato's Wine patch 0993)
+
+Games that keep hundreds of archives open (Unreal's packages, an older game's .upk files) failed with "Too many open files": raising RLIMIT_NOFILE (patch 0071) doesn't raise how many files a PS5 title can open. Leo Lobato's prospero-win patch 0993 parks the least recently used read-only files past a budget and opens them again by name, as patch 0871 does for directories.
+---
+ PUBLICATION_ALLOWLIST.txt                     |   1 +
+ docs/WINE_PS5_BUILD.md                        |   1 +
+ ...-ps5-park-read-only-file-descriptors.patch | 489 ++++++++++++++++++
+ 3 files changed, 491 insertions(+)
+ create mode 100644 wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
+
+diff --git a/PUBLICATION_ALLOWLIST.txt b/PUBLICATION_ALLOWLIST.txt
+index 8242d82..cbe5f4e 100644
+--- a/PUBLICATION_ALLOWLIST.txt
++++ b/PUBLICATION_ALLOWLIST.txt
+@@ -610,6 +610,7 @@ wine/patches/0984-win32u-ps5-tell-windows-when-the-controller-comes-or-goes.patc
+ wine/patches/0985-ntdll-ps5-serve-wine-dlls-missing-from-system32.patch
+ wine/patches/0986-ntdll-ps5-list-wine-s-dlls-and-copy-one-before-it-changes.patch
+ wine/patches/0987-nsi-ps5-an-unplugged-wired-adapter-beside-the-loopback.patch
++wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
+ 
+ 
+ 
+diff --git a/docs/WINE_PS5_BUILD.md b/docs/WINE_PS5_BUILD.md
+index c7fc56e..1faee29 100644
+--- a/docs/WINE_PS5_BUILD.md
++++ b/docs/WINE_PS5_BUILD.md
+@@ -163,6 +163,7 @@ before evaluating a candidate built from that cache.
+ | 0985 | `ntdll`: on PS5, a name opened (`FILE_OPEN`) that a prefix's `windows/system32` or `windows/syswow64` doesn't have is Wine's own file of that name (in lower case) for that architecture, from the app's `lib/wine`: PC5's prefixes hold no copy of Wine's DLLs (some 300 MB a game). A file the game makes there is found first |
+ | 0986 | `ntdll`: on PS5, a listing of a prefix's `system32` or `syswow64` also shows the files 0985 serves; an open that changes one of them (write, delete, attributes, overwrite, delete on close) copies Wine's file into the prefix first and opens the copy, so a game replaces or changes its own; `FILE_OVERWRITE` is served too; `NtDeleteFile` of one leaves Wine's file and succeeds. The first copy is logged |
+ | 0987 | `nsi`: on PS5, the NDIS tables 0934 answers also list a wired adapter with its cable out ("Ethernet", index 2, address 02-50-43-35-00-01, down, no IP address), so `GetAdaptersInfo`, which leaves the loopback out, lists an adapter instead of failing with `ERROR_NO_DATA`, which games that don't check went on from and crashed |
++| 0993 | `server` (Leo Lobato's prospero-win): on PS5, read-only regular files past a budget of 48 cached and about 48 live descriptors are parked (closed, the least recently used first) and opened again by name when needed, with their position, as 0871 does for directories: a title can open only about 250 files however high `RLIMIT_NOFILE` is, and games that keep hundreds of archives open failed with "Too many open files". `WINE_PS5_PARK_FILES`, `WINE_PS5_CACHED_FILES` |
+ 
+ ## Allocator
+ 
+diff --git a/wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch b/wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
+new file mode 100644
+index 0000000..e1f8cee
+--- /dev/null
++++ b/wine/patches/0993-server-ps5-park-read-only-file-descriptors.patch
+@@ -0,0 +1,489 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: prospero-win <prospero-win@invalid>
++Date: Fri, 30 Oct 2026 18:00:00 +0100
++Subject: [PATCH] server: Park read-only file descriptors past a budget on PS5.
++
++A PS5 title can hold about 256 open files at once. Measured on FW 13.60
++from a title: open() of the same file fails with EMFILE after 249 opens,
++on any file system and through the raw syscall too, while dup(), pipes
++and sockets reach 12554 descriptors. RLIMIT_NOFILE is 13952, and
++raising it, as root too, changes nothing. A descriptor passed over a
++socket shares its open file, so the client's copy of a server descriptor
++costs nothing, but every file a handle refers to is one the in-process
++server opened and keeps open for the handle's life. Games that keep a
++few hundred archives open (Unreal's .pak/.utoc/.ucas or .upk packages,
++mod jars) ran out: "Too many open files", then every open and every DLL
++load failed with STATUS_TOO_MANY_OPENED_FILES.
++
++Read-only regular files get a budget. The client may cache the
++descriptors of the first 48 it asks for, which are never parked: a game
++with few files keeps Wine's behaviour. Later ones are handed out
++uncached, so the client closes its copy after each call, and about 48 of
++them keep their descriptor in the server. Past that, the least recently
++used one is closed ("parked", as patch 0871 does for directories) and
++opened again by its name the next time it is needed: O_RDONLY, the same
++device and inode, a regular file, and the file position restored, or the
++handle fails with STATUS_FILE_DELETED.
++
++- The server is not told when the client is done with an uncached copy,
++  and a synchronous read or seek through it moves the position the
++  parked descriptor saved. One handed out in the last 100 ms is not
++  parked to keep to the budget; the live files may then reach half as
++  many again (72), past which they are parked anyway.
++- When open() fails with EMFILE, every live file that can be is parked
++  and the open is tried once more, so a budget too high for what else
++  the title holds costs reopens instead of failing. Only then can a
++  file handed out in the last 100 ms be parked, and lose its position
++  if the client still uses its copy.
++- A file that is locked, polled, has asyncs queued, a completion port,
++  no links left or a delete pending is not parked. Before a handle sets
++  a file to be deleted, its parked handles are opened again and no
++  longer parked; when one cannot be, the delete is refused with that
++  error rather than leave the handle without a file.
++- A rename through another handle gives the parked and parkable handles
++  its new name, but a parked handle does not follow a rename of a
++  directory above it or a file replaced under its name.
++- A section holds a duplicate of its file's descriptor (dup_fd_object),
++  which shares the open file, so a mapped file keeps its slot for as long
++  as the section exists.
++- WINE_PS5_PARK_FILES=0 parks nothing, =N keeps N files live;
++  WINE_PS5_CACHED_FILES=N lets the client cache N.
++
++The server lock of patch 0770 serializes every request that reaches this
++code, including close_handle and dup_handle run on client threads.
++
++tests/test_wine_file_handles.py keeps 1500 files open and reads each one
++through its file pointer and at explicit offsets, reads a renamed and a
++deleted file through parked handles, then deletes a file 300 handles
++read. Under a host Wine and a 512-descriptor limit, the stock server and
++one built with only PS5_PARK_DIRECTORIES fail it with
++STATUS_TOO_MANY_OPENED_FILES at about 250 open files. One built with
++PS5_PARK_FILES passes, and its server holds at most 120 of the files
++open; with WINE_PS5_PARK_FILES=100000 it passes through the EMFILE
++retry alone. The 300-reader delete is refused there and every handle
++still reads the file.
++---
++ server/fd.c | 309 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
++ 1 file changed, 308 insertions(+), 1 deletion(-)
++
++diff --git a/server/fd.c b/server/fd.c
++index 4c046f47da..54b2b95086 100644
++--- a/server/fd.c
+++++ b/server/fd.c
++@@ -76,6 +76,7 @@
++ #endif
++ #include <sys/stat.h>
++ #include <sys/time.h>
+++#include <time.h>
++ #ifdef MAJOR_IN_MKDEV
++ #include <sys/mkdev.h>
++ #elif defined(MAJOR_IN_SYSMACROS)
++@@ -135,6 +136,12 @@ struct closed_fd
++ #if defined(__PROSPERO__) && !defined(PS5_PARK_DIRECTORIES)
++ #define PS5_PARK_DIRECTORIES
++ #endif
+++#if defined(__PROSPERO__) && !defined(PS5_PARK_FILES)
+++#define PS5_PARK_FILES
+++#endif
+++#if defined(PS5_PARK_FILES) && !defined(PS5_PARK_DIRECTORIES)
+++#error PS5_PARK_FILES uses the parked descriptors of PS5_PARK_DIRECTORIES
+++#endif
++ 
++ struct fd
++ {
++@@ -170,16 +177,39 @@ struct fd
++     unsigned int         ps5_counted :1; /* counted in ps5_directory_fds */
++     int                  ps5_park_flags; /* open() flags to open it again with */
++ #endif
+++#ifdef PS5_PARK_FILES
+++    unsigned int         ps5_file :1;    /* a read-only regular file that may be parked */
+++    unsigned int         ps5_pinned :1;  /* handed to the client to cache: never parked */
+++    unsigned int         ps5_live :1;    /* in ps5_live_files */
+++    struct list          ps5_lru_entry;  /* entry in ps5_live_files */
+++    off_t                ps5_offset;     /* file position, kept while parked */
+++    unsigned long long   ps5_lent_ms;    /* when its descriptor last went to the client uncached */
+++#endif
++ };
++ 
++ #ifdef PS5_PARK_DIRECTORIES
++ static unsigned int ps5_directory_fds;  /* directory fds alive, parked or not (see ps5_park_directory) */
++ static int ps5_reopen_directory( struct fd *fd );
+++#ifdef PS5_PARK_FILES
+++static struct list ps5_live_files = LIST_INIT( ps5_live_files ); /* parkable files with a unix_fd, most recent first */
+++static unsigned int ps5_live_count;    /* entries in ps5_live_files */
+++static unsigned int ps5_pinned_count;  /* files handed to the client to cache */
+++
+++static inline void ps5_touch_file( struct fd *fd )
+++{
+++    if (list_head( &ps5_live_files ) == &fd->ps5_lru_entry) return;
+++    list_remove( &fd->ps5_lru_entry );
+++    list_add_head( &ps5_live_files, &fd->ps5_lru_entry );
+++}
+++#endif
++ 
++ /* 0 when the fd has its unix_fd (again), -1 with the error set. Inline, so
++  * an fd that is not parked costs one test and no call. */
++ static inline int ps5_unpark_directory( struct fd *fd )
++ {
+++#ifdef PS5_PARK_FILES
+++    if (fd->ps5_live) ps5_touch_file( fd );
+++#endif
++     return fd->ps5_parked ? ps5_reopen_directory( fd ) : 0;
++ }
++ #endif
++@@ -1680,6 +1710,14 @@ static void fd_destroy( struct object *obj )
++ 
++ #ifdef PS5_PARK_DIRECTORIES
++     if (fd->ps5_counted) ps5_directory_fds--;
+++#endif
+++#ifdef PS5_PARK_FILES
+++    if (fd->ps5_pinned) ps5_pinned_count--;
+++    if (fd->ps5_live)
+++    {
+++        list_remove( &fd->ps5_lru_entry );
+++        ps5_live_count--;
+++    }
++ #endif
++     if (fd->map_addr) free_map_addr( fd->map_addr, fd->map_size );
++     if (fd->completion) release_object( fd->completion );
++@@ -1793,6 +1831,14 @@ static inline void unmount_fd( struct fd *fd )
++     fd->closed->unix_fd = -1;
++ #ifdef PS5_PARK_DIRECTORIES
++     fd->ps5_parked = 0;  /* dismounted for good: never open it again */
+++#endif
+++#ifdef PS5_PARK_FILES
+++    if (fd->ps5_live)
+++    {
+++        list_remove( &fd->ps5_lru_entry );
+++        ps5_live_count--;
+++        fd->ps5_live = 0;
+++    }
++ #endif
++     fd->closed->disp_flags = 0;
++ 
++@@ -1828,6 +1874,11 @@ static struct fd *alloc_fd_object(void)
++     fd->ps5_parked = 0;
++     fd->ps5_counted = 0;
++     fd->ps5_park_flags = 0;
+++#endif
+++#ifdef PS5_PARK_FILES
+++    fd->ps5_file = fd->ps5_pinned = fd->ps5_live = 0;
+++    fd->ps5_offset = 0;
+++    fd->ps5_lent_ms = 0;
++ #endif
++     fd->completion = NULL;
++     fd->comp_flags = 0;
++@@ -1878,6 +1929,11 @@ struct fd *alloc_pseudo_fd( const struct fd_ops *fd_user_ops, struct object *use
++     fd->ps5_parked = 0;
++     fd->ps5_counted = 0;
++     fd->ps5_park_flags = 0;
+++#endif
+++#ifdef PS5_PARK_FILES
+++    fd->ps5_file = fd->ps5_pinned = fd->ps5_live = 0;
+++    fd->ps5_offset = 0;
+++    fd->ps5_lent_ms = 0;
++ #endif
++     init_async_queue( &fd->read_q );
++     init_async_queue( &fd->write_q );
++@@ -1945,12 +2001,236 @@ static void ps5_park_directory( struct fd *fd, int flags )
++     fd->ps5_parked = 1;
++ }
++ 
+++#ifdef PS5_PARK_FILES
+++/* A PS5 title can hold about 256 open files at once: past that, open()
+++ * fails with EMFILE, whatever RLIMIT_NOFILE says (13952 there), as root too.
+++ * The count is of files opened, not of descriptors: dup() and descriptors
+++ * passed over a socket share the open file and cost nothing, as do pipes and
+++ * sockets. The in-process server opens every file a handle refers to and
+++ * keeps it open for the handle's life, and the client caches its copy, so
+++ * a game that keeps a few hundred archives open (Unreal's .pak/.utoc/.ucas,
+++ * .upk packages, mod jars) ran out ("Too many open files", c000011f), and
+++ * after that no DLL loaded either.
+++ *
+++ * Read-only regular files are given a budget instead. The first
+++ * PS5_CACHED_FILES whose descriptor a client asks for are cached by the
+++ * client as usual and never parked. Any later one is handed out uncached, so
+++ * the client closes its copy after each call, and at most PS5_LIVE_FILES of
+++ * them keep their descriptor in the server: past that, the least recently
+++ * used one is closed ("parked") and opened again by its name the next time
+++ * it is needed, with its file position restored. The name must still lead
+++ * to a regular file with the same device and inode, or the handle fails
+++ * with STATUS_FILE_DELETED, as a parked directory does.
+++ * WINE_PS5_PARK_FILES=0 parks nothing; =N keeps N files live; and
+++ * WINE_PS5_CACHED_FILES=N lets the client cache N files. */
+++#define PS5_CACHED_FILES 48
+++#define PS5_LIVE_FILES   48
+++
+++static int ps5_env_count( const char *name, int fallback )
+++{
+++    const char *value = getenv( name );
+++    int count = value && *value ? atoi( value ) : fallback;
+++    return count < 0 ? 0 : count;
+++}
+++
+++static unsigned int ps5_live_files_limit(void)
+++{
+++    static int limit = -1;
+++    if (limit == -1) limit = ps5_env_count( "WINE_PS5_PARK_FILES", PS5_LIVE_FILES );
+++    return limit;
+++}
+++
+++static unsigned int ps5_cached_files_limit(void)
+++{
+++    static int limit = -1;
+++    if (limit == -1) limit = ps5_env_count( "WINE_PS5_CACHED_FILES", PS5_CACHED_FILES );
+++    return limit;
+++}
+++
+++static void ps5_add_live_file( struct fd *fd )
+++{
+++    list_add_head( &ps5_live_files, &fd->ps5_lru_entry );
+++    fd->ps5_live = 1;
+++    ps5_live_count++;
+++}
+++
+++static void ps5_remove_live_file( struct fd *fd )
+++{
+++    list_remove( &fd->ps5_lru_entry );
+++    fd->ps5_live = 0;
+++    ps5_live_count--;
+++}
+++
+++/* whether a handle to the inode deletes it: its name may go away */
+++static int ps5_inode_deleting( struct inode *inode )
+++{
+++    struct fd *fd_ptr;
+++    struct closed_fd *closed;
+++
+++    LIST_FOR_EACH_ENTRY( fd_ptr, &inode->open, struct fd, inode_entry )
+++        if (fd_ptr->closed && fd_ptr->closed->disp_flags) return 1;
+++    LIST_FOR_EACH_ENTRY( closed, &inode->closed, struct closed_fd, entry )
+++        if (closed->disp_flags) return 1;
+++    return 0;
+++}
+++
+++/* close a live file's descriptor until it is needed again; 0 when it is
+++ * not one that can be opened again as it was */
+++/* A descriptor handed to the client uncached is closed by the client after
+++ * its call, but the server is not told when. A synchronous handle's read or
+++ * seek moves the file position it shares with the server's descriptor, so
+++ * parking one the client may still be using would save a stale position.
+++ * One handed out within the last PS5_LENT_GRACE_MS is therefore not parked
+++ * to keep to the budget, which the live files may then exceed for a moment.
+++ * Only when open() fails with EMFILE may it be (ps5_free_files): a call
+++ * that takes longer between receiving the descriptor and using it, or one
+++ * caught by that, could still lose its position. */
+++#define PS5_LENT_GRACE_MS 100
+++
+++static unsigned long long ps5_now_ms(void)
+++{
+++    struct timespec ts;
+++
+++    clock_gettime( CLOCK_MONOTONIC, &ts );
+++    return (unsigned long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+++}
+++
+++static int ps5_park_file( struct fd *fd, int force )
+++{
+++    struct stat st;
+++    off_t offset;
+++
+++    if (fd->unix_fd == -1 || !fd->closed || fd->closed->unix_fd != fd->unix_fd ||
+++        !list_empty( &fd->inode->locks ) || !list_empty( &fd->locks ) ||
+++        async_queued( &fd->read_q ) || async_queued( &fd->write_q ) || async_queued( &fd->wait_q ) ||
+++        fd->completion || ps5_inode_deleting( fd->inode ))
+++        return 0;
+++    if (!force && fd->ps5_lent_ms && ps5_now_ms() - fd->ps5_lent_ms < PS5_LENT_GRACE_MS) return 0;
+++    /* every fd has a poll slot; one that is polled keeps its descriptor */
+++    if (fd->poll_index != -1 && (pollfd[fd->poll_index].fd != -1 || pollfd[fd->poll_index].events)) return 0;
+++    /* a file deleted under its name cannot be opened again */
+++    if (fstat( fd->unix_fd, &st ) == -1 || !st.st_nlink) return 0;
+++    if ((offset = lseek( fd->unix_fd, 0, SEEK_CUR )) == -1) return 0;
+++    close( fd->unix_fd );
+++    fd->unix_fd = fd->closed->unix_fd = -1;
+++    fd->ps5_offset = offset;
+++    fd->ps5_parked = 1;
+++    ps5_remove_live_file( fd );
+++    return 1;
+++}
+++
+++/* park the least recently used live files until no more than limit are
+++ * left, never keep; force parks recently lent ones too, which are otherwise
+++ * left live only up to half as many again, so the server's files stay well
+++ * below what the title can hold and other code's opens keep working */
+++static void ps5_trim_live_files( unsigned int limit, struct fd *keep, int force )
+++{
+++    struct list *ptr, *prev;
+++
+++    for (ptr = list_tail( &ps5_live_files ); ptr && ps5_live_count > limit; ptr = prev)
+++    {
+++        struct fd *fd = LIST_ENTRY( ptr, struct fd, ps5_lru_entry );
+++        prev = list_prev( &ps5_live_files, ptr );
+++        if (fd != keep) ps5_park_file( fd, force );
+++    }
+++    if (!force && ps5_live_count > limit + limit / 2) ps5_trim_live_files( limit + limit / 2, keep, 1 );
+++}
+++
+++/* open() failed with EMFILE: park every live file that can be, so that a
+++ * budget set too high for what else the title holds costs reopens instead
+++ * of failing; non-zero when one was parked and the open is worth a retry */
+++static int ps5_free_files( struct fd *keep )
+++{
+++    unsigned int count = ps5_live_count;
+++
+++    ps5_trim_live_files( 0, keep, 1 );
+++    return ps5_live_count < count;
+++}
+++
+++/* a read-only regular file just opened: from now on it can be parked */
+++static void ps5_track_file( struct fd *fd, int flags )
+++{
+++    unsigned int limit = ps5_live_files_limit();
+++
+++    if (!limit || !fd->cacheable || !fd->inode || !fd->closed || !fd->unix_name || fd->closed->disp_flags) return;
+++    fd->ps5_file = 1;
+++    fd->ps5_park_flags = O_RDONLY | (flags & ~(O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC));
+++    ps5_add_live_file( fd );
+++    ps5_trim_live_files( limit, fd, 0 );
+++}
+++
+++/* the first files a client asks for are its to cache, the others it gets
+++ * for one call at a time; called once the fd has its unix_fd */
+++static void ps5_set_file_cacheable( struct fd *fd )
+++{
+++    if (!fd->ps5_file || fd->ps5_pinned || !fd->cacheable) return;
+++    if (ps5_pinned_count < ps5_cached_files_limit())
+++    {
+++        fd->ps5_pinned = 1;
+++        ps5_pinned_count++;
+++        if (fd->ps5_live) ps5_remove_live_file( fd );
+++    }
+++    else fd->cacheable = 0;
+++    if (!fd->cacheable) fd->ps5_lent_ms = ps5_now_ms();
+++}
+++
+++static int ps5_reopen_file( struct fd *fd );
+++
+++/* The name of a file about to be deleted goes away: open the parked handles
+++ * to it again while they still can, and never park them again. -1, with the
+++ * error set, when one cannot be opened: it stays parked, and the delete must
+++ * be refused, or that handle would be lost. */
+++static int ps5_untrack_inode_files( struct inode *inode )
+++{
+++    struct fd *fd_ptr;
+++
+++    LIST_FOR_EACH_ENTRY( fd_ptr, &inode->open, struct fd, inode_entry )
+++    {
+++        if (!fd_ptr->ps5_file) continue;
+++        if (fd_ptr->ps5_parked && ps5_reopen_file( fd_ptr ) == -1) return -1;
+++        if (fd_ptr->ps5_live) ps5_remove_live_file( fd_ptr );
+++        fd_ptr->ps5_file = 0;
+++    }
+++    return 0;
+++}
+++
+++static int ps5_reopen_file( struct fd *fd )
+++{
+++    struct stat st;
+++    int unix_fd;
+++
+++    ps5_trim_live_files( ps5_live_files_limit() ? ps5_live_files_limit() - 1 : 0, fd, 0 );
+++    if ((unix_fd = open( fd->unix_name, fd->ps5_park_flags )) == -1 && errno == EMFILE && ps5_free_files( fd ))
+++        unix_fd = open( fd->unix_name, fd->ps5_park_flags );
+++    if (unix_fd == -1)
+++    {
+++        file_set_error();
+++        return -1;
+++    }
+++    if (fstat( unix_fd, &st ) == -1 || !S_ISREG( st.st_mode ) ||
+++        st.st_dev != fd->inode->device->dev || st.st_ino != fd->inode->ino ||
+++        lseek( unix_fd, fd->ps5_offset, SEEK_SET ) == -1)
+++    {
+++        close( unix_fd );
+++        set_error( STATUS_FILE_DELETED );
+++        return -1;
+++    }
+++    fd->unix_fd = fd->closed->unix_fd = unix_fd;
+++    fd->ps5_parked = 0;
+++    if (!fd->ps5_pinned) ps5_add_live_file( fd );
+++    return 0;
+++}
+++#endif
+++
++ /* a parked fd's unix_fd, opened again by its name (see ps5_unpark_directory) */
++ static int ps5_reopen_directory( struct fd *fd )
++ {
++     struct stat st;
++     int unix_fd;
++ 
+++#ifdef PS5_PARK_FILES
+++    if (fd->ps5_file) return ps5_reopen_file( fd );
+++#endif
++     if ((unix_fd = open( fd->unix_name, fd->ps5_park_flags )) == -1)
++     {
++         file_set_error();
++@@ -2250,7 +2530,12 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
++     }
++     else rw_mode = O_RDONLY;
++ 
++-    if ((fd->unix_fd = open( name, rw_mode | (flags & ~O_TRUNC), *mode )) == -1)
+++    fd->unix_fd = open( name, rw_mode | (flags & ~O_TRUNC), *mode );
+++#ifdef PS5_PARK_FILES
+++    if (fd->unix_fd == -1 && errno == EMFILE && ps5_free_files( NULL ))
+++        fd->unix_fd = open( name, rw_mode | (flags & ~O_TRUNC), *mode );
+++#endif
+++    if (fd->unix_fd == -1)
++     {
++         /* if we tried to open a directory for write access, retry read-only */
++         if (errno == EISDIR)
++@@ -2366,6 +2651,13 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
++ 
++ #ifdef PS5_PARK_DIRECTORIES
++     if (S_ISDIR( st.st_mode )) ps5_park_directory( fd, flags );
+++#endif
+++#ifdef PS5_PARK_FILES
+++    if (fd->inode && fd->closed && fd->closed->disp_flags)
+++    {
+++        if (ps5_untrack_inode_files( fd->inode ) == -1) goto error;
+++    }
+++    else if (S_ISREG( st.st_mode ) && rw_mode == O_RDONLY) ps5_track_file( fd, flags );
++ #endif
++     if (root_fd != -1) fchdir( server_dir_fd ); /* go back to the server dir */
++     return fd;
++@@ -3072,6 +3364,12 @@ static void set_fd_disposition( struct fd *fd, unsigned int flags )
++         }
++     }
++ 
+++#ifdef PS5_PARK_FILES
+++    if (((flags & FILE_DISPOSITION_DELETE) ||
+++         ((fd->options & FILE_DELETE_ON_CLOSE) && !(flags & FILE_DISPOSITION_ON_CLOSE))) &&
+++        ps5_untrack_inode_files( fd->inode ) == -1)
+++        return;
+++#endif
++     if (flags & FILE_DISPOSITION_ON_CLOSE)
++         fd->options &= ~FILE_DELETE_ON_CLOSE;
++ 
++@@ -3226,7 +3524,13 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
++ 
++         LIST_FOR_EACH_ENTRY( fd_ptr, &fd->inode->open, struct fd, inode_entry )
++         {
+++#ifdef PS5_PARK_FILES
+++            /* a live file may be parked later */
+++            if (fd_ptr == fd || !(fd_ptr->ps5_parked || fd_ptr->ps5_file)) continue;
+++            if (!(unix_name = strdup( fd->unix_name ))) continue;
+++#else
++             if (!fd_ptr->ps5_parked || !(unix_name = strdup( fd->unix_name ))) continue;
+++#endif
++             free( fd_ptr->unix_name );
++             fd_ptr->closed->unix_name = fd_ptr->unix_name = unix_name;
++         }
++@@ -3390,6 +3694,9 @@ DECL_HANDLER(get_handle_fd)
++     if ((fd = get_handle_fd_obj( current->process, req->handle, 0 )))
++     {
++         int unix_fd = get_unix_fd( fd );
+++#ifdef PS5_PARK_FILES
+++        if (unix_fd != -1) ps5_set_file_cacheable( fd );
+++#endif
++         reply->cacheable = fd->cacheable;
++         if (unix_fd != -1)
++         {
+-- 
+2.43.0
+

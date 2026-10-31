@@ -7747,12 +7747,17 @@ static void test_msi(void)
     write_text(file, "MZ");
     path(file, sizeof(file), "%s/prefixes/physx-hand/system.reg", game_root);
     write_text(file, "WINE REGISTRY Version 2\n#arch=win64\n");
-    CHECK(pc5_physx_register(game_root, "physx-hand", NULL, NULL) == 3, "registered, and Common in PATH");
+    CHECK(pc5_physx_register(game_root, "physx-hand", NULL, NULL) == 15,
+          "registered, its 2.8.1 engine listed, and Common and the engine's folder in PATH");
+    CHECK(file_holds_text(file, "[Software\\\\Wow6432Node\\\\Ageia Technologies\\\\PhysX_A32_Engines]\n\"2.8.1\"=dword:00000036\n"),
+          "2.8.1 under PhysX_A32_Engines");
     CHECK(file_holds_text(file, "[Software\\\\Wow6432Node\\\\Ageia Technologies]\n\"PhysXCore Path\"=\"C:\\\\Program Files (x86)"
                                 "\\\\NVIDIA Corporation\\\\PhysX\\\\Engine\"\n") &&
           file_holds_text(file, "[Software\\\\Ageia Technologies]\n"), "both registry views");
     path(file, sizeof(file), "%s/prefixes/physx-hand/pc5/path.txt", game_root);
     CHECK(file_holds_text(file, "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common\n"), "Common in PATH");
+    CHECK(file_holds_text(file, "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Engine\\v2.8.1\n"),
+          "the engine's folder in PATH");
     CHECK(pc5_physx_register(game_root, "physx-hand", NULL, NULL) == 0, "once");
     path(file, sizeof(file), "%s/prefixes/physx-none/system.reg", game_root);
     write_text(file, "WINE REGISTRY Version 2\n");

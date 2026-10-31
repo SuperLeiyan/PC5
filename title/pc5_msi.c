@@ -1581,20 +1581,50 @@ int pc5_physx_register(const char *root, const char *prefix, void (*log)(void *c
         if (!failed && !append_text(path, &text)) changed |= 1;
         pc5_buf_free(&text);
     }
-    /* The engine's PhysXCore.dll imports the CUDA runtime from PhysX\Common, which the setup
-     * program puts in PATH. */
-    if (pc5_is_dir(common) && pc5_format(path, sizeof(path), "%s/pc5/path.txt", prefix_dir) == 0 &&
-        !file_has(path, common_win)) {
-        Pc5Buf line = { 0 };
+    /* PhysX 2.8.1's engine is also listed under PhysX_A32_Engines, by its setup program: a
+     * game's PhysXLoader that finds no entry for it reports "Error initializing PhysX". */
+    if (pc5_format(path, sizeof(path), "%s/v2.8.1", engine) == 0 && pc5_is_dir(path) &&
+        pc5_format(path, sizeof(path), "%s/system.reg", prefix_dir) == 0 && !file_has(path, "PhysX_A32_Engines")) {
+        Pc5Buf text = { 0 };
+        int failed = 0;
+        for (int view = 0; view < 2 && !failed; view++)
+            failed = pc5_buf_puts(&text, view ? "\n[Software\\\\Wow6432Node\\\\Ageia Technologies\\\\PhysX_A32_Engines]\n"
+                                              : "\n[Software\\\\Ageia Technologies\\\\PhysX_A32_Engines]\n") ||
+                     pc5_buf_puts(&text, "\"2.8.1\"=dword:00000036\n");
+        if (!failed && !append_text(path, &text)) changed |= 4;
+        pc5_buf_free(&text);
+    }
+    /* The engine's PhysXCore.dll imports the CUDA runtime (cudart32_65.dll), which the setup
+     * program puts in PhysX\Common or beside the engine and in PATH. */
+    if (pc5_format(path, sizeof(path), "%s/pc5/path.txt", prefix_dir) == 0) {
+        Pc5Buf lines = { 0 };
         char folder[PC5_PATH];
-        if (!pc5_format(folder, sizeof(folder), "%s/pc5", prefix_dir) && !pc5_mkdirs(folder) &&
-            !pc5_buf_printf(&line, "%s\n", common_win) && !append_text(path, &line))
-            changed |= 2;
-        pc5_buf_free(&line);
+        int added = 0, failed = 0;
+        if (pc5_is_dir(common) && !file_has(path, common_win)) {
+            failed |= pc5_buf_printf(&lines, "%s\n", common_win);
+            added |= 2;
+        }
+        DIR *d = opendir(engine);
+        struct dirent *e;
+        while (d && !failed && (e = readdir(d))) {
+            char version[PC5_PATH], win[PC5_PATH];
+            if ((e->d_name[0] != 'v' && e->d_name[0] != 'V') || !strchr(e->d_name, '.') ||
+                pc5_join(version, sizeof(version), engine, e->d_name) || !pc5_is_dir(version) ||
+                pc5_format(win, sizeof(win), "%s\\%s", engine_win, e->d_name) || file_has(path, win))
+                continue;
+            failed |= pc5_buf_printf(&lines, "%s\n", win);
+            added |= 8;
+        }
+        if (d) closedir(d);
+        if (added && !failed && !pc5_format(folder, sizeof(folder), "%s/pc5", prefix_dir) && !pc5_mkdirs(folder) &&
+            !append_text(path, &lines))
+            changed |= added;
+        pc5_buf_free(&lines);
     }
     if (changed)
-        say_line(log, context, "PC5 physx registered%s%s", changed & 1 ? " PhysXCore Path" : "",
-                 changed & 2 ? " Common in PATH" : "");
+        say_line(log, context, "PC5 physx registered%s%s%s%s", changed & 1 ? " PhysXCore Path" : "",
+                 changed & 4 ? " PhysX_A32_Engines 2.8.1" : "", changed & 2 ? " Common in PATH" : "",
+                 changed & 8 ? " engine folders in PATH" : "");
     return changed;
 }
 
