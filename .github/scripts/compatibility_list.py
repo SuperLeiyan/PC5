@@ -14,7 +14,7 @@ places.
   reply (labelled "needs testing" by no_reply.py: it didn't run for its reporter, but another
   copy or version may); unresolved (it doesn't run) once it is closed as not planned
   otherwise; playable with issues once it is closed labelled "playable with issues" (it runs, with
-  a setting or with something still wrong, which the issue says). An issue labelled "needs steam" (its copy of the game needs Steam or another
+  a setting or with something still wrong, which the issue says). An issue labelled "needs store app" (its copy of the game needs Steam, the Xbox app or another
   store's client running, which PC5 can't do) shows as such, not as a game that doesn't run:
   another copy may. Labelled while open, it gets one comment saying so and is closed as not
   planned. An issue closed as a duplicate
@@ -75,10 +75,10 @@ UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
 NEEDS_TESTING = "🧪 Needs testing"    # an issue closed for no reply (no_reply.py's label)
 NO_REPLY = "needs testing"
 PLAYABLE = "playable with issues"   # an issue closed with this label: it runs, with a setting or a problem
-NEEDS_STORE = "🏪 This copy needs Steam"   # an issue labelled STORE: the copy, not the game
-STORE = "needs steam"
-STORE_ABOUT = "This copy needs Steam or another store's client running, which PC5 can't do: another copy may run"
-STORED = "<!-- pc5-compatibility: needs steam -->"   # its comment when it closes such an issue
+NEEDS_STORE = "🏪 Copy needs its store's app"   # an issue labelled STORE: the copy, not the game
+STORE = "needs store app"   # "needs steam" before 2.0.3: the label was renamed, so its issues kept it
+STORE_ABOUT = "This copy needs its store's app (Steam, Xbox app, EA app...) running: another copy may run"
+STORED = "<!-- pc5-compatibility: needs steam -->"   # its comment when it closes such an issue (unchanged: it marks the old ones too)
 SHOWN = ["Works perfectly", "Playable with issues", FIX_READY, LOOKED_AT, NEEDS_TESTING, NEEDS_STORE, UNRESOLVED]
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
@@ -88,7 +88,7 @@ TURNED_AWAY = "<!-- pc5-compatibility: issue open -->"   # its comment on a repo
 OWNER_LINE = re.compile(r"^\s*(?:\*\*)?List (notes|settings|version):(?:\*\*)?\s*(.+?)\s*$", re.I | re.M)
 NUMERALS = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
 ISSUE_STATE = {"🔍 Being looked at": "open", FIX_READY: "fix out, needs testing", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run",
-               NEEDS_STORE: "this copy needs Steam"}
+               NEEDS_STORE: "this copy needs its store's app"}
 
 
 def game_key(name: str) -> str:
@@ -305,7 +305,7 @@ def main() -> int:
               "writes one for you). The game shows as being looked at while the issue is open (or as a fix out, needing testing, "
               "once a PC5 that should fix it is out), then as working "
               "perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed "
-              "as not planned. A copy of a game that needs Steam or another store's client running, which PC5 can't "
+              "as not planned. A copy of a game that needs its store's app running (Steam, the Xbox app or another), which PC5 can't "
               "do, shows as such: another copy of it may run. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
               "needing testing: it didn't run for them, but another copy or version of it may. Tested it? Reply on "
               "the issue, or open a new one with your log. While a game's issue is open, the issue is its row and "
@@ -447,8 +447,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
                     "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "",
                     "settings": extra.get("settings", ""),
                     "notes": ("No reply: another copy or version may run. " + saw).strip() if shown == NEEDS_TESTING
-                             else "This copy needs Steam (or another store's client) running, which PC5 can't do: "
-                                  "a copy that runs without it may run." if shown == NEEDS_STORE
+                             else "This copy needs its store's app running (Steam, the Xbox app or another), which PC5 "
+                                  "can't do: another copy of the game may run." if shown == NEEDS_STORE
                              else "It runs: the issue says what to set, or what is still wrong."
                              if shown == "Playable with issues"
                              else saw if shown != FIXED else "",
@@ -478,19 +478,20 @@ def close_store_copy(node: dict, owner: str, name: str) -> None:
     if not any(STORED in (c["body"] or "") for c in node["comments"]["nodes"]):
         body = "\n".join([
             STORED,
-            "This copy of the game needs Steam (or another store's client) running, which PC5 can't do: a PS5 "
-            "title can't run a store's client beside the game. So I'm closing this. The "
+            "This copy of the game needs its store's app running (Steam, the Xbox app or another), and the PS5 can't run "
+            "a store's app next to the game. PC5's Steam emulator stands in for Steam for most Steam copies, but this "
+            "copy needs more than that. So I'm closing this. The "
             f"[game compatibility list](https://github.com/{owner}/{name}/wiki/Game-compatibility) shows the game as "
-            "**this copy needs Steam**, not as a game that doesn't run.",
+            "**copy needs its store's app**, not as a game that doesn't run.",
             "",
-            "A copy that runs without its store's client may run. If you try one, please open a new issue with its log.",
+            "Another copy of the game may run. If you try one, please open a new issue with its log.",
         ])
         if graphql("""mutation($id: ID!, $body: String!) { addComment(input: {subjectId: $id, body: $body}) { clientMutationId } }""",
                    fatal=False, id=node["id"], body=body) is None:
             return
     if graphql("""mutation($id: ID!) { closeIssue(input: {issueId: $id, stateReason: NOT_PLANNED}) { issue { id } } }""",
                fatal=False, id=node["id"]) is not None:
-        print(f"compatibility list: #{node['number']} needs Steam: closed")
+        print(f"compatibility list: #{node['number']} needs its store's app: closed")
 
 
 def store_label(owner: str, name: str) -> None:
