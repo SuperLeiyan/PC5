@@ -4406,6 +4406,25 @@ int pc5_ui_update(Pc5Ui *ui, const Pc5Input *input, uint64_t now_ms)
             /* Steam: a program in Steam's DRM wrapper can't start without it; Steam's library
              * gets the emulator in its place, or back, as the game's menu says. */
             if (own && !pc5_game_program(ui->root, ui->launch_id, program, sizeof(program))) {
+                /* VKD3D-Proton keeps a Direct3D 12 game's compiled pipelines in vkd3d-proton.cache in
+                 * its working folder (the program's), written to vkd3d-proton.cache.write while it
+                 * runs and merged at the next start: what the last run left, for the log. */
+                {
+                    char dir[PC5_PATH], cache[PC5_PATH], pending[PC5_PATH];
+                    struct stat st;
+                    long long kept = -1, written = -1;
+                    char *slash;
+                    pc5_copy(dir, sizeof(dir), program);
+                    if ((slash = strrchr(dir, '/'))) *slash = 0;
+                    if (!pc5_format(cache, sizeof(cache), "%s/vkd3d-proton.cache", dir) && !stat(cache, &st))
+                        kept = (long long)st.st_size;
+                    if (!pc5_format(pending, sizeof(pending), "%s/vkd3d-proton.cache.write", dir) && !stat(pending, &st))
+                        written = (long long)st.st_size;
+                    if (kept >= 0 || written >= 0)
+                        say(ui, "PC5 vkd3d cache in=%s cache=%lld write=%lld", dir, kept, written);
+                    else
+                        say(ui, "PC5 vkd3d cache in=%s none", dir);
+                }
                 if (pc5_steam_stub(program)) {
                     snprintf(title, sizeof(title), "%s needs Steam", ui->library.games[index].title);
                     say(ui, "PC5 problem play %s: SteamStub (.bind) in %s", ui->launch_id, program);
