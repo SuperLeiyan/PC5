@@ -8,7 +8,8 @@ places.
   headings, each followed by its answer). It lists as posted: works perfectly, or playable with
   issues. Each one gets one comment once the page with it is published.
 - A game that doesn't run: an issue in this repository, with the game's log. It lists by its
-  state: being looked at while it is open; working perfectly once it is closed as completed
+  state: being looked at while it is open (a fix out, needing testing, while it is labelled "fix
+  ready"); working perfectly once it is closed as completed
   (unless a player's report lists the game already); needs testing once it is closed for no
   reply (labelled "needs testing" by no_reply.py: it didn't run for its reporter, but another
   copy or version may); unresolved (it doesn't run) once it is closed as not planned
@@ -66,6 +67,9 @@ RESULTS = {  # the form's answers, best first, with the mark the table shows
 }
 NOT_RUNNING = ("Starts but not playable", "Doesn't start")   # older reports: their issue lists the game
 LOOKED_AT = "🔍 Being looked at"     # an issue still open
+FIX_READY = "🔧 Fix out, needs testing"   # an open issue labelled FIX_LABEL: a PC5 out now should fix it
+FIX_LABEL = "fix ready"
+FIX_ABOUT = "A PC5 that's out now should fix this: waiting for the reporter to test it"
 FIXED = "Works perfectly"           # an issue closed as completed
 UNRESOLVED = "❌ Unresolved: doesn't run"   # an issue closed as not planned
 NEEDS_TESTING = "🧪 Needs testing"    # an issue closed for no reply (no_reply.py's label)
@@ -75,7 +79,7 @@ NEEDS_STORE = "🏪 This copy needs Steam"   # an issue labelled STORE: the copy
 STORE = "needs steam"
 STORE_ABOUT = "This copy needs Steam or another store's client running, which PC5 can't do: another copy may run"
 STORED = "<!-- pc5-compatibility: needs steam -->"   # its comment when it closes such an issue
-SHOWN = ["Works perfectly", "Playable with issues", LOOKED_AT, NEEDS_TESTING, NEEDS_STORE, UNRESOLVED]
+SHOWN = ["Works perfectly", "Playable with issues", FIX_READY, LOOKED_AT, NEEDS_TESTING, NEEDS_STORE, UNRESOLVED]
 MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so it is made once
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
@@ -83,7 +87,7 @@ LISTED_ALREADY = "<!-- pc5-compatibility: listed already -->"   # its comment on
 TURNED_AWAY = "<!-- pc5-compatibility: issue open -->"   # its comment on a report posted while the game's issue is open
 OWNER_LINE = re.compile(r"^\s*(?:\*\*)?List (notes|settings|version):(?:\*\*)?\s*(.+?)\s*$", re.I | re.M)
 NUMERALS = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
-ISSUE_STATE = {"🔍 Being looked at": "open", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run",
+ISSUE_STATE = {"🔍 Being looked at": "open", FIX_READY: "fix out, needs testing", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run",
                NEEDS_STORE: "this copy needs Steam"}
 
 
@@ -298,7 +302,8 @@ def main() -> int:
         lines.append("| *No reports yet* | | | | | | | |")
     lines += ["", "A game that crashes, doesn't start or isn't playable: open an "
               f"[issue](https://github.com/{owner}/{name}/issues/new/choose) with its log (PC5's **Report on GitHub** "
-              "writes one for you). The game shows as being looked at while the issue is open, then as working "
+              "writes one for you). The game shows as being looked at while the issue is open (or as a fix out, needing testing, "
+              "once a PC5 that should fix it is out), then as working "
               "perfectly once the issue is closed as completed, or as unresolved (it doesn't run) once it is closed "
               "as not planned. A copy of a game that needs Steam or another store's client running, which PC5 can't "
               "do, shows as such: another copy of it may run. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
@@ -413,7 +418,7 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             if STORE in issue["labels"]:
                 shown = NEEDS_STORE
             elif node["state"] == "OPEN":
-                shown = LOOKED_AT
+                shown = FIX_READY if FIX_LABEL in issue["labels"] else LOOKED_AT
             elif NO_REPLY in issue["labels"]:
                 shown = NEEDS_TESTING
             elif PLAYABLE in issue["labels"]:
@@ -489,22 +494,24 @@ def close_store_copy(node: dict, owner: str, name: str) -> None:
 
 
 def store_label(owner: str, name: str) -> None:
-    """The STORE label, made the first time, so it is there to choose."""
+    """The STORE and FIX_LABEL labels, made the first time, so they are there to choose."""
     url = f"https://api.github.com/repos/{owner}/{name}/labels"
     headers = {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"}
-    try:
-        urllib.request.urlopen(urllib.request.Request(f"{url}/{urllib.parse.quote(STORE)}", headers=headers), timeout=60)
-        return
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            print(f"::warning::compatibility list: the '{STORE}' label couldn't be looked up ({error.code})")
-            return
-    try:
-        urllib.request.urlopen(urllib.request.Request(url, method="POST", headers=headers, data=json.dumps(
-            {"name": STORE, "color": "fbca04", "description": STORE_ABOUT}).encode()), timeout=60)
-        print(f"compatibility list: the '{STORE}' label made")
-    except urllib.error.HTTPError as error:
-        print(f"::warning::compatibility list: the '{STORE}' label couldn't be made ({error.code})")
+    for label_name, color, about in ((STORE, "fbca04", STORE_ABOUT), (FIX_LABEL, "0e8a16", FIX_ABOUT)):
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"{url}/{urllib.parse.quote(label_name)}", headers=headers),
+                                   timeout=60)
+            continue
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                print(f"::warning::compatibility list: the '{label_name}' label couldn't be looked up ({error.code})")
+                continue
+        try:
+            urllib.request.urlopen(urllib.request.Request(url, method="POST", headers=headers, data=json.dumps(
+                {"name": label_name, "color": color, "description": about}).encode()), timeout=60)
+            print(f"compatibility list: the '{label_name}' label made")
+        except urllib.error.HTTPError as error:
+            print(f"::warning::compatibility list: the '{label_name}' label couldn't be made ({error.code})")
 
 
 def label(shown: str) -> str:
