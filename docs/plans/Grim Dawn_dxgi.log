@@ -1,0 +1,44 @@
+info:  Game: Grim Dawn.exe
+info:  DXVK: 2.6.2
+info:  Build: x86_64 gcc 13.0.0
+info:  Found config env: dxvk.logFastLinkFailures=True
+info:  Effective configuration:
+info:    dxvk.logFastLinkFailures = True
+info:  Vulkan: Found vkGetInstanceProcAddr in winevulkan.dll @ 0x13fbf2e7e0
+info:  Built-in extension providers:
+info:    Platform WSI
+info:    OpenVR
+info:    OpenXR
+info:  OpenVR: could not open registry key, status 2
+info:  OpenVR: Failed to locate module
+info:  Enabled instance extensions:
+info:    VK_EXT_surface_maintenance1
+info:    VK_KHR_get_surface_capabilities2
+info:    VK_KHR_surface
+info:    VK_KHR_win32_surface
+info:  PS5:
+info:    Driver : radv 26.2.0
+info:    Memory Heap[0]: 
+info:      Size: 4096 MiB
+info:      Flags: 0x0
+info:      Memory Type[2]: Property Flags = 0x6
+info:      Memory Type[5]: Property Flags = 0xe
+info:      Memory Type[6]: Property Flags = 0xe
+info:      Memory Type[8]: Property Flags = 0xc6
+info:      Memory Type[10]: Property Flags = 0xce
+info:    Memory Heap[1]: 
+info:      Size: 8192 MiB
+info:      Flags: 0x1
+info:      Memory Type[0]: Property Flags = 0x1
+info:      Memory Type[1]: Property Flags = 0x1
+info:      Memory Type[3]: Property Flags = 0x7
+info:      Memory Type[4]: Property Flags = 0x7
+info:      Memory Type[7]: Property Flags = 0xc1
+info:      Memory Type[9]: Property Flags = 0xc7
+err:   readMonitorEdidFromKey: Failed to get EDID reg key size
+err:   DXGI: Failed to parse display metadata + colorimetry info, using blank.
+warn:  DXGI: MakeWindowAssociation: Ignoring flags
+info:  Setting display mode: 1920x1080@60
+info:  Setting display mode: 1920x1080@60
+info:  Restoring display mode: 1920x1080@60
+info:  Setting display mode: 1920x1080@60
