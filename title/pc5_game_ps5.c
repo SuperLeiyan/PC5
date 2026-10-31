@@ -149,6 +149,27 @@ static unsigned cpu_count(void)
     return online > 0 ? (unsigned)online : 1u;
 }
 
+/* The console's own count of each CPU's time (FreeBSD's kern.cp_times: user, nice,
+ * system, interrupt and idle ticks a CPU, as longs), of everything it runs and not
+ * the game alone: busy is all but idle. 0 when the console doesn't give it. */
+static unsigned cpu_ticks(uint64_t *busy, uint64_t *total, unsigned most)
+{
+    enum { STATES = 5, IDLE = 4, MOST = 64 };
+    long times[MOST * STATES];
+    size_t length = sizeof(times);
+
+    if (sysctlbyname("kern.cp_times", times, &length, NULL, 0) || length < sizeof(long) * STATES) return 0;
+    unsigned count = (unsigned)(length / (sizeof(long) * STATES));
+    if (count > most) count = most;
+    for (unsigned i = 0; i < count; i++) {
+        uint64_t all = 0;
+        for (unsigned state = 0; state < STATES; state++) all += (uint64_t)times[i * STATES + state];
+        total[i] = all;
+        busy[i] = all - (uint64_t)times[i * STATES + IDLE];
+    }
+    return count;
+}
+
 static int temperature(int sensor, int *celsius)
 {
     return sensor ? sceKernelGetSocSensorTemperature(0, celsius) : sceKernelGetCpuTemperature(celsius);
@@ -364,7 +385,7 @@ void pc5_game_ps5_ops(Pc5GameOps *ops, void (*log)(const char *line))
     pc5_system_text(system, sizeof(system));
     if (log) log(system);
     *ops = (Pc5GameOps){ .light_bar = light_bar, .light_bar_reset = light_bar_reset, .triggers = triggers,
-                         .cursor = cursor, .cursor_magnify = cursor_magnify, .log = log, .cpu_time_us = cpu_time_us, .cpu_count = cpu_count,
+                         .cursor = cursor, .cursor_magnify = cursor_magnify, .log = log, .cpu_time_us = cpu_time_us, .cpu_count = cpu_count, .cpu_ticks = cpu_ticks,
                          .temperature = temperature, .memory = memory, .keyboard_open = keyboard_open,
                          .keyboard_state = keyboard_state, .keyboard_close = keyboard_close };
 }

@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bornaradusin <bornaradusin@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 12:00:00 +0000
+Subject: [PATCH 76/76] PC5: the console GPU's share of each second on the overlay,
+ and a line a second in the log
+
+The overlay gets a GPU line (PW_PC5_HUD_GPU, after the CPU's): how much
+of the last second the console's GPU spent running the game's work, from
+RADV's timestamps around each submission (PC5's patches/radv 0002,
+radv_ps5_gpu_busy_ns, taken weakly: a RADV without it leaves the line
+out). With seven lines on they are drawn 8 rows apart in 3 of margin, so
+the box (61 rows) keeps to the 64x64 image; up to six are as before.
+
+PwPc5HudStats also carries the busiest of the console's CPUs, which the
+title measures, for the log. While the overlay is on, libvulkan.prx logs
+each second: "pw_pc5_hud: second fps=<n> frame_us=<n> gpu=<%> cpu=<%>
+busiest_cpu=<%>", so one log shows whether a dip in the frame rate comes
+with the GPU or a CPU at its limit.
+---
+ wine/ps5/pw_pc5_hud.h     | 29 +++++++++++++++++++-------
+ wine/ps5/pw_vulkan_radv.c | 44 +++++++++++++++++++++++++++++++++++----
+ 2 files changed, 61 insertions(+), 12 deletions(-)
+
+diff --git a/wine/ps5/pw_pc5_hud.h b/wine/ps5/pw_pc5_hud.h
+index 2fc2fbb..2a4932c 100644
+--- a/wine/ps5/pw_pc5_hud.h
++++ b/wine/ps5/pw_pc5_hud.h
+@@ -100,16 +100,18 @@ enum {
+     PW_PC5_HUD_CPU_TEMP = 8u,
+     PW_PC5_HUD_SOC_TEMP = 16u,
+     PW_PC5_HUD_MEMORY = 32u,
+-    PW_PC5_HUD_ALL = 63u,
++    PW_PC5_HUD_GPU = 256u,       /* after the two flags below, which were there first */
++    PW_PC5_HUD_ALL = 63u | 256u,
+     /* Not a line: the lines in twice the size, two at a time, taking turns every
+      * PW_PC5_HUD_TURN_S seconds when more are on (Settings › Overlay › Size). */
+     PW_PC5_HUD_LARGE = 64u,
+     /* Not a line either: the image shown at twice its size by the display, its
+      * cursor magnified (sceVideoOutCursorSet2xMagnify; Size: Extra large). */
+     PW_PC5_HUD_DOUBLE = 128u,
+-    PW_PC5_HUD_FLAGS = 255u,     /* the lines, LARGE and DOUBLE */
+-    PW_PC5_HUD_LINES = 6,
++    PW_PC5_HUD_FLAGS = 511u,     /* the lines, LARGE and DOUBLE */
++    PW_PC5_HUD_LINES = 7,
+     PW_PC5_HUD_PITCH = 9,        /* a line: 7 rows of glyph and 2 of space */
++    PW_PC5_HUD_TIGHT_PITCH = 8,  /* seven lines, to fit the image: 1 row of space */
+     PW_PC5_HUD_LARGE_PITCH = 30, /* a large line: its value 14 rows high, its label 7 under it */
+     PW_PC5_HUD_TURN_S = 3,
+ };
+@@ -118,7 +120,9 @@ typedef struct PwPc5HudStats {
+     unsigned lines;              /* PW_PC5_HUD_*: what is shown */
+     unsigned fps;                /* frames shown in the last second */
+     uint32_t frame_us;           /* their average time, 0 when none */
+-    int cpu_percent;             /* the game's process, of every CPU; -1 unknown */
++    int cpu_percent;             /* the console's CPUs, all their work (else the game's process); -1 unknown */
++    int cpu_top_percent;         /* the busiest CPU of the console's, for the log; -1 unknown */
++    int gpu_percent;             /* the console's GPU: how much of the second it ran the game's work; -1 unknown */
+     int cpu_celsius, soc_celsius;/* -1 unknown */
+     uint64_t memory_used;        /* bytes */
+     uint64_t memory_total;       /* bytes, 0 unknown */
+@@ -259,6 +263,11 @@ static inline int pw_pc5_hud_line(const PwPc5HudStats *stats, unsigned line, con
+         if (stats->cpu_percent < 0) return 0;
+         snprintf(value, size, "%d%%", stats->cpu_percent > 100 ? 100 : stats->cpu_percent);
+         return 1;
++    case PW_PC5_HUD_GPU:
++        *label = "GPU";
++        if (stats->gpu_percent < 0) return 0;
++        snprintf(value, size, "%d%%", stats->gpu_percent > 100 ? 100 : stats->gpu_percent);
++        return 1;
+     case PW_PC5_HUD_CPU_TEMP:
+     case PW_PC5_HUD_SOC_TEMP: {
+         int celsius = line == PW_PC5_HUD_CPU_TEMP ? stats->cpu_celsius : stats->soc_celsius;
+@@ -298,7 +307,8 @@ static inline int pw_pc5_hud_line(const PwPc5HudStats *stats, unsigned line, con
+ static inline uint32_t pw_pc5_hud_draw_lines(uint32_t *image, const PwPc5HudStats *stats)
+ {
+     static const unsigned order[PW_PC5_HUD_LINES] = { PW_PC5_HUD_FPS, PW_PC5_HUD_FRAME_TIME, PW_PC5_HUD_CPU,
+-                                                      PW_PC5_HUD_CPU_TEMP, PW_PC5_HUD_SOC_TEMP, PW_PC5_HUD_MEMORY };
++                                                      PW_PC5_HUD_GPU, PW_PC5_HUD_CPU_TEMP, PW_PC5_HUD_SOC_TEMP,
++                                                      PW_PC5_HUD_MEMORY };
+     const char *labels[PW_PC5_HUD_LINES];
+     char values[PW_PC5_HUD_LINES][24];
+     unsigned count = 0;
+@@ -308,7 +318,9 @@ static inline uint32_t pw_pc5_hud_draw_lines(uint32_t *image, const PwPc5HudStat
+     for (unsigned i = 0; i < PW_PC5_HUD_LINES; i++)
+         if (pw_pc5_hud_line(stats, order[i], &labels[count], values[count], sizeof(values[count]))) count++;
+     if (!count) return 0;
+-    height = 4 + count * PW_PC5_HUD_PITCH - 2 + 4;
++    /* Up to six lines 9 rows apart in 4 rows of margin; seven 8 apart in 3. */
++    int pitch = count > 6 ? PW_PC5_HUD_TIGHT_PITCH : PW_PC5_HUD_PITCH, margin = count > 6 ? 3 : 4;
++    height = (uint32_t)(margin + (int)count * pitch - (pitch - 7) + margin);
+     for (uint32_t y = 0; y < height; y++)
+         for (uint32_t x = 0; x < PW_PC5_HUD_SIDE; x++) {
+             /* corners rounded to a radius of 6 */
+@@ -317,7 +329,7 @@ static inline uint32_t pw_pc5_hud_draw_lines(uint32_t *image, const PwPc5HudStat
+             if (cx * cx + cy * cy <= 36) image[y * PW_PC5_HUD_SIDE + x] = 0xc0101216u;
+         }
+     for (unsigned i = 0; i < count; i++) {
+-        int y = 4 + (int)i * PW_PC5_HUD_PITCH;
++        int y = margin + (int)i * pitch;
+         pw_pc5_hud_text(image, 3, y, labels[i], 0xff9aa3afu);
+         pw_pc5_hud_text(image, PW_PC5_HUD_SIDE - 3 - pw_pc5_hud_text_width(values[i]), y, values[i], 0xffffffffu);
+     }
+@@ -342,7 +354,8 @@ static inline void pw_pc5_hud_box(uint32_t *image, uint32_t h, int r)
+ static inline uint32_t pw_pc5_hud_draw_large(uint32_t *image, const PwPc5HudStats *stats)
+ {
+     static const unsigned order[PW_PC5_HUD_LINES] = { PW_PC5_HUD_FPS, PW_PC5_HUD_FRAME_TIME, PW_PC5_HUD_CPU,
+-                                                      PW_PC5_HUD_CPU_TEMP, PW_PC5_HUD_SOC_TEMP, PW_PC5_HUD_MEMORY };
++                                                      PW_PC5_HUD_GPU, PW_PC5_HUD_CPU_TEMP, PW_PC5_HUD_SOC_TEMP,
++                                                      PW_PC5_HUD_MEMORY };
+     const char *labels[PW_PC5_HUD_LINES];
+     char values[PW_PC5_HUD_LINES][24];
+     unsigned count = 0, first, shown;
+diff --git a/wine/ps5/pw_vulkan_radv.c b/wine/ps5/pw_vulkan_radv.c
+index c65e79f..f70e36d 100644
+--- a/wine/ps5/pw_vulkan_radv.c
++++ b/wine/ps5/pw_vulkan_radv.c
+@@ -257,7 +257,12 @@ static struct {
+     int hud_magnified, hud_magnify_refused;
+     PwPc5HudStats hud_stats;                /* PC5's numbers: the CPU, the temperatures, the memory */
+     uint64_t flips, second_flips, second_at;
+-} pc5 = { .shown = -1, .hud_magnified = -1, .hud_stats = { .cpu_percent = -1, .cpu_celsius = -1, .soc_celsius = -1 } };
++} pc5 = { .shown = -1, .hud_magnified = -1,
++           .hud_stats = { .cpu_percent = -1, .cpu_top_percent = -1, .gpu_percent = -1, .cpu_celsius = -1, .soc_celsius = -1 } };
++
++/* The console GPU's time on the game's work (patches/radv 0002, the PS5 winsys):
++ * weak, so a RADV without it links and the GPU line is left out. */
++extern bool radv_ps5_gpu_busy_ns(uint64_t *ns) __attribute__((weak));
+ 
+ static void pc5_lock(void)
+ {
+@@ -416,12 +421,36 @@ void pw_pc5_hud_stats(const PwPc5HudStats *stats)
+     pc5_unlock();
+ }
+ 
++/* The GPU's share of the time since the last call, in percent (only the title's
++ * loop calls it), or -1 when it isn't measured; the first call (or one that
++ * restarts) only starts. */
++static int pc5_gpu_percent(uint64_t now, int restart)
++{
++    static uint64_t last_busy, last_at;
++    uint64_t busy;
++
++    if (restart) last_at = 0;
++    if (!radv_ps5_gpu_busy_ns || !radv_ps5_gpu_busy_ns(&busy)) {
++        last_at = 0;
++        return -1;
++    }
++    int percent = -1;
++    if (last_at && now > last_at && busy >= last_busy) {
++        uint64_t elapsed = now - last_at, part = (busy - last_busy) * 100u + elapsed / 2;
++        percent = part / elapsed > 100 ? 100 : (int)(part / elapsed);
++    }
++    last_busy = busy;
++    last_at = now;
++    return percent;
++}
++
+ /* From the title's loop: the overlay, once a second, with the frames shown
+- * since and their average time. */
++ * since and their average time, the GPU's share of the second, and a line
++ * in the log with them. */
+ void pw_pc5_hud_tick(void);
+ void pw_pc5_hud_tick(void)
+ {
+-    int handle = __atomic_load_n(&videoout_handle, __ATOMIC_ACQUIRE), show = 0;
++    int handle = __atomic_load_n(&videoout_handle, __ATOMIC_ACQUIRE), show = 0, second = 0;
+     PwPc5HudStats stats;
+     uint64_t now = pc5_now_ns();
+ 
+@@ -436,6 +465,7 @@ void pw_pc5_hud_tick(void)
+             pc5.second_at = now;
+             pc5.second_flips = pc5.flips;
+             show = !pc5.hud_enabled;
++            second = 2;   /* the GPU's time starts being counted */
+         } else if (now - pc5.second_at >= 1000000000u) {
+             uint64_t frames = pc5.flips - pc5.second_flips, elapsed = now - pc5.second_at;
+             stats.fps = (unsigned)((frames * 1000000000u + elapsed / 2) / elapsed);
+@@ -443,10 +473,16 @@ void pw_pc5_hud_tick(void)
+             pc5.second_at = now;
+             pc5.second_flips = pc5.flips;
+             stats.seconds = ++pc5.hud_seconds;
+-            show = 1;
++            show = second = 1;
+         }
+     }
+     pc5_unlock();
++    /* The GPU's share, asked outside the lock: it takes the GPU queue's, which
++     * a submission holds. */
++    stats.gpu_percent = second ? pc5_gpu_percent(now, second == 2) : -1;
++    if (second == 1)
++        fprintf(stderr, "pw_pc5_hud: second fps=%u frame_us=%u gpu=%d cpu=%d busiest_cpu=%d\n", stats.fps,
++                (unsigned)stats.frame_us, stats.gpu_percent, stats.cpu_percent, stats.cpu_top_percent);
+     if (show) {
+         cursor_lock();
+         pc5_hud_show_locked(handle, &stats);
+-- 
+2.43.0
+

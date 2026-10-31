@@ -60,6 +60,11 @@ typedef struct Pc5GameOps {
      * and the memory in use of the whole a game has (bytes), 0 when read. */
     uint64_t (*cpu_time_us)(void);
     unsigned (*cpu_count)(void);
+    /* The console's own count of each of its CPUs' time since it started, all
+     * its work (busy) and in all (total), in its clock's ticks: how many CPUs
+     * it gave, up to most, 0 when it can't be read (the overlay then shows the
+     * game's process, cpu_time_us). */
+    unsigned (*cpu_ticks)(uint64_t *busy, uint64_t *total, unsigned most);
     int (*temperature)(int sensor, int *celsius);
     int (*memory)(uint64_t *used, uint64_t *total);
     /* The console's on-screen keyboard over the game: open it for text written to
@@ -73,6 +78,8 @@ typedef struct Pc5GameOps {
 
 /* The on-screen keyboard's text, in UTF-16 units with the terminator. */
 enum { PC5_KEYBOARD_TEXT = 256 };
+/* The most CPUs the overlay counts the console's time of. */
+enum { PC5_CPU_MOST = 32 };
 
 typedef struct Pc5GameSession {
     Pc5GameOps ops;
@@ -95,6 +102,8 @@ typedef struct Pc5GameSession {
     unsigned hud_seconds;         /* the overlay's updates, for the lines a large one shows */
     PwPc5HudStats stats;          /* what PC5 measured last for the overlay */
     uint64_t stats_at, stats_cpu_us;
+    uint64_t stats_cpu_busy[PC5_CPU_MOST], stats_cpu_total[PC5_CPU_MOST];   /* cpu_ticks' last */
+    unsigned stats_cpus;          /* how many cpu_ticks gave last, 0 none yet */
     int stats_logged;
     int frame_generation;         /* the game's Frame generation (PW_PC5_FRAMEGEN for libvulkan.prx) */
     /* The on-screen keyboard: open, its text, how much of the accepted text is typed,

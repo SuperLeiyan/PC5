@@ -115,7 +115,8 @@ The overlay is a small box over every game, updated every second. Each line can 
 | --- | --- |
 | Show FPS | Frames shown each second. On its own, it is a large counter. |
 | Frame time | How long a frame takes, on average, in milliseconds |
-| CPU usage | How much of the console's CPU the game uses |
+| CPU usage | How busy the console's CPU is, with everything it runs |
+| GPU usage | How busy the console's GPU is (from 2.0.4) |
 | CPU temperature | The CPU's temperature, in degrees Celsius |
 | SoC temperature | The console chip's temperature, in degrees Celsius |
 | Memory | The memory the game uses, of what it has, in GB |

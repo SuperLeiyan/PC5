@@ -185,7 +185,7 @@ A game whose picture has another shape than the screen's, such as a 4:3 game, is
 
 ## The overlay
 
-PC5 can show an overlay over every game: FPS, frame time, CPU usage, CPU and SoC temperatures, and memory. Turn it on in **Settings › Overlay**. See [Settings](Settings#overlay).
+PC5 can show an overlay over every game: FPS, frame time, CPU and GPU usage, CPU and SoC temperatures, and memory. Turn it on in **Settings › Overlay**. See [Settings](Settings#overlay).
 
 ## When a game doesn't start
 

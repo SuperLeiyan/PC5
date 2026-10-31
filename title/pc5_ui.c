@@ -89,14 +89,14 @@ typedef struct QueueGame {
 /* Settings: its rows, on seven pages. */
 typedef enum SettingRow {
     SR_INSTALL, SR_UNINSTALL, SR_COMPATIBILITY, SR_MAINTENANCE, SR_GAMES, SR_OVERLAY, SR_SYSTEM, SR_ABOUT,
-    SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
+    SR_FPS, SR_FRAME_TIME, SR_CPU_USAGE, SR_GPU_USAGE, SR_CPU_TEMPERATURE, SR_SOC_TEMPERATURE, SR_MEMORY, SR_FPS_CORNER,
     SR_OVERLAY_SIZE, SR_VIBRATION, SR_LIGHT, SR_TRIGGERS, SR_TRIGGER_RUMBLE, SR_TRIGGER_RESISTANCE,
     SR_STARTUP_SOUND, SR_STARTUP_VOLUME, SR_KEEP_LOGS, SR_PICTURES, SR_CHECK_ON_OPEN, SR_CHECK_NOW, SR_UPDATE_NOW,
     SR_FILES, SR_FTP, SR_WEB, SR_NETWORK, SR_REMOTE_USER, SR_REMOTE_PASSWORD,
     SR_SOURCE   /* a picture source: SR_SOURCE + its index (pc5_cover.h) */
 } SettingRow;
 
-enum { PAGE_ROWS = 8, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, PAGE_MAINTENANCE = 5,
+enum { PAGE_ROWS = 9, PAGE_GAMES = 1, PAGE_SYSTEM = 2, PAGE_OVERLAY = 3, PAGE_PICTURES = 4, PAGE_MAINTENANCE = 5,
        PAGE_NETWORK = 6, SETTING_PAGES = 7 };
 static const char *const page_titles[SETTING_PAGES] = { "Settings", "In games", "System", "Overlay", "Picture sources",
                                                         "Game maintenance", "Network" };
@@ -118,6 +118,7 @@ static int page_rows(const Pc5Settings *set, int page, int offer_update, Setting
         rows[n++] = SR_FPS;
         rows[n++] = SR_FRAME_TIME;
         rows[n++] = SR_CPU_USAGE;
+        rows[n++] = SR_GPU_USAGE;
         rows[n++] = SR_CPU_TEMPERATURE;
         rows[n++] = SR_SOC_TEMPERATURE;
         rows[n++] = SR_MEMORY;
@@ -2172,8 +2173,13 @@ static void setting_text(Pc5Ui *ui, SettingRow row, const char **label, char *ab
         break;
     case SR_CPU_USAGE:
         *label = "CPU usage";
-        pc5_copy(about, about_size, "How much of the console's CPU the game uses");
+        pc5_copy(about, about_size, "How busy the console's CPU is, with everything it runs");
         pc5_copy(value, value_size, set->cpu_usage ? "On" : "Off");
+        break;
+    case SR_GPU_USAGE:
+        *label = "GPU usage";
+        pc5_copy(about, about_size, "How busy the console's GPU is");
+        pc5_copy(value, value_size, set->gpu_usage ? "On" : "Off");
         break;
     case SR_CPU_TEMPERATURE:
         *label = "CPU temperature";
@@ -2391,6 +2397,7 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
     case SR_FPS: set->fps = !set->fps; break;
     case SR_FRAME_TIME: set->frame_time = !set->frame_time; break;
     case SR_CPU_USAGE: set->cpu_usage = !set->cpu_usage; break;
+    case SR_GPU_USAGE: set->gpu_usage = !set->gpu_usage; break;
     case SR_CPU_TEMPERATURE: set->cpu_temperature = !set->cpu_temperature; break;
     case SR_SOC_TEMPERATURE: set->soc_temperature = !set->soc_temperature; break;
     case SR_MEMORY: set->memory = !set->memory; break;
@@ -2430,10 +2437,10 @@ static int setting_change(Pc5Ui *ui, SettingRow row, int step)
         break;
     }
     if (pc5_settings_save(ui->root, set)) say(ui, "PC5 problem settings: can't write them");
-    say(ui, "PC5 settings fps=%d frame_time=%d cpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d size=%s vibration=%d light=%d "
+    say(ui, "PC5 settings fps=%d frame_time=%d cpu=%d gpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d size=%s vibration=%d light=%d "
         "triggers=%d trigger_rumble=%d trigger_resistance=%d updates=%d keep_logs=%d startup_sound=%s startup_volume=%d "
         "pictures_off=%#x",
-        set->fps, set->frame_time, set->cpu_usage, set->cpu_temperature, set->soc_temperature, set->memory,
+        set->fps, set->frame_time, set->cpu_usage, set->gpu_usage, set->cpu_temperature, set->soc_temperature, set->memory,
         (int)set->fps_corner, pc5_overlay_size_key(set->overlay_size), set->vibration, (int)set->light_bar, (int)set->triggers, set->trigger_rumble,
         set->trigger_resistance, set->check_updates, set->keep_logs, set->startup_sound, set->startup_volume,
         (unsigned)set->pictures_off);

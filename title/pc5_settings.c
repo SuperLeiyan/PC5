@@ -131,6 +131,7 @@ int pc5_settings_load(const char *root, Pc5Settings *settings)
         if (!strcmp(name, "fps")) settings->fps = on_off(value, settings->fps);
         else if (!strcmp(name, "frame_time")) settings->frame_time = on_off(value, settings->frame_time);
         else if (!strcmp(name, "cpu_usage")) settings->cpu_usage = on_off(value, settings->cpu_usage);
+        else if (!strcmp(name, "gpu_usage")) settings->gpu_usage = on_off(value, settings->gpu_usage);
         else if (!strcmp(name, "cpu_temperature")) settings->cpu_temperature = on_off(value, settings->cpu_temperature);
         else if (!strcmp(name, "soc_temperature")) settings->soc_temperature = on_off(value, settings->soc_temperature);
         else if (!strcmp(name, "memory")) settings->memory = on_off(value, settings->memory);
@@ -174,12 +175,13 @@ int pc5_settings_save(const char *root, const Pc5Settings *settings)
         return -1;
     length = snprintf(text, sizeof(text),
                       "# PC5's settings (Settings in PC5 changes them)\n"
-                      "fps = %s\nframe_time = %s\ncpu_usage = %s\ncpu_temperature = %s\nsoc_temperature = %s\n"
+                      "fps = %s\nframe_time = %s\ncpu_usage = %s\ngpu_usage = %s\ncpu_temperature = %s\nsoc_temperature = %s\n"
                       "memory = %s\nfps_corner = %s\noverlay_size = %s\nvibration = %d\nlight_bar = %s\ntriggers = %s\n"
                       "trigger_rumble = %d\ntrigger_resistance = %d\ncheck_updates = %s\nkeep_logs = %s\nstartup_sound = %s\n"
                       "startup_volume = %d\nftp_server = %s\nweb_page = %s\nremote_user = %s\nremote_password = %s\n",
                       settings->fps ? "on" : "off", settings->frame_time ? "on" : "off",
-                      settings->cpu_usage ? "on" : "off", settings->cpu_temperature ? "on" : "off",
+                      settings->cpu_usage ? "on" : "off", settings->gpu_usage ? "on" : "off",
+                      settings->cpu_temperature ? "on" : "off",
                       settings->soc_temperature ? "on" : "off", settings->memory ? "on" : "off",
                       corner_keys[settings->fps_corner % PC5_CORNERS], overlay_size_keys[settings->overlay_size % PC5_OVERLAY_SIZES],
                       settings->vibration,

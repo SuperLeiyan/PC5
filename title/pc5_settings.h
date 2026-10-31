@@ -37,11 +37,12 @@ typedef enum Pc5Triggers {
 
 typedef struct Pc5Settings {
     /* The overlay in games (Settings › Overlay), a line each: the frame
-     * counter, the frames' average time, the game's share of the CPU, the
-     * CPU's and the chip's temperatures, the memory in use; its corner and size. */
+     * counter, the frames' average time, how busy the console's CPU and GPU are,
+     * the CPU's and the chip's temperatures, the memory in use; its corner and size. */
     int fps;
     int frame_time;
     int cpu_usage;
+    int gpu_usage;
     int cpu_temperature;
     int soc_temperature;
     int memory;

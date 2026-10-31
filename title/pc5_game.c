@@ -808,7 +808,8 @@ void pc5_game_pad(Pc5GameSession *game, int pad, uint64_t now_ms, uint32_t scree
 unsigned pc5_game_overlay_lines(const Pc5Settings *settings)
 {
     unsigned lines = (settings->fps ? PW_PC5_HUD_FPS : 0u) | (settings->frame_time ? PW_PC5_HUD_FRAME_TIME : 0u) |
-                     (settings->cpu_usage ? PW_PC5_HUD_CPU : 0u) | (settings->cpu_temperature ? PW_PC5_HUD_CPU_TEMP : 0u) |
+                     (settings->cpu_usage ? PW_PC5_HUD_CPU : 0u) | (settings->gpu_usage ? PW_PC5_HUD_GPU : 0u) |
+                     (settings->cpu_temperature ? PW_PC5_HUD_CPU_TEMP : 0u) |
                      (settings->soc_temperature ? PW_PC5_HUD_SOC_TEMP : 0u) | (settings->memory ? PW_PC5_HUD_MEMORY : 0u);
     /* Large: the same lines in glyphs twice the size, two at a time (pw_pc5_hud.h); Extra large:
      * every line at once, the whole overlay shown at twice its size by the display. Only with a
@@ -825,15 +826,60 @@ static int temperature(const Pc5GameSession *game, int sensor, int *rc)
     return !*rc && celsius > 0 && celsius < 150 ? celsius : -1;
 }
 
+/* The console's CPUs since the last sample, from its own counts (cpu_ticks): all their
+ * work of all their time, and the busiest one's, in percent. 0 once it has two
+ * samples; -1 when the console doesn't give them (or not yet the second). */
+static int console_cpu(Pc5GameSession *game, int *percent, int *top)
+{
+    uint64_t busy[PC5_CPU_MOST], total[PC5_CPU_MOST], all_busy = 0, all_total = 0;
+    unsigned count = game->ops.cpu_ticks ? game->ops.cpu_ticks(busy, total, PC5_CPU_MOST) : 0;
+    int rc = -1;
+
+    if (count > PC5_CPU_MOST) count = PC5_CPU_MOST;
+    if (!count) {
+        game->stats_cpus = 0;
+        return -1;
+    }
+    if (count == game->stats_cpus) {
+        int busiest = 0;
+        for (unsigned i = 0; i < count; i++) {
+            if (busy[i] < game->stats_cpu_busy[i] || total[i] < game->stats_cpu_total[i]) continue;
+            uint64_t b = busy[i] - game->stats_cpu_busy[i], t = total[i] - game->stats_cpu_total[i];
+            all_busy += b;
+            all_total += t;
+            if (t && b <= t && (int)((b * 100u + t / 2) / t) > busiest) busiest = (int)((b * 100u + t / 2) / t);
+        }
+        if (all_total) {
+            *percent = (int)((all_busy * 100u + all_total / 2) / all_total);
+            if (*percent > 100) *percent = 100;
+            *top = busiest;
+            rc = 0;
+        }
+    }
+    memcpy(game->stats_cpu_busy, busy, count * sizeof(busy[0]));
+    memcpy(game->stats_cpu_total, total, count * sizeof(total[0]));
+    game->stats_cpus = count;
+    return rc;
+}
+
 int pc5_game_overlay_sample(Pc5GameSession *game, uint64_t now_ms, PwPc5HudStats *stats)
 {
     unsigned lines = pc5_game_overlay_lines(&game->settings);
-    PwPc5HudStats s = { .lines = lines, .cpu_percent = -1, .cpu_celsius = -1, .soc_celsius = -1 };
-    int cpu_rc = 0, soc_rc = 0, memory_rc = 0;
+    PwPc5HudStats s = { .lines = lines, .cpu_percent = -1, .cpu_top_percent = -1, .gpu_percent = -1,
+                        .cpu_celsius = -1, .soc_celsius = -1 };
+    int cpu_rc = 0, soc_rc = 0, memory_rc = 0, console = 0;
     unsigned cpus = 0;
 
     if (!lines || (game->stats_at && now_ms - game->stats_at < 1000)) return 0;
-    if ((lines & PW_PC5_HUD_CPU) && game->ops.cpu_time_us) {
+    /* The CPU: the console's own count of all its CPUs' work when it gives one, else the
+     * game's process (its share of every CPU). The console's is kept for the log even
+     * with the CPU line off. */
+    if (game->ops.cpu_ticks) {
+        (void)console_cpu(game, &s.cpu_percent, &s.cpu_top_percent);
+        console = game->stats_cpus != 0;   /* the console gave its counts (two are needed for a number) */
+        cpus = game->stats_cpus;
+    }
+    if (!console && (lines & PW_PC5_HUD_CPU) && game->ops.cpu_time_us) {
         uint64_t cpu = game->ops.cpu_time_us();
         cpus = game->ops.cpu_count ? game->ops.cpu_count() : 1;
         /* from the second time on: the CPU time since, of every CPU's */
@@ -856,8 +902,8 @@ int pc5_game_overlay_sample(Pc5GameSession *game, uint64_t now_ms, PwPc5HudStats
     }
     /* once, for the log: what the console answered */
     if (!game->stats_logged) {
-        say(game, "PC5 overlay lines=%#x cpus=%u cpu_temp=%d rc=%#x soc_temp=%d rc=%#x memory=%lluM/%lluM rc=%#x",
-            lines, cpus, s.cpu_celsius, (unsigned)cpu_rc, s.soc_celsius, (unsigned)soc_rc,
+        say(game, "PC5 overlay lines=%#x cpus=%u cpu_from=%s cpu_temp=%d rc=%#x soc_temp=%d rc=%#x memory=%lluM/%lluM rc=%#x",
+            lines, cpus, console ? "console" : "game", s.cpu_celsius, (unsigned)cpu_rc, s.soc_celsius, (unsigned)soc_rc,
             (unsigned long long)(s.memory_used >> 20), (unsigned long long)(s.memory_total >> 20),
             (unsigned)memory_rc);
         game->stats_logged = 1;

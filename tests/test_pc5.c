@@ -4068,6 +4068,15 @@ static int fake_cursor_magnify(int videoout, int on)
 static struct { uint64_t cpu_us; int soc_rc; int memory_rc; } measured;
 static uint64_t fake_cpu_time_us(void) { return measured.cpu_us; }
 static unsigned fake_cpu_count(void) { return 16; }
+/* The console's own counts: 4 CPUs, CPU 2 the busiest; ticks added between samples. */
+static struct { uint64_t busy[4], total[4]; unsigned count; } console_ticks;
+static unsigned fake_cpu_ticks(uint64_t *busy, uint64_t *total, unsigned most)
+{
+    unsigned count = console_ticks.count < most ? console_ticks.count : most;
+    memcpy(busy, console_ticks.busy, count * sizeof(*busy));
+    memcpy(total, console_ticks.total, count * sizeof(*total));
+    return count;
+}
 static int fake_temperature(int sensor, int *celsius)
 {
     if (sensor) return measured.soc_rc;
@@ -5495,6 +5504,47 @@ static void test_game(const char *fonts_path)
         CHECK(!pc5_game_overlay_sample(&game, 50500, &stats), "not twice a second");
         measured.cpu_us += 4000000;     /* 4 CPUs' worth in a second, of 16 */
         CHECK(pc5_game_overlay_sample(&game, 51000, &stats) && stats.cpu_percent == 25, "cpu %d%%", stats.cpu_percent);
+        CHECK(stats.gpu_percent == -1 && stats.cpu_top_percent == -1, "the title knows no GPU, nor the console's CPUs");
+        /* The console's own counts, when it gives them, in place of the process's: all its
+         * CPUs' work, and the busiest one's for the log. */
+        {
+            game.ops.cpu_ticks = fake_cpu_ticks;
+            console_ticks.count = 4;
+            for (int i = 0; i < 4; i++) console_ticks.busy[i] = 100, console_ticks.total[i] = 1000;
+            game.stats_at = 0;
+            CHECK(pc5_game_overlay_sample(&game, 51000, &stats) && stats.cpu_percent == -1,
+                  "the console's first counts: no number yet (%d%%)", stats.cpu_percent);
+            uint64_t added[4] = { 10, 20, 100, 30 };   /* busy ticks of 100 each: 40% in all, 100% the busiest */
+            for (int i = 0; i < 4; i++) console_ticks.busy[i] += added[i], console_ticks.total[i] += 100;
+            measured.cpu_us += 16000000;            /* the process's would say 100% */
+            CHECK(pc5_game_overlay_sample(&game, 52000, &stats) && stats.cpu_percent == 40 && stats.cpu_top_percent == 100,
+                  "the console's CPUs: %d%%, the busiest %d%%", stats.cpu_percent, stats.cpu_top_percent);
+            console_ticks.count = 0;                /* refused: the process's again */
+            game.stats_cpu_us = measured.cpu_us;
+            measured.cpu_us += 4000000;
+            CHECK(pc5_game_overlay_sample(&game, 53000, &stats) && stats.cpu_percent == 25 && stats.cpu_top_percent == -1,
+                  "the console gives none: the process's, %d%%", stats.cpu_percent);
+            game.ops.cpu_ticks = NULL;
+        }
+        /* The GPU's line (libvulkan.prx measures it) after the CPU's, and with seven lines
+         * the box keeps to the image: 61 rows. */
+        {
+            PwPc5HudStats seven = { .lines = PW_PC5_HUD_ALL, .fps = 60, .frame_us = 16667, .cpu_percent = 31,
+                                    .gpu_percent = 97, .cpu_celsius = 50, .soc_celsius = 45,
+                                    .memory_used = (uint64_t)5 << 30, .memory_total = (uint64_t)12 << 30 };
+            uint32_t image[64 * 64];
+            const char *label = "";
+            char value[24];
+            CHECK(pw_pc5_hud_line(&seven, PW_PC5_HUD_GPU, &label, value, sizeof(value)) && !strcmp(label, "GPU") &&
+                  !strcmp(value, "97%"), "the GPU line: %s %s", label, value);
+            CHECK(pw_pc5_hud_draw_lines(image, &seven) == 61 && !image[61 * 64 + 32] && image[60 * 64 + 32],
+                  "seven lines: a box 61 high");
+            seven.gpu_percent = -1;
+            CHECK(pw_pc5_hud_draw_lines(image, &seven) == 4 + 6 * 9 - 2 + 4, "GPU unknown: six lines as before");
+            seven.gpu_percent = 97;
+            seven.lines = PW_PC5_HUD_ALL | PW_PC5_HUD_LARGE;
+            CHECK(pw_pc5_hud_draw_stats(image, &seven) == 2 + 2 * PW_PC5_HUD_LARGE_PITCH + 2, "large: two of seven");
+        }
         measured.memory_rc = -1;
         CHECK(pc5_game_overlay_sample(&game, 52000, &stats) && !stats.memory_total, "memory unknown: left out");
         measured.memory_rc = 0;
@@ -6332,7 +6382,7 @@ static void test_screens(const char *fonts)
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Show FPS: on */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_RIGHT, &canvas);       /* Frame time: on */
-    for (int i = 0; i < 4; i++) press(ui, PC5_KEY_DOWN, &canvas);
+    for (int i = 0; i < 5; i++) press(ui, PC5_KEY_DOWN, &canvas);   /* past CPU and GPU usage and the temperatures */
     press(ui, PC5_KEY_ACCEPT, &canvas);      /* Memory: on */
     press(ui, PC5_KEY_DOWN, &canvas);
     press(ui, PC5_KEY_RIGHT, &canvas);       /* corner: top right -> bottom left */
@@ -6340,7 +6390,7 @@ static void test_screens(const char *fonts)
     {
         Pc5Settings set;
         pc5_settings_load(root, &set);
-        CHECK(set.fps && set.frame_time && !set.cpu_usage && !set.cpu_temperature && !set.soc_temperature && set.memory &&
+        CHECK(set.fps && set.frame_time && !set.cpu_usage && !set.gpu_usage && !set.cpu_temperature && !set.soc_temperature && set.memory &&
               set.fps_corner == PC5_CORNER_BOTTOM_LEFT,
               "overlay saved: fps=%d frame_time=%d cpu=%d cpu_temp=%d soc_temp=%d memory=%d corner=%d", set.fps,
               set.frame_time, set.cpu_usage, set.cpu_temperature, set.soc_temperature, set.memory, (int)set.fps_corner);

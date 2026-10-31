@@ -518,3 +518,5 @@ controller's speaker.
 | 281 | A game with PhysX 2.8.1 copied in by hand (`Engine/v2.8.1`, `Common`) | it starts; no "Error initializing PhysX" | `PC5 physx registered … PhysX_A32_Engines 2.8.1 … engine folders in PATH` |
 | 282 | Start a Direct3D 12 game twice | | the second start's log has `PC5 vkd3d cache in=… cache=<bytes> write=…`; `none` both times means VKD3D-Proton's cache isn't kept |
 | 283 | An Unreal Engine 5 game that ran at 0-1 fps (Gears of War: E-Day) | it starts in minutes, not 25, and its shader compile moves | `alive` lines' `cpu_ms` grows by several seconds a second |
+| 284 | Settings › Overlay › GPU usage on, a Vulkan game (DXVK) | a GPU line under CPU, 0-100%, higher in busy scenes; with all seven lines the box fits | `PC5 overlay … cpu_from=console` (or `game` when the console doesn't give its counts); `pw_pc5_hud: second fps=… gpu=… cpu=… busiest_cpu=…` each second |
+| 285 | Play where the frame rate dips, overlay on | | in the dips' `pw_pc5_hud: second` lines: `gpu` near 100 means the GPU is the limit; `busiest_cpu` near 100 with `gpu` low means one of the game's threads is |
