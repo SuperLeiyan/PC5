@@ -23,9 +23,18 @@ places.
   a report names it.
 
 A game both a report and an issue name (game_key: the same name but for case, punctuation, a
-leading "The" and Roman numerals; editions stay apart) has one row, the report's: the issue is
-named beside it, and a fixed one not at all. An open issue whose game a report lists as running
-gets one comment with what that report says (its settings may help).
+leading "The" and Roman numerals; editions stay apart) is listed by what was said last. While
+any of its issues is open, the issue's row ("being looked at") is the game's only row: a report
+posted then is turned away (one comment, and closed), and one posted before waits. Once its
+issues are closed, the newest one's state is the game's row, unless a report was posted after
+it closed: then the reports posted since are its rows, with the issue named beside them (a fixed
+one not at all). An open issue whose game an earlier report lists as running gets one comment
+with what that report says (its settings may help).
+
+The repository owner can add to an issue's row: a comment of theirs on the issue with a line
+"List notes: ..." gives its Notes, "List settings: ..." its Settings that helped, "List version:
+..." its PC5 version (the one that fixed it, say), the newest such line winning. That works on a
+closed issue too.
 
 A report that a game doesn't run, made before issues were the way (the form no longer offers
 it), names its game's issue: without one it gets one comment saying so and is closed. The
@@ -69,6 +78,8 @@ MARK = "<!-- pc5-compatibility: needs an issue -->"   # the Action's comment, so
 UNKNOWN = {}   # an issue that couldn't be looked up: the report waits for the next run
 LISTED = "<!-- pc5-compatibility: listed -->"   # the Action's comment once a report is in the list
 LISTED_ALREADY = "<!-- pc5-compatibility: listed already -->"   # its comment on an issue whose game a report lists
+TURNED_AWAY = "<!-- pc5-compatibility: issue open -->"   # its comment on a report posted while the game's issue is open
+OWNER_LINE = re.compile(r"^\s*(?:\*\*)?List (notes|settings|version):(?:\*\*)?\s*(.+?)\s*$", re.I | re.M)
 NUMERALS = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
 ISSUE_STATE = {"🔍 Being looked at": "open", "🧪 Needs testing": "needs testing", "❌ Unresolved: doesn't run": "doesn't run",
                NEEDS_STORE: "this copy needs Steam"}
@@ -185,6 +196,8 @@ def main() -> int:
                 continue
             shown, issue = result, None
             told = any(LISTED in (c["body"] or "") for c in discussion["comments"]["nodes"])
+            if any(TURNED_AWAY in (c["body"] or "") for c in discussion["comments"]["nodes"]):
+                continue   # posted while the game's issue was open: the issue says how it runs
             reports.append({
                 "id": discussion["id"], "told": told, "locked": discussion["locked"],
                 "game": game, "result": result, "shown": shown, "issue": issue, "pc5": fields.get("PC5 version", ""),
@@ -192,32 +205,49 @@ def main() -> int:
                 "settings": fields.get("Settings that helped", ""), "notes": fields.get("Notes", ""),
                 "url": discussion["url"], "number": discussion["number"],
                 "author": (discussion["author"] or {}).get("login", "someone"),
-                "date": discussion["createdAt"][:10], "votes": discussion["upvoteCount"],
+                "date": discussion["createdAt"][:10], "created": discussion["createdAt"], "votes": discussion["upvoteCount"],
+                "closed": discussion["closed"],
             })
         if not discussions["pageInfo"]["hasNextPage"]:
             break
         after = discussions["pageInfo"]["endCursor"]
-    # A game with an issue, by how it stands. One a report lists already is named beside the
-    # report that says it runs best (the newest of those), or, fixed, left out; while it is open,
-    # it is told once what the reports say.
+    # A game with an issue is listed by what was said last: while one of its issues is open, by
+    # that issue alone (a report posted meanwhile is turned away, one posted before waits); once
+    # they are closed, by the newest one's state, or by the reports posted after it closed, which
+    # name it beside them (a fixed one not at all). An open issue that earlier reports list as
+    # running is told once what they say.
     store_label(owner, name)
     listed = {}
     for r in reports:
         listed.setdefault(game_key(r["game"]), []).append(r)
-    told_issues = 0
+    told_issues, turned_away, hidden = 0, 0, set()
     for row in issue_reports(owner, name, named):
-        same = listed.get(game_key(row["game"]))
-        if not same:
+        same = listed.get(game_key(row["game"]), [])
+        if row["open"]:
+            for r in same:
+                hidden.add(id(r))
+                if r["created"] >= row["created"]:
+                    turned_away += turn_away(r, row, owner, name)
+            if same and not row["told_listed"]:
+                told_issues += tell_issue(row, [r for r in same if r["created"] < row["created"]], owner, name)
+            reports.append(row)
+            continue
+        since = [r for r in same if r["created"] > row["closed_at"]]
+        for r in same:
+            if r not in since:
+                hidden.add(id(r))
+        if not since:
             reports.append(row)
             continue
         if row["shown"] == FIXED:
             continue
-        best = sorted(sorted(same, key=lambda r: r["date"], reverse=True), key=lambda r: SHOWN.index(r["shown"]))[0]
+        best = sorted(sorted(since, key=lambda r: r["date"], reverse=True), key=lambda r: SHOWN.index(r["shown"]))[0]
         best.setdefault("issues", []).append(row)
-        if row["open"] and not row["told_listed"]:
-            told_issues += tell_issue(row, same, owner, name)
+    reports = [r for r in reports if id(r) not in hidden]
     if told_issues:
         print(f"::notice::compatibility list: told {told_issues} issue{'s' * (told_issues != 1)} what reports say")
+    if turned_away:
+        print(f"::notice::compatibility list: turned away {turned_away} report{'s' * (turned_away != 1)} of a game with an open issue")
 
     reports.sort(key=lambda r: (game_key(r["game"]), SHOWN.index(r["shown"]), r["date"]))
     counts = {shown: sum(1 for r in reports if r["shown"] == shown) for shown in SHOWN}
@@ -247,8 +277,9 @@ def main() -> int:
               "as not planned. A copy of a game that needs Steam or another store's client running, which PC5 can't "
               "do, shows as such: another copy of it may run. An issue whose reporter doesn't answer for two days is closed, and the game shows as "
               "needing testing: it didn't run for them, but another copy or version of it may. Tested it? Reply on "
-              "the issue, or open a new one with your log. A game with both a report and an issue has one row, the "
-              "report's, with the issue beside it."]
+              "the issue, or open a new one with your log. While a game's issue is open, the issue is its row and "
+              "reports of it wait; once the issue is closed, its state is the game's row until someone reports the game "
+              "again."]
 
     page = "\n".join([
         "Which games run in PC5: the games players report running, from the [Game compatibility]"
@@ -326,8 +357,8 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             repository(owner: $owner, name: $name) {
               issues(first: 100, after: $after, states: [OPEN, CLOSED], orderBy: {field: CREATED_AT, direction: ASC}) {
                 pageInfo { hasNextPage endCursor }
-                nodes { id number title url body state stateReason createdAt author { login }
-                        labels(first: 20) { nodes { name } } comments(first: 50) { nodes { body } } }
+                nodes { id number title url body state stateReason createdAt closedAt author { login }
+                        labels(first: 20) { nodes { name } } comments(last: 100) { nodes { body author { login } } } }
               } } }""", owner=owner, name=name, after=after)["repository"]["issues"]
         for node in page["nodes"]:
             body = node["body"] or ""
@@ -352,21 +383,37 @@ def issue_reports(owner: str, name: str, named: dict) -> list:
             saw = first_line(fields.get("What PC5 saw", "")) or first_line(fields.get("What goes wrong", ""))
             if not saw and SAW_LINE.search(body):
                 saw = SAW_LINE.search(body).group(1)
+            # The owner's own words for the list, from their newest comment that has them.
+            extra = {}
+            for comment in node["comments"]["nodes"]:
+                if (comment["author"] or {}).get("login", "").casefold() != owner.casefold():
+                    continue
+                for kind, text in OWNER_LINE.findall(comment["body"] or ""):
+                    extra[kind.casefold()] = text
             for game in issue_games(issue, fields, named, by_number):
-                rows[game_key(game)] = {   # issues come oldest first: a newer one takes the game's row
+                key = game_key(game)
+                if key in rows and rows[key]["open"] and node["state"] != "OPEN":
+                    continue   # an open issue of the game stays its row: it is still being looked at
+                rows[key] = {   # issues come oldest first: a newer one takes the game's row
                     "told": True, "locked": True, "game": game, "shown": shown,
-                    "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "", "settings": "",
+                    "pc5": pc5.group(1).rstrip(".") if pc5 else "", "edition": "", "controller": "",
+                    "settings": extra.get("settings", ""),
                     "notes": ("No reply: another copy or version may run. " + saw).strip() if shown == NEEDS_TESTING
                              else "This copy needs Steam (or another store's client) running, which PC5 can't do: "
                                   "a copy that runs without it may run." if shown == NEEDS_STORE
                              else "It runs: the issue says what to set, or what is still wrong."
                              if shown == "Playable with issues"
                              else saw if shown != FIXED else "",
+                    "created": node["createdAt"], "closed_at": node["closedAt"] or "",
                     "url": node["url"], "number": node["number"],
                     "author": (node["author"] or {}).get("login", "someone"), "date": node["createdAt"][:10],
                     "id": node["id"], "open": node["state"] == "OPEN",
                     "told_listed": any(LISTED_ALREADY in (c["body"] or "") for c in node["comments"]["nodes"]),
                 }
+                if extra.get("notes"):
+                    rows[key]["notes"] = extra["notes"]
+                if extra.get("version"):
+                    rows[key]["pc5"] = extra["version"].lstrip("vV")
             if shown == NEEDS_STORE and node["state"] == "OPEN":
                 close_store_copy(node, owner, name)
         if not page["pageInfo"]["hasNextPage"]:
@@ -463,6 +510,31 @@ def tell_issue(issue: dict, reports: list, owner: str, name: str) -> int:
         return 0
     print(f"compatibility list: issue #{issue['number']} told what {len(shown)} report(s) say")
     return 1
+
+
+def turn_away(report: dict, issue: dict, owner: str, name: str) -> int:
+    """One comment on a report posted while its game's issue is open, and closed: the issue
+    says how the game runs until it is closed. 1 when the comment was made."""
+    made = 0
+    if not report["locked"] and report["author"].casefold() != owner.casefold():
+        body = "\n".join([
+            TURNED_AWAY,
+            f"Thanks for the report! **{report['game']}** has an open issue, [#{issue['number']}]({issue['url']}), so "
+            "the [game compatibility list](https://github.com/{owner}/{name}/wiki/Game-compatibility) shows it as "
+            "**being looked at** until that issue is closed, and this report isn't listed.".replace("{owner}", owner).replace("{name}", name),
+            "",
+            f"Please add what you found to [#{issue['number']}]({issue['url']}), with your settings: it helps close it. "
+            "Once it's closed, a new report of the game is listed again.",
+        ])
+        if graphql("""mutation($id: ID!, $body: String!) { addDiscussionComment(input: {discussionId: $id, body: $body}) {
+                comment { id } } }""", fatal=False, id=report["id"], body=body) is None:
+            return 0
+        made = 1
+        print(f"compatibility list: #{report['number']} turned away, issue #{issue['number']} is open")
+    if not report["closed"]:
+        graphql("""mutation($id: ID!) { closeDiscussion(input: {discussionId: $id, reason: OUTDATED}) { discussion { id } } }""",
+                fatal=False, id=report["id"])
+    return made
 
 
 def tell_listed(report: dict, owner: str, name: str) -> int:
